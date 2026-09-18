@@ -20,7 +20,7 @@ Use macOS or Linux with Python 3.11 or newer. Install and authenticate either
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]' hatchling
+python -m pip install -e '.[dev]'
 fridica init
 ```
 
@@ -179,3 +179,72 @@ file and labelled threaded reply. Request a file without specifying its location
 to exercise clarification, then try a request outside configured write roots to
 verify blocked behavior. Repeat with the other backend. Live tests can consume
 provider credits and require your Slack installation and CLI login.
+
+## CI, releases, and deployment
+
+The workflows follow snapy's CI → automatic tag → manual PyPI publishing flow,
+adapted for a pure-Python package. Fridica produces one universal wheel and one
+source distribution, rather than platform-specific compiled wheels.
+
+- **Continuous Integration** (`.github/workflows/ci.yml`) runs on pull requests
+  and pushes to `main`. It tests Python 3.11–3.14 on Ubuntu and macOS, builds both
+  distributions after every matrix job passes, checks package metadata, and
+  smoke-tests the installed wheel and bundled Slack manifest. Tests use fake
+  agents and Slack clients; no Slack/model credentials are required.
+- **Auto Tag on PR Merge** (`cd.yml`) tags the exact merge commit and creates a
+  GitHub release. The first tag is `v0.1.0`; subsequent merges default to a patch
+  bump. Add one of `release:major`, `release:minor`, or `release:patch` to select
+  the increment. Multiple release labels fail the job. Rerunning an already
+  tagged merge reuses its tag and repairs a missing GitHub release.
+  Merged fork PRs are supported through a merged-only `pull_request_target`
+  event; the checkout is verified to belong to `main` before release code runs.
+  Tag jobs use [GitHub's concurrency queue](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+  to run serially (up to 100 pending runs).
+- **Publish to PyPI** (`release.yml`) is manually dispatched with an existing
+  stable tag, such as `v0.1.0`. It verifies the tag belongs to `main`, reruns the
+  full CI workflow on its resolved commit, checks that both artifact versions
+  match the requested tag, then publishes those exact artifacts. Publishing
+  does not run on every merge or tag push.
+
+Versions come from Git tags using
+[hatch-vcs](https://github.com/ofek/hatch-vcs). `fridica.__version__` and the CLI
+read installed package metadata. Untagged/dirty checkouts produce development
+versions; reinstall an editable checkout after changing tags to refresh its
+installed version. Full Git history is fetched in CI. Source distributions carry
+version metadata so they also build without Git.
+
+Repository maintainers must configure these GitHub settings before using CD:
+
+1. Install a GitHub App on `chengcli/fridica` with **Contents: read and write**.
+   Set repository variable `BUMP_BOT_APP_ID` and secret `BUMP_BOT_PRIVATE_KEY`,
+   matching snapy's names. Permit the app to create `v*` tags if tag rules apply.
+2. Create a GitHub Actions environment named `pypi`. Add `PYPI_API_TOKEN` as an
+   environment secret using a PyPI account authorized to publish `fridica`.
+   Configure required reviewers if publication needs an approval gate. A new
+   PyPI project may need an account-scoped token for its first upload; replace
+   it with a project-scoped token afterward.
+3. Protect `main` and require CI before merging. Auto-tagging reacts to a merge,
+   so branch protection supplies its CI gate. Publishing independently reruns
+   all tests. Require the matrix test jobs and the `package` job as checks.
+4. After a release tag exists, open **Actions → Publish to PyPI → Run workflow**
+   on `main`, enter the tag, and approve the `pypi` environment if configured.
+   PyPI versions are immutable; use a new tag for changed artifacts rather than
+   overwriting a published version.
+
+Only the package is deployed by CI. Run the daemon on each owner's machine,
+where their Slack tokens, agent authentication, and project directories live:
+
+```bash
+python -m pip install --upgrade 'fridica==0.1.0'
+fridica doctor
+fridica start
+```
+
+Replace `0.1.0` with the published version. Stop the running daemon before an
+upgrade, then restart it in the same environment. No remote daemon, Slack app,
+GitHub secrets, or PyPI project is provisioned by installing these workflows.
+
+For local workflow linting with actionlint 1.7.12, use
+`actionlint -ignore 'unexpected key "queue" for "concurrency" section' .github/workflows/*.yml`.
+That version's schema predates GitHub's documented `queue` field; the exception
+only suppresses that schema mismatch.

@@ -1,17 +1,24 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.25", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "fridica"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A local personal agent connecting Slack to Claude Code and Codex"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["slack-sdk>=3.33,<4", "aiohttp>=3.10,<4"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "build>=1.2"]
+dev = ["pytest>=8", "build>=1.2", "hatchling>=1.25", "hatch-vcs>=0.4", "twine>=5"]
+
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = '^v(?P<version>\d+\.\d+\.\d+)$'
+
+[tool.hatch.version.raw-options]
+git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
 
 [project.scripts]
 fridica = "fridica.cli:main"
