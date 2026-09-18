@@ -16,20 +16,16 @@ concurrency:
 jobs:
   create-tag:
     if: github.event.pull_request.merged == true
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Generate bump-bot token
-        id: app_token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.BUMP_BOT_APP_ID }}
-          private-key: ${{ secrets.BUMP_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ github.token }}
       - name: Verify merged commit belongs to main
         run: git merge-base --is-ancestor HEAD origin/main
       - uses: actions/setup-python@v5
@@ -49,7 +45,7 @@ jobs:
           git push origin "refs/tags/$RELEASE_TAG"
       - name: Create GitHub release
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |

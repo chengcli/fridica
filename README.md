@@ -196,6 +196,9 @@ source distribution, rather than platform-specific compiled wheels.
   bump. Add one of `release:major`, `release:minor`, or `release:patch` to select
   the increment. Multiple release labels fail the job. Rerunning an already
   tagged merge reuses its tag and repairs a missing GitHub release.
+  Authentication uses the automatically supplied `GITHUB_TOKEN`, with
+  `contents: write` permission limited to the tagging job. No GitHub App,
+  private key, or personal access token is needed.
   Merged fork PRs are supported through a merged-only `pull_request_target`
   event; the checkout is verified to belong to `main` before release code runs.
   Tag jobs use [GitHub's concurrency queue](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
@@ -215,9 +218,12 @@ version metadata so they also build without Git.
 
 Repository maintainers must configure these GitHub settings before using CD:
 
-1. Install a GitHub App on `chengcli/fridica` with **Contents: read and write**.
-   Set repository variable `BUMP_BOT_APP_ID` and secret `BUMP_BOT_PRIVATE_KEY`,
-   matching snapy's names. Permit the app to create `v*` tags if tag rules apply.
+1. Ensure repository/organization Actions policies allow the tagging job's
+   `GITHUB_TOKEN` to have **Contents: write** permission. The workflow requests
+   this explicitly; do not create a token secret. If tag rules restrict `v*`
+   creation, configure them to allow this workflow's tag creation. The built-in
+   token does not bypass repository rules. Existing `BUMP_BOT_APP_ID` and
+   `BUMP_BOT_PRIVATE_KEY` settings are unused and can be removed from Fridica.
 2. Create a GitHub Actions environment named `pypi`. Add `PYPI_API_TOKEN` as an
    environment secret using a PyPI account authorized to publish `fridica`.
    Configure required reviewers if publication needs an approval gate. A new
@@ -230,6 +236,11 @@ Repository maintainers must configure these GitHub settings before using CD:
    on `main`, enter the tag, and approve the `pypi` environment if configured.
    PyPI versions are immutable; use a new tag for changed artifacts rather than
    overwriting a published version.
+
+Tags and releases created using `GITHUB_TOKEN` do not trigger downstream
+tag-push or release-event workflows. Fridica's publishing workflow is manually
+dispatched and reruns CI itself, so it does not depend on those events. See
+[GitHub's workflow-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 
 Only the package is deployed by CI. Run the daemon on each owner's machine,
 where their Slack tokens, agent authentication, and project directories live:
