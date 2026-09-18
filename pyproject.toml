@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fridica"
+version = "0.1.0"
+description = "A local personal agent connecting Slack to Claude Code and Codex"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["slack-sdk>=3.33,<4", "aiohttp>=3.10,<4"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1.2"]
+
+[project.scripts]
+fridica = "fridica.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fridica"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"slack/manifest.yaml" = "fridica/manifest.yaml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

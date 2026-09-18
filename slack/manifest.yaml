@@ -1,0 +1,18 @@
+display_information:
+  name: Fridica
+  description: Local personal agent
+oauth_config:
+  scopes:
+    user:
+      - channels:history
+      - channels:read
+      - chat:write
+      - users:read
+      - metadata.message:read
+settings:
+  event_subscriptions:
+    user_events:
+      - message.channels
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false
