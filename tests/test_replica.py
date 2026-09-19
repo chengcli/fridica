@@ -45,7 +45,7 @@ def process(replica, message):
     ({"sender_id": "UOWNER"}, "observe"),
     ({"sender_id": "UOWNER", "generated": True}, "ignore"),
     ({"generated": True, "text": "general question"}, "ignore"),
-    ({"turn": 6}, "ignore"),
+    ({"turn": 6, "generated": True}, "ignore"),
     ({"generated": True, "task_status": "complete"}, "ignore"),
 ])
 def test_filters(config, store, message, changes, expected):
@@ -150,6 +150,17 @@ def test_delivery_never_repeats_workspace_actions(config, store, message, error,
     assert len(transport.sent) == (2 if state == "ready" else 1)
 
 
+def test_slack_rejection_logs_code_and_scope_guidance(config, store, message, caplog):
+    agent = Agent()
+    transport = Transport(DeliveryRejected("missing_scope"))
+    entry = message()
+    process(Replica(config, store, agent, transport), entry)
+    assert "missing_scope" in caplog.text
+    assert "chat:write" in caplog.text
+    assert store.get(entry.event_id)["state"] == "failed"
+    assert len(agent.responded) == len(transport.sent) == 1
+
+
 def test_turn_limit_persists_without_metadata(config, message):
     config = replace(config, max_turns=1)
     database = Store(config.state_path)
@@ -161,7 +172,10 @@ def test_turn_limit_persists_without_metadata(config, message):
         entry = message("followup", timestamp="102.000001")
         process(Replica(config, database, agent, Transport()), entry)
         assert not agent.responded
-        assert database.get(entry.event_id)["decision"] == "ignore"
+        assert database.get(entry.event_id)["decision"] == "respond"
+        assert database.get(entry.event_id)["reply_only"] == 1
+        assert database.task(entry)["turns"] == 1
+        assert database.task(entry)["status"] == "waiting"
     finally:
         database.close()
 

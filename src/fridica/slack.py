@@ -73,7 +73,7 @@ class SlackTransport:
     async def send(self, message: Message, result: AgentResult, task_id: str, turn: int) -> str:
         try:
             response = await self.client.chat_postMessage(
-                channel=message.channel_id, thread_ts=message.thread_id, text=result.text + MARKER,
+                channel=message.channel_id, thread_ts=message.thread_id, text=result.text,
                 unfurl_links=False, unfurl_media=False,
                 metadata={"event_type": "fridica_message", "event_payload": {
                     "owner": self.config.owner_id, "task_id": task_id, "turn": turn, "status": result.status,
@@ -93,7 +93,7 @@ class SlackTransport:
                 raise RateLimited(delay) from None
             if error.response.status_code >= 500 or error.response.get("error") in {"internal_error", "fatal_error", "request_timeout"}:
                 raise RuntimeError("Slack delivery outcome is unknown") from None
-            raise DeliveryRejected("Slack rejected the message") from None
+            raise DeliveryRejected(error.response.get("error", "unknown_error")) from None
         timestamp = response.get("ts")
         if not isinstance(timestamp, str) or not re.fullmatch(r"\d+\.\d+", timestamp):
             raise RuntimeError("Slack did not confirm a message timestamp")

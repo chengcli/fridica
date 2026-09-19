@@ -1,9 +1,11 @@
 # Fridica
 
-Fridica is a local personal agent that connects your Slack identity to Claude Code
+Fridica is a local persona that connects your Slack identity to Claude Code
 or Codex. It listens in channels you choose, decides when to participate, works in
-configured project directories, and replies in Slack threads as you. Replies carry
-a `[via fridica]` label and machine-readable metadata.
+configured project directories, and replies in Slack threads as you. Replies use
+your first-person voice, without a Fridica introduction or visible signature.
+Machine-readable metadata remains for loop protection; legacy signed messages
+are still recognized. Your own messages never trigger your agent.
 
 This first release runs one owner per daemon and one Slack app per owner. Anyone
 in an allowed channel can trigger workspace actions. It includes both CLI
@@ -141,6 +143,26 @@ with tools disabled. Classification failure means silence. Set
 `general_messages = false` to disable unsolicited participation. The owner’s own
 messages supply context but never directly trigger their agent.
 
+An explicit human @mention always requests a threaded reply, even with general
+participation disabled or a cooldown active. If the thread has exhausted its
+action budget or an earlier task needs inspection, Fridica replies with a brief
+explanation without running more actions or retrying old work. This does not
+override observe-only mode, channel restrictions, duplicate suppression, or
+automated-message loop protection. Slack rejection or uncertain delivery can
+still prevent a reply; inspect the local logs rather than automatically resending.
+
+Only the structured final answer is delivered to Slack. Agent instructions exclude
+internal commentary, unsolicited summaries, and tool transcripts from that answer;
+CLI progress and stderr are never used as reply text. Sanitized failure categories
+stay in local logs, while Slack receives a short actionable notice. This output
+boundary does not guarantee that a model will never put unwanted prose in its final
+answer. Known participant IDs in reply prose become Slack mentions, displayed as
+people's names (and potentially notifying them); code and URLs are preserved.
+No additional scopes are required for mention rendering. Closing answers
+(`complete` or `blocked`) are instructed not to @mention anyone; they should omit
+direct address or use plain names. Mentions are reserved for `waiting` replies
+that need someone's response. Built-in blocker notices do not mention anyone.
+
 Replies stay in their original thread. Each thread has a persistent six-turn
 default budget; use a new thread for a new task after that budget is exhausted.
 Generated messages initiate responses only when explicitly addressed or following
@@ -154,8 +176,12 @@ sandbox in the configured workspace roots. Task-command network access is
 disabled. Provider API access is still needed to run the model. Claude requires
 its sandbox dependencies (including bubblewrap and socat on Linux). Fridica does
 not enable bypass-permission flags or automatically approve broader access.
-Claude performs file changes through sandboxed Bash; its built-in Edit and Write
-tools are not exposed, because their permissions are separate from the Bash sandbox.
+Claude enables native Edit and Write tools in `acceptEdits` mode for the workspace
+and `additional_workspaces`, alongside sandboxed Bash for file operations such as
+renaming or deleting files. Classification still has no tools. Codex continues to
+use its `workspace-write` sandbox. No blanket permission-bypass flag is enabled.
+OS file permissions, managed policies, and provider-protected paths still apply;
+this does not grant administrator access or unrestricted writes outside the roots.
 Blocked actions require local intervention; there is no remote approval UI.
 
 Only grant access to project directories you intend Slack participants to use.
@@ -219,7 +245,7 @@ live model calls. For a live smoke test, select one test channel and an empty
 project directory, run `doctor`, then run `start --observe-only`. Have another
 member post a message and verify the observation log. Restart normally and ask
 that member to mention you with a request to create a small text file. Check the
-file and labelled threaded reply. Request a file without specifying its location
+file and threaded reply. Request a file without specifying its location
 to exercise clarification, then try a request outside configured write roots to
 verify blocked behavior. Repeat with the other backend. Live tests can consume
 provider credits and require your Slack installation and CLI login.
