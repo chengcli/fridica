@@ -8,7 +8,6 @@ oauth_config:
       - channels:read
       - chat:write
       - users:read
-      - metadata.message:read
 settings:
   event_subscriptions:
     user_events:

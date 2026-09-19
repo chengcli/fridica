@@ -31,25 +31,126 @@ configuration. For a different location, use `fridica init --config /path/config
 
 ## Configure Slack
 
-1. Open [Slack app management](https://api.slack.com/apps), choose **Create New
-   App → From an app manifest**, select your workspace, and paste
-   [`slack/manifest.yaml`](slack/manifest.yaml).
-2. In **Basic Information → App-Level Tokens**, generate an app token with
-   `connections:write`. Socket Mode must be enabled.
-3. Install the app to the workspace under **OAuth & Permissions**. Copy the
-   **User OAuth Token** beginning with `xoxp-`, not a bot token. Workspace
-   administrators may need to approve installation and requested scopes.
-4. Export both tokens in the terminal where Fridica will run:
+Use **one Slack app per person**, with a user token for that person's account.
+Do not share tokens. Other channel members need no installation to interact with
+your running Fridica; anyone in an allowed channel can request workspace actions.
+Separate owners must not share an app: multiple Socket Mode connections divide
+events rather than broadcasting them to every connection. See
+[Slack's Socket Mode documentation](https://docs.slack.dev/apis/events-api/using-socket-mode/).
+
+### 1. Create the app and set permissions
+
+Open [Slack app management](https://api.slack.com/apps), choose **Create New App →
+From an app manifest**, select your workspace, and paste
+[`slack/manifest.yaml`](slack/manifest.yaml). The manifest sets up public channels.
+Verify these settings before installation:
+
+| Slack settings page | Setting | Required value |
+| --- | --- | --- |
+| Socket Mode | Enable Socket Mode | On |
+| Basic Information → App-Level Tokens | Generate token and scopes | `connections:write`; save the `xapp-` token |
+| Event Subscriptions | Enable Events | On |
+| Event Subscriptions → Subscribe to events on behalf of users | Public-channel event | `message.channels` |
+| OAuth & Permissions → User Token Scopes | Public-channel messages | `channels:history` |
+| OAuth & Permissions → User Token Scopes | Channel information and membership checks | `channels:read` |
+| OAuth & Permissions → User Token Scopes | Send replies as your account | `chat:write` |
+| OAuth & Permissions → User Token Scopes | User-profile access included in the manifest | `users:read` |
+
+`users:read` is included for user-profile access, but current mention rendering
+does not require a profile lookup. **Bot Token Scopes and bot event subscriptions
+are not used.** You do not need a public Request URL with Socket Mode.
+
+For **private channels**, also add these before installation:
+
+| Slack settings page | Additional values |
+| --- | --- |
+| OAuth & Permissions → User Token Scopes | `groups:history`, `groups:read` |
+| Event Subscriptions → Subscribe to events on behalf of users | `message.groups` |
+
+Keep the public-channel settings if monitoring both types. DMs and group DMs are
+not supported. The authorized person must belong to every configured channel.
+Event subscriptions and their corresponding scopes are both necessary; see
+[Slack's Events API](https://docs.slack.dev/apis/events-api/) and
+[private-channel events](https://docs.slack.dev/reference/events/message.groups/).
+
+**Do not add unrelated scopes:**
+- `links:read` and `links:write` are for shared-link events and custom unfurls;
+  ordinary replies containing URLs need only `chat:write`. Fridica disables unfurls.
+- File upload/download, reactions, channel administration, email, and bot mention
+  scopes are not needed for current functionality. Local workspace file access
+  is controlled by the agent, not Slack scopes.
+- `metadata.message:read` was listed in older manifests, but Slack documents it
+  as a **bot/legacy-bot scope**, not a user-token scope. Do not add a bot token just
+  for this scope. Fridica still attempts to attach metadata to outgoing replies;
+  metadata availability and acceptance are separate from ordinary message access.
+  See [Slack's metadata scope reference](https://docs.slack.dev/reference/scopes/metadata.message.read/)
+  and [link permissions](https://docs.slack.dev/messaging/working-with-files/).
+
+### 2. Install and export tokens
+
+Under **OAuth & Permissions**, select **Install to Workspace** and authorize as
+the person Fridica will represent. An administrator may need to approve the app
+and requested scopes. Copy the **User OAuth Token** starting with `xoxp-`, not a
+bot token (`xoxb-`). Both tokens must belong to the **same app and intended workspace**.
+
+Export them in the terminal where Fridica will run:
 
    ```bash
    export FRIDICA_SLACK_APP_TOKEN='xapp-your-token'
    export FRIDICA_SLACK_USER_TOKEN='xoxp-your-token'
    ```
 
-5. Edit the generated TOML file. Supply your Slack member ID, workspace ID,
-   channel IDs, an existing project directory, and an owner profile describing
-   your projects and expertise. Choose `backend = "claude"` or `"codex"`.
-   Authenticate the selected CLI before starting Fridica.
+After changing scopes, **reinstall the app**, update the exported user token if
+Slack replaces it, and restart Fridica. Save event-subscription changes as well.
+Never commit tokens to Git or put them in an agent-accessible workspace.
+
+### 3. Configure your local identity and channels
+
+After `fridica init` and exporting your user token, detect your identity and
+choose channels from a numbered list:
+
+```bash
+fridica configure --detect
+```
+
+This gets `owner_id` and `workspace_id` from Slack's
+[`auth.test`](https://docs.slack.dev/reference/methods/auth.test/) and discovers
+joined, non-archived channels using
+[`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/).
+Select channel numbers separated by commas; Fridica saves their IDs automatically.
+It never enables all discovered channels without your selection. Blank input
+cancels without changing the file. Private-channel discovery requires `groups:read`;
+if a channel-type read scope is missing, a warning explains which scope to add.
+Receiving private messages still requires `groups:history` and `message.groups`.
+Detection does not require AI setup or the app-level token and posts no messages.
+
+For noninteractive setup, select by channel **name**, not ID:
+
+```bash
+fridica configure --detect --channel-name general --channel-name my-project
+```
+
+Names must uniquely match discovered channels. Repeat `--channel-name` to select
+multiple channels. Unknown names or failed discovery leave the file unchanged.
+
+Manual ID options remain available:
+
+```bash
+fridica configure --owner-id U123ABC --workspace-id T123ABC --channel-id C123ABC
+fridica configure --channel-id C123ABC --channel-id G456DEF
+```
+
+Each option is optional, but supply at least one. Repeated `--channel-id` options
+**replace the full channel list**; omitted settings and TOML comments are preserved.
+Use `--config /path/config.toml` for a nondefault file. The command validates ID
+formats locally; it does not discover IDs, contact Slack, or change Slack permissions.
+Restart Fridica afterward. Owner/workspace IDs must match the user token, and a
+different identity needs a separate `state_path` rather than reusing old state.
+
+Edit `~/.config/fridica/config.toml`. Set `owner_id` to the member ID of the person
+who authorized the user token, `workspace_id` to the Slack workspace ID, and
+`channels` to the exact channel IDs to monitor. Use an existing local project
+directory. Choose a backend and authenticate its CLI separately from Slack.
 
 Example configuration (replace the IDs and directory):
 
@@ -68,54 +169,26 @@ cooldown = 60
 max_turns = 6
 ```
 
-The manifest enables public-channel events. For private channels, explicitly add
-the `groups:history` and `groups:read` user scopes and the `message.groups` user
-event, reinstall the app, and add the channel ID to your configuration. DMs and
-group DMs are outside this release's channel policy. Fridica never assumes that
-an app can see everything your Slack account can see: scopes, subscriptions,
-membership, and workspace policy determine delivery.
+### 4. Verify reception, then replies
 
-Each owner must create a separate Slack app for this release. Multiple Socket
-Mode connections to a shared app divide events between connections; they do not
-broadcast every event to every owner. See [Slack's Socket Mode documentation](https://docs.slack.dev/apis/events-api/using-socket-mode/).
+1. Run `fridica doctor`. It checks token **format** and local AI setup, not granted
+   Slack scopes. `start` checks Slack identity and channel membership.
+2. Run `fridica start --observe-only`, then send a **new** `test` message in a
+   configured channel. Expect `INFO Observed event ... in ...; no agent or delivery`.
+3. Stop with Ctrl-C and run `fridica start`. Have **another person** @mention you
+   in a new thread. Your own messages never trigger your agent.
 
-### Troubleshoot missing messages
+| Symptom | Check |
+| --- | --- |
+| `Listening as ...`, but no observed event | Enable Events, **user** event subscriptions and matching history scopes, saved changes/reinstallation, channel ID and membership, matching tokens, and no competing Socket Mode daemon |
+| Events observed, no reply | Stop observe-only mode; use another person's explicit @mention; check AI setup and local failure logs |
+| `missing_scope` when sending | Confirm `chat:write` is a **User Token Scope**, reinstall, refresh the token if changed, and restart |
+| Metadata-related rejection | Inspect the exact error; adding link or unrelated scopes does not fix metadata restrictions |
+| Old event reported as failed/interrupted/ambiguous | Inspect locally; restarting does not replay agent actions or uncertain replies |
 
-If `fridica start --observe-only` prints `INFO Listening as ...` but nothing
-appears after you send a message, startup succeeded but event reception has not
-been verified. Check the following in [your Slack app settings](https://api.slack.com/apps):
-
-1. Open **Event Subscriptions** and turn **Enable Events** on.
-2. Under **Subscribe to events on behalf of users**, add `message.channels`
-   for public channels. Adding only a bot event subscription is not sufficient
-   for this user-token setup.
-3. Under **OAuth & Permissions → User Token Scopes**, confirm
-   `channels:history` is present.
-4. For a private channel, add the `message.groups` user event and the
-   `groups:history` and `groups:read` user scopes. Keep the public-channel
-   subscriptions and scopes if you also monitor public channels.
-5. Save changes and reinstall the app if permissions changed. If Slack issues
-   a replacement user token, update `FRIDICA_SLACK_USER_TOKEN`. Confirm that
-   both the `xapp-` app token and `xoxp-` user token belong to this same app.
-6. Confirm the channel ID is listed in your Fridica configuration and the
-   authorized Slack user belongs to it. Stop Fridica with Ctrl-C and restart:
-
-   ```bash
-   fridica start --observe-only
-   ```
-
-7. Send a **new** message such as `test` to that channel after startup. The
-   terminal should print:
-
-   ```text
-   INFO Observed event ... in ...; no agent or delivery
-   ```
-
-Observe-only mode does not invoke AI or send Slack replies. Messages sent before
-startup are not fetched. If there is still no output, check that another process
-is not using the same app's Socket Mode connection and receiving its events.
-Slack requires both an event subscription and its corresponding OAuth scope;
-see the [Events API documentation](https://docs.slack.dev/apis/events-api/).
+Observe-only never invokes AI or sends replies. Messages sent before startup are
+not fetched. Scopes, subscriptions, membership, and workspace policy all affect
+delivery; a successful connection alone does not verify reception.
 
 ## Run
 

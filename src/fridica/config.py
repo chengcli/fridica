@@ -5,7 +5,10 @@ import os
 from pathlib import Path
 import re
 import tomllib
+import tempfile
 from dataclasses import dataclass
+
+import tomlkit
 
 
 DEFAULT_CONFIG = Path.home() / ".config" / "fridica" / "config.toml"
@@ -79,6 +82,51 @@ class Config:
         if not user.startswith("xoxp-"):
             raise ValueError(f"set {self.user_token_env} to a Slack user token")
         return app, user
+
+
+def set_slack_ids(path: Path, *, owner_id: str | None = None,
+                  workspace_id: str | None = None, channels: list[str] | None = None) -> None:
+    updates = {}
+    for name, value, pattern in (
+        ("owner_id", owner_id, r"[UW][A-Z0-9]+"),
+        ("workspace_id", workspace_id, r"T[A-Z0-9]+"),
+    ):
+        if value is not None:
+            if not re.fullmatch(pattern, value):
+                raise ValueError(f"{name} must be a Slack ID")
+            updates[name] = value
+    if channels is not None:
+        if not channels or any(not re.fullmatch(r"[CG][A-Z0-9]+", channel) for channel in channels):
+            raise ValueError("channels must contain Slack channel IDs")
+        updates["channels"] = list(dict.fromkeys(channels))
+    if not updates:
+        raise ValueError("provide --owner-id, --workspace-id, or --channel-id")
+    path = path.expanduser()
+    if path.is_symlink():
+        raise ValueError("refusing to replace a symlink configuration; specify its target path")
+    if not path.is_file():
+        raise ValueError("configuration not found; run fridica init with the same --config path first")
+    original = path.read_text()
+    try:
+        document = tomlkit.parse(original)
+    except ValueError:
+        raise ValueError("configuration is not valid TOML; repair it before updating IDs") from None
+    for name, value in updates.items():
+        document[name] = value
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".fridica-config-", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(tomlkit.dumps(document))
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.is_symlink() or path.read_text() != original:
+            raise ValueError("configuration changed during update; retry with the latest file")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_config(path: Path) -> Config:

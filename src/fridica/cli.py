@@ -10,7 +10,7 @@ import signal
 import sys
 
 from . import __version__
-from .config import DEFAULT_CONFIG, TEMPLATE, load_config
+from .config import DEFAULT_CONFIG, TEMPLATE, load_config, set_slack_ids
 
 
 async def _start(config, observe_only: bool) -> None:
@@ -39,6 +39,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="A local personal Slack agent")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
+    configure = commands.add_parser("configure", help="Set Slack IDs in an existing configuration")
+    configure.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    configure.add_argument("--detect", action="store_true", help="Detect identity and discover joined channels using your Slack token")
+    configure.add_argument("--channel-name", action="append", help="With --detect, select channels by name instead of prompting")
+    configure.add_argument("--owner-id", help="Slack member ID of the authorized owner")
+    configure.add_argument("--workspace-id", help="Slack workspace ID (not a local directory)")
+    configure.add_argument("--channel-id", action="append", dest="channels",
+                           help="Channel ID; repeat to replace the full configured channel list")
     for name, help_text in (("init", "Write an example configuration"), ("doctor", "Check local configuration and prerequisites"), ("start", "Listen to Slack")):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -48,6 +56,25 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     logging.getLogger("slack_sdk").setLevel(logging.CRITICAL)
     try:
+        if args.command == "configure":
+            if args.detect:
+                if args.owner_id or args.workspace_id or args.channels:
+                    raise ValueError("--detect cannot be combined with manual ID options")
+                from .discovery import discover_from_config, select_channels
+                args.owner_id, args.workspace_id, channels, warnings = asyncio.run(discover_from_config(args.config))
+                print(f"Detected owner {args.owner_id} in workspace {args.workspace_id}.")
+                for warning in warnings:
+                    print(warning, file=sys.stderr)
+                args.channels = select_channels(channels, args.channel_name)
+            elif args.channel_name:
+                raise ValueError("--channel-name requires --detect")
+            set_slack_ids(args.config, owner_id=args.owner_id, workspace_id=args.workspace_id,
+                          channels=args.channels)
+            print(f"Updated {args.config.expanduser()}. Restart Fridica to apply the changes.")
+            if args.owner_id is not None or args.workspace_id is not None:
+                print("The IDs must match your Slack user token. A different identity requires a separate state_path.")
+            print("Run fridica doctor with the same --config path to check the complete configuration.")
+            return 0
         if args.command == "init":
             path = args.config.expanduser()
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
