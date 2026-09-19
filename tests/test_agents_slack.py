@@ -67,7 +67,7 @@ def test_slack_identity_membership_and_reply(config, message):
     asyncio.run(transport.validate())
     asyncio.run(transport.send(message(), AgentResult("done"), "task", 2))
     assert client.post["thread_ts"] == message().thread_id
-    assert client.post["text"].endswith(MARKER)
+    assert client.post["text"] == "done"
     assert client.post["metadata"]["event_payload"]["turn"] == 2
     client.identity["user_id"] = "UOTHER"
     with pytest.raises(ValueError):
@@ -90,6 +90,19 @@ def test_slack_delivery_errors(config, message, status, error_type):
         asyncio.run(SlackTransport(config, client).send(message(), AgentResult("done"), "task", 1))
     if status == 429:
         assert raised.value.retry_after == 2
+    elif error_type is DeliveryRejected:
+        assert raised.value.code == "some_error"
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("missing_scope", "missing_scope"),
+    ("invalid_metadata", "invalid_metadata"),
+    ("xoxp-secret", "unknown_error"),
+    ("bad\nsecret", "unknown_error"),
+    (None, "unknown_error"),
+])
+def test_delivery_error_code_sanitized(code, expected):
+    assert str(DeliveryRejected(code)) == expected
 
 
 @pytest.mark.parametrize("backend_type", [ClaudeBackend, CodexBackend])
@@ -102,14 +115,15 @@ def test_backend_permission_flags(config, tmp_path, backend_type):
     assert not any("bypass" in part or "dangerously" in part for part in execute)
     if backend_type is ClaudeBackend:
         assert classify[classify.index("--tools") + 1] == ""
-        assert execute[execute.index("--permission-mode") + 1] == "dontAsk"
+        assert execute[execute.index("--permission-mode") + 1] == "acceptEdits"
+        assert classify[classify.index("--permission-mode") + 1] == "dontAsk"
         settings = json.loads(execute[execute.index("--settings") + 1])
         assert settings["sandbox"]["enabled"]
         assert settings["sandbox"]["failIfUnavailable"]
         assert not settings["sandbox"]["allowUnsandboxedCommands"]
         available = set(execute[execute.index("--tools") + 1].split(","))
         allowed = set(execute[execute.index("--allowedTools") + 1].split(","))
-        assert not {"Edit", "Write"} & available
+        assert {"Edit", "Write"} <= available
         assert not {"Edit", "Write", "Bash"} & allowed
         assert "Bash" in available
         assert settings["sandbox"]["autoAllowBashIfSandboxed"]
@@ -142,6 +156,7 @@ def test_fake_cli_roundtrip_and_token_stripping(config, tmp_path, monkeypatch, m
 assert not any("SLACK" in key for key in os.environ)
 assert "CUSTOM_SECRET" not in os.environ
 prompt = sys.stdin.read()
+print("PRIVATE TOOL DIAGNOSTIC", file=sys.stderr)
 assert "Conversation data:" in prompt
 assert "touch SHOULD_NOT_EXIST" in prompt
 arguments = sys.argv[1:]
@@ -153,9 +168,9 @@ else:
 result = {"decision": "respond"} if classification else {"text": "Finished safely", "status": "complete"}
 if "--output-last-message" in arguments:
     pathlib.Path(arguments[arguments.index("--output-last-message") + 1]).write_text(json.dumps(result))
-    print(json.dumps({"type": "thread.started"}))
+    print(json.dumps({"type": "thread.started", "diagnostic": "PRIVATE PROGRESS"}))
 else:
-    print(json.dumps({"structured_output": result}))
+    print(json.dumps({"structured_output": result, "result": "PRIVATE PROGRESS"}))
 ''')
     executable.chmod(0o700)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])

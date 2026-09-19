@@ -62,6 +62,9 @@ class Store:
                 PRIMARY KEY(workspace,channel)
             );
         """)
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
+        if "reply_only" not in columns:
+            self.connection.execute("ALTER TABLE events ADD COLUMN reply_only INTEGER NOT NULL DEFAULT 0")
         with self.connection:
             self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
             self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
@@ -150,9 +153,18 @@ class Store:
                 ("delivery_pending", time.time(), message.workspace_id, message.channel_id, message.thread_id),
             )
 
+    def save_notice(self, message: Message, result: AgentResult, task_id: str, turn: int) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE events SET state='ready',decision='respond',result=?,task_id=?,turn=?,reply_only=1 WHERE event_id=?",
+                (json.dumps(asdict(result)), task_id, turn, message.event_id),
+            )
+
     def delivered(self, message: Message, timestamp: str) -> None:
         with self.connection:
             self.connection.execute("UPDATE events SET state='sent',sent_ts=? WHERE event_id=?", (timestamp, message.event_id))
+            if self.get(message.event_id)["reply_only"]:
+                return
             result = json.loads(self.get(message.event_id)["result"])
             self.connection.execute(
                 "UPDATE tasks SET status=?,updated=? WHERE workspace=? AND channel=? AND thread=?",

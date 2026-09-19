@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 
 from .config import Config
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message, Transport
 from .store import Store
+from .replies import format_reply
 
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,9 @@ class RateLimited(Exception):
 
 
 class DeliveryRejected(Exception):
-    pass
+    def __init__(self, code: str = "unknown_error"):
+        self.code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else "unknown_error"
+        super().__init__(self.code)
 
 
 class Replica:
@@ -55,7 +59,7 @@ class Replica:
                 await self._deliver(message)
                 return
             task = self.store.task(message)
-            if task and task["status"] == "delivery_pending" and self.store.awaiting_delivery(message):
+            if self.store.awaiting_delivery(message):
                 return
             mentioned = f"<@{self.config.owner_id}>" in message.text
             active = task is not None and task["status"] == "waiting"
@@ -64,6 +68,17 @@ class Replica:
             context = ConversationContext(
                 self.store.context(message, self.config.context_limit), self.config.owner_id, self.config.profile, task_id, turn
             )
+            mandatory = mentioned and not message.generated and message.sender_id != self.config.owner_id
+            if mandatory and (turn > self.config.max_turns or (task and task["status"] not in {"complete", "waiting"})):
+                explanation = (
+                    "This thread has reached its action limit. Please start a new thread for a new task."
+                    if turn > self.config.max_turns else
+                    "An earlier task in this thread needs local inspection before I can continue. I haven't retried it."
+                )
+                result = AgentResult(explanation, "blocked")
+                self.store.save_notice(message, result, task_id, task["turns"] if task else 0)
+                await self._deliver(message)
+                return
             decision = Decision.OBSERVE
             if message.sender_id == self.config.owner_id:
                 decision = Decision.IGNORE if message.generated else Decision.OBSERVE
@@ -96,13 +111,18 @@ class Replica:
                     raise ValueError("agent response must contain 1 to 3500 characters")
                 if result.status == "waiting" and f"<@{message.sender_id}>" not in result.text:
                     result = AgentResult(f"<@{message.sender_id}> {result.text}", result.status)
+                result = AgentResult(format_reply(result.text, message, context), result.status)
+                if not result.text.strip() or len(result.text) > 3500:
+                    raise ValueError("formatted response must contain 1 to 3500 characters")
             except asyncio.CancelledError:
                 self.store.mark(message.event_id, "interrupted")
                 raise
             except Exception:
-                self.store.mark(message.event_id, "failed")
                 logger.error("Agent failed for event %s; inspect local state before retrying", message.event_id)
-                return
+                result = AgentResult(
+                    "I couldn't complete this request. Please check Fridica locally before retrying; partial changes may exist.",
+                    "blocked",
+                )
             self.store.save_result(message, result)
             await self._deliver(message)
 
@@ -118,9 +138,11 @@ class Replica:
             else:
                 self.store.retry(message.event_id, error.retry_after)
             return
-        except DeliveryRejected:
+        except DeliveryRejected as error:
             self.store.mark(message.event_id, "failed")
-            logger.error("Slack rejected reply for event %s", message.event_id)
+            logger.error("Slack rejected reply for event %s: %s", message.event_id, error.code)
+            if error.code == "missing_scope":
+                logger.error("Check chat:write under Slack User Token Scopes, reinstall the app, and update the user token if changed.")
             return
         except asyncio.CancelledError:
             self.store.mark(message.event_id, "ambiguous")
