@@ -77,6 +77,44 @@ Each owner must create a separate Slack app for this release. Multiple Socket
 Mode connections to a shared app divide events between connections; they do not
 broadcast every event to every owner. See [Slack's Socket Mode documentation](https://docs.slack.dev/apis/events-api/using-socket-mode/).
 
+### Troubleshoot missing messages
+
+If `fridica start --observe-only` prints `INFO Listening as ...` but nothing
+appears after you send a message, startup succeeded but event reception has not
+been verified. Check the following in [your Slack app settings](https://api.slack.com/apps):
+
+1. Open **Event Subscriptions** and turn **Enable Events** on.
+2. Under **Subscribe to events on behalf of users**, add `message.channels`
+   for public channels. Adding only a bot event subscription is not sufficient
+   for this user-token setup.
+3. Under **OAuth & Permissions → User Token Scopes**, confirm
+   `channels:history` is present.
+4. For a private channel, add the `message.groups` user event and the
+   `groups:history` and `groups:read` user scopes. Keep the public-channel
+   subscriptions and scopes if you also monitor public channels.
+5. Save changes and reinstall the app if permissions changed. If Slack issues
+   a replacement user token, update `FRIDICA_SLACK_USER_TOKEN`. Confirm that
+   both the `xapp-` app token and `xoxp-` user token belong to this same app.
+6. Confirm the channel ID is listed in your Fridica configuration and the
+   authorized Slack user belongs to it. Stop Fridica with Ctrl-C and restart:
+
+   ```bash
+   fridica start --observe-only
+   ```
+
+7. Send a **new** message such as `test` to that channel after startup. The
+   terminal should print:
+
+   ```text
+   INFO Observed event ... in ...; no agent or delivery
+   ```
+
+Observe-only mode does not invoke AI or send Slack replies. Messages sent before
+startup are not fetched. If there is still no output, check that another process
+is not using the same app's Socket Mode connection and receiving its events.
+Slack requires both an event subscription and its corresponding OAuth scope;
+see the [Events API documentation](https://docs.slack.dev/apis/events-api/).
+
 ## Run
 
 ```bash
@@ -85,8 +123,14 @@ fridica start --observe-only
 fridica start
 ```
 
-`doctor` checks local configuration, token presence, executable availability,
-and required CLI flags without invoking a model. `start` verifies the Slack user
+`doctor` prints a PASS or FAIL for each local check: operating system,
+configuration, each Slack token's format, AI executable availability, required
+CLI flags, and AI sign-in. It runs `claude auth status` or `codex login status`
+for the configured backend without invoking a model or printing account details.
+Independent checks continue after failures; checks blocked by invalid
+configuration or a missing executable show SKIP. The command exits nonzero if
+any check fails or is skipped. Sign-in status does not guarantee that a later
+model request will succeed or that credits are available. `start` verifies the Slack user
 and workspace identity and channel membership. `--observe-only` records messages
 without invoking either model or posting replies. Stop with Ctrl-C or SIGTERM.
 All subcommands accept `--config PATH`; `python -m fridica` is also supported.
@@ -187,7 +231,7 @@ adapted for a pure-Python package. Fridica produces one universal wheel and one
 source distribution, rather than platform-specific compiled wheels.
 
 - **Continuous Integration** (`.github/workflows/ci.yml`) runs on pull requests
-  and pushes to `main`. It tests Python 3.11–3.14 on Ubuntu and macOS, builds both
+  and pushes to `main`. It tests Python 3.11 on Ubuntu and macOS, builds both
   distributions after every matrix job passes, checks package metadata, and
   smoke-tests the installed wheel and bundled Slack manifest. Tests use fake
   agents and Slack clients; no Slack/model credentials are required.

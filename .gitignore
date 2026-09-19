@@ -6,4 +6,4 @@ dist/
 *.egg-info/
 *.sqlite3*
 .env
-
+tokens*

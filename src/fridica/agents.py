@@ -281,3 +281,29 @@ def check_backend(config: Config) -> list[str]:
     if result.returncode or any(flag not in result.stdout for flag in required):
         return [f"Upgrade {config.backend}: required isolation/structured-output flags are unavailable."]
     return []
+
+
+def check_authentication(config: Config) -> list[str]:
+    executable = shutil.which(config.backend)
+    if executable is None:
+        return [f"Install {config.backend} before checking sign-in."]
+    arguments = ["auth", "status"] if config.backend == "claude" else ["login", "status"]
+    try:
+        result = subprocess.run(
+            [executable, *arguments], capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, timeout=10, env=_environment(config),
+        )
+    except subprocess.TimeoutExpired:
+        return [f"{config.backend} sign-in check timed out; run {' '.join([config.backend, *arguments])} locally."]
+    except OSError:
+        return [f"Could not run {config.backend}; repair its installation and retry."]
+    if result.returncode:
+        return [f"{config.backend} is not signed in or its status command failed; run {' '.join([config.backend, *arguments])} locally."]
+    if config.backend == "claude":
+        try:
+            status = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            return ["Claude returned an unreadable authentication status; run claude auth status locally."]
+        if not isinstance(status, dict) or status.get("loggedIn") is not True:
+            return ["Claude is not signed in; run claude to sign in, then retry."]
+    return []

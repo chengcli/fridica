@@ -62,20 +62,20 @@ def main(argv: list[str] | None = None) -> int:
                         stream.write(resource.read_text())
             print(f"Created {path}. Set your identity, channels, workspace, and token environment variables.")
             return 0
+        if args.command == "doctor":
+            from .doctor import run_doctor
+            return run_doctor(args.config)
         config = load_config(args.config)
         if sys.platform not in {"darwin", "linux"}:
             raise ValueError("fridica supports macOS and Linux")
         config.tokens()
         from .agents import check_backend
-        if args.command == "doctor" or not args.observe_only:
+        if not args.observe_only:
             problems = check_backend(config)
             if problems:
                 for problem in problems:
                     print(problem, file=sys.stderr)
                 return 1
-        if args.command == "doctor":
-            print("Local configuration, tokens, and agent CLI checks passed. Slack identity is verified on start.")
-            return 0
         asyncio.run(_start(config, args.observe_only))
         return 0
     except (ValueError, OSError) as error:
