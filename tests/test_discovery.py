@@ -81,7 +81,7 @@ def test_channel_selection(monkeypatch):
 def test_discovery_reads_custom_token_without_valid_full_config(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
     path.write_text(TEMPLATE + '\nuser_token_env_extra = "ignored"\n')
-    path.write_text(path.read_text().replace('user_token_env = "FRIDICA_SLACK_USER_TOKEN"', 'user_token_env = "CUSTOM_USER_TOKEN"'))
+    path.write_text(path.read_text().replace('user_token_env = "SLACK_USER_TOKEN"', 'user_token_env = "CUSTOM_USER_TOKEN"'))
     monkeypatch.setenv("CUSTOM_USER_TOKEN", "xoxp-test")
 
     def client_factory(**kwargs):
