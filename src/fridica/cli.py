@@ -81,13 +81,15 @@ def main(argv: list[str] | None = None) -> int:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(descriptor, "w") as stream:
                 stream.write(TEMPLATE)
-            manifest = path.parent / "manifest.yaml"
-            if not manifest.exists():
-                resource = files("fridica").joinpath("manifest.yaml")
-                if resource.is_file():
-                    with manifest.open("x") as stream:
-                        stream.write(resource.read_text())
+            for name in ("manifest.yaml", "contract.md"):
+                target = path.parent / name
+                if not target.exists():
+                    resource = files("fridica").joinpath(name)
+                    if resource.is_file():
+                        with target.open("x") as stream:
+                            stream.write(resource.read_text())
             print(f"Created {path}. Set your identity, channels, workspace, and token environment variables.")
+            print(f"Agent rules are in {path.parent / 'contract.md'}; edit them to change how your persona behaves.")
             return 0
         if args.command == "doctor":
             from .doctor import run_doctor
@@ -96,9 +98,9 @@ def main(argv: list[str] | None = None) -> int:
         if sys.platform not in {"darwin", "linux"}:
             raise ValueError("fridica supports macOS and Linux")
         config.tokens()
-        from .agents import check_backend
+        from .agents import check_backend, check_sandbox
         if not args.observe_only:
-            problems = check_backend(config)
+            problems = check_backend(config) + check_sandbox(config)
             if problems:
                 for problem in problems:
                     print(problem, file=sys.stderr)

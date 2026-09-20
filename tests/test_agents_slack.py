@@ -1,13 +1,14 @@
 import asyncio
 from dataclasses import replace
 import json
+import logging
 import os
 import sys
 
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from fridica.agents import BackendError, ClaudeBackend, CodexBackend, _run
+from fridica.agents import BackendError, ClaudeBackend, CodexBackend, SessionUnavailable, _run
 from fridica.models import AgentResult, ConversationContext, Decision
 from fridica.replica import DeliveryRejected, RateLimited
 from fridica.slack import MARKER, SlackTransport, normalize
@@ -184,6 +185,148 @@ else:
     assert asyncio.run(backend.respond(entry, context)) == AgentResult("Finished safely")
     assert not (config.workspace / "SHOULD_NOT_EXIST").exists()
     assert not (config.workspace / "INJECTED").exists()
+
+
+@pytest.mark.parametrize("backend_type", [ClaudeBackend, CodexBackend])
+def test_session_flags(config, tmp_path, backend_type):
+    schema = tmp_path / "schema.json"
+    schema.write_text("{}")
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    config = replace(config, additional_workspaces=(extra,))
+    backend = backend_type(config)
+    session = "2b1f0d2e-6a8e-4c39-9a33-0d8c9a0f1b22"
+    classify = backend.command(tmp_path, schema, True, None, False)
+    fresh = backend.command(tmp_path, schema, False, session, False)
+    resumed = backend.command(tmp_path, schema, False, session, True)
+    stateless = backend.command(tmp_path, schema, False, None, False)
+    for command in (classify, fresh, resumed, stateless):
+        assert not any("bypass" in part or "dangerously" in part for part in command)
+    if backend_type is ClaudeBackend:
+        assert "--no-session-persistence" in classify and "--no-session-persistence" in stateless
+        assert fresh[fresh.index("--session-id") + 1] == session and "--no-session-persistence" not in fresh
+        assert resumed[resumed.index("--resume") + 1] == session and "--session-id" not in resumed
+        for command in (fresh, resumed):
+            assert command[command.index("--permission-mode") + 1] == "acceptEdits"
+            assert command[command.index("--add-dir") + 1] == str(extra)
+            assert json.loads(command[command.index("--settings") + 1])["sandbox"]["failIfUnavailable"]
+    else:
+        assert "--ephemeral" in classify and "--ephemeral" in stateless
+        assert "--ephemeral" not in fresh and fresh[:2] == ["codex", "exec"] and "resume" not in fresh
+        assert resumed[:4] == ["codex", "exec", "resume", session]
+        assert "--ephemeral" not in resumed and "--sandbox" not in resumed and "--add-dir" not in resumed
+        assert 'sandbox_mode="workspace-write"' in resumed
+        assert f"sandbox_workspace_write.writable_roots={json.dumps([str(extra)])}" in resumed
+        for command in (fresh, resumed):
+            assert "sandbox_workspace_write.network_access=false" in command
+            assert "--ignore-user-config" in command and command[-1] == "-"
+
+
+def test_session_id_extraction(config):
+    claude = ClaudeBackend(config)
+    assert claude.session_id(json.dumps({"session_id": "abcd1234-0000-4000-8000-000000000000"})) == "abcd1234-0000-4000-8000-000000000000"
+    assert claude.session_id(json.dumps({"session_id": "bad id; rm -rf"})) is None
+    assert claude.session_id("not json") is None
+    codex = CodexBackend(config)
+    output = "garbage\n" + json.dumps({"type": "thread.started", "thread_id": "0193b2c4-1111-7000-8000-000000000000"}) + "\n" + json.dumps({"type": "turn.completed"})
+    assert codex.session_id(output) == "0193b2c4-1111-7000-8000-000000000000"
+    assert codex.session_id(json.dumps({"type": "turn.completed"})) is None
+
+
+@pytest.mark.parametrize("backend_type,name", [(ClaudeBackend, "claude"), (CodexBackend, "codex")])
+def test_session_continuity_roundtrip(config, tmp_path, monkeypatch, message, backend_type, name):
+    log = tmp_path / "argv.log"
+    executable = tmp_path / name
+    executable.write_text(f'#!{sys.executable}\n' + '''import json, os, pathlib, sys
+arguments = sys.argv[1:]
+pathlib.Path(os.environ["ARGV_LOG"]).open("a").write(json.dumps(arguments) + "\\n")
+prompt = sys.stdin.read()
+resume_id = None
+if "--resume" in arguments:
+    resume_id = arguments[arguments.index("--resume") + 1]
+elif arguments[:2] == ["exec", "resume"]:
+    resume_id = arguments[2]
+if resume_id == "11111111-1111-4111-8111-111111111111":
+    print("No conversation found with session ID: " + resume_id if "--resume" in arguments else "Error: thread/resume failed: no rollout found for thread id " + resume_id, file=sys.stderr)
+    sys.exit(1)
+session = resume_id or ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" if "--session-id" not in arguments else arguments[arguments.index("--session-id") + 1])
+result = {"text": "continued" if resume_id else "started", "status": "complete"}
+if "--output-last-message" in arguments:
+    pathlib.Path(arguments[arguments.index("--output-last-message") + 1]).write_text(json.dumps(result))
+    print(json.dumps({"type": "thread.started", "thread_id": session}))
+    print(json.dumps({"type": "turn.completed"}))
+else:
+    print(json.dumps({"structured_output": result, "session_id": session}))
+''')
+    executable.chmod(0o700)
+    monkeypatch.setenv("ARGV_LOG", str(log))
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    backend = backend_type(config)
+    entry = message()
+
+    first = asyncio.run(backend.respond(entry, ConversationContext([], config.owner_id, "profile", "task", 1)))
+    assert first.text == "started" and first.session
+    fresh_argv = json.loads(log.read_text().splitlines()[-1])
+    assert "--no-session-persistence" not in fresh_argv and "--ephemeral" not in fresh_argv
+    if name == "claude":
+        assert fresh_argv[fresh_argv.index("--session-id") + 1] == first.session
+
+    second = asyncio.run(backend.respond(entry, ConversationContext([], config.owner_id, "profile", "task", 2, session=first.session)))
+    assert second == AgentResult("continued", "complete", first.session)
+    resumed_argv = json.loads(log.read_text().splitlines()[-1])
+    assert first.session in resumed_argv and ("--resume" in resumed_argv or resumed_argv[:2] == ["exec", "resume"])
+
+    lost = "11111111-1111-4111-8111-111111111111"
+    third = asyncio.run(backend.respond(entry, ConversationContext([], config.owner_id, "profile", "task", 3, session=lost)))
+    assert third.text == "started" and third.status == "complete"
+    assert third.session and third.session != lost
+    assert len(log.read_text().splitlines()) == 4
+
+    stateless = backend_type(replace(config, resume_sessions=False))
+    plain = asyncio.run(stateless.respond(entry, ConversationContext([], config.owner_id, "profile", "task", 4, session=first.session)))
+    assert plain == AgentResult("started")
+    plain_argv = json.loads(log.read_text().splitlines()[-1])
+    assert ("--no-session-persistence" in plain_argv) or ("--ephemeral" in plain_argv)
+    assert first.session not in plain_argv
+
+    with pytest.raises(BackendError):
+        asyncio.run(backend._invoke("x", False, "not a valid session id!"))
+
+
+def test_resume_failure_is_distinguished(config, tmp_path):
+    script = tmp_path / "fail.py"
+    script.write_text("import sys\nprint(sys.argv[1], file=sys.stderr)\nsys.exit(1)\n")
+    with pytest.raises(SessionUnavailable):
+        asyncio.run(_run([sys.executable, str(script), "No conversation found with session ID: x"], "", config.workspace, config))
+    with pytest.raises(BackendError) as info:
+        asyncio.run(_run([sys.executable, str(script), "some other failure"], "", config.workspace, config))
+    assert not isinstance(info.value, SessionUnavailable)
+
+
+def test_agent_failure_logs_stderr_but_replies_generically(config, tmp_path, monkeypatch, message, caplog):
+    executable = tmp_path / "claude"
+    executable.write_text(f'#!{sys.executable}\n' + '''import sys
+sys.stdin.read()
+print("Error: sandbox required but unavailable: socat not installed", file=sys.stderr)
+print("  sandbox.failIfUnavailable is set", file=sys.stderr)
+sys.exit(1)
+''')
+    executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    context = ConversationContext([], config.owner_id, "profile", "task", 1)
+    with caplog.at_level(logging.WARNING, logger="fridica.agents"):
+        result = asyncio.run(ClaudeBackend(config).respond(message(text="hello"), context))
+    assert result.status == "blocked"
+    assert "socat" not in result.text
+    assert "Agent exited with status 1" in caplog.text
+    assert "socat not installed sandbox.failIfUnavailable is set" in caplog.text
+
+
+def test_diagnostic_is_bounded():
+    from fridica.agents import DIAGNOSTIC_LIMIT, _diagnostic
+    assert _diagnostic(b"") == ""
+    assert _diagnostic(b"a\n b\t\tc\xff") == "a b c\ufffd"
+    assert _diagnostic(b"x" * 5000 + b"END") == "x" * (DIAGNOSTIC_LIMIT - 3) + "END"
 
 
 def test_subprocess_timeout_and_cancellation(config, tmp_path):

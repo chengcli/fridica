@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import replace
 
 import pytest
@@ -216,3 +217,72 @@ def test_cancellation_records_uncertainty(config, store, message, during_deliver
             await task
         assert store.get(entry.event_id)["state"] == ("ambiguous" if during_delivery else "interrupted")
     asyncio.run(scenario())
+
+
+def test_session_persists_across_turns(config, store, message):
+    agent = Agent(results=[
+        AgentResult("Which file?", "waiting", session="sess-one"),
+        AgentResult("Created file", session="sess-one"),
+        AgentResult("Started over", session="sess-two"),
+    ])
+    transport = Transport()
+    replica = Replica(config, store, agent, transport)
+    first = message()
+    process(replica, first)
+    assert agent.responded[0][1].session is None
+    assert store.task(first)["session"] == "sess-one"
+    assert '"session"' not in store.get(first.event_id)["result"] or json.loads(store.get(first.event_id)["result"]).get("session") is None
+    assert transport.sent[0][1] == AgentResult("<@UALICE> Which file?", "waiting")
+
+    second = message("event2", text="answer.txt", timestamp="100.000003")
+    process(replica, second)
+    assert agent.responded[1][1].session == "sess-one"
+    assert store.task(second)["session"] == "sess-one"
+
+    third = message("event3", text="<@UOWNER> another", timestamp="100.000005")
+    process(replica, third)
+    assert agent.responded[2][1].session == "sess-one"
+    assert store.task(third)["session"] == "sess-two"
+
+
+def test_sessions_disabled_never_reach_agent(config, message):
+    config = replace(config, resume_sessions=False)
+    database = Store(config.state_path)
+    try:
+        agent = Agent(results=[AgentResult("Which file?", "waiting", session="sess-one"), AgentResult("done")])
+        replica = Replica(config, database, agent, Transport())
+        first = message()
+        process(replica, first)
+        assert database.task(first)["session"] is None
+        process(replica, message("event2", text="answer.txt", timestamp="100.000003"))
+        assert all(context.session is None for _entry, context in agent.responded)
+    finally:
+        database.close()
+
+
+def test_idle_session_expires(config, store, message):
+    config = replace(config, session_timeout=3600)
+    agent = Agent(results=[
+        AgentResult("Which file?", "waiting", session="sess-one"),
+        AgentResult("Still here", "waiting", session="sess-one"),
+        AgentResult("Fresh start", "waiting", session="sess-two"),
+    ])
+    replica = Replica(config, store, agent, Transport())
+    first = message()
+    process(replica, first)
+    process(replica, message("event2", text="answer.txt", timestamp="100.000003"))
+    assert agent.responded[1][1].session == "sess-one"
+    with store.connection:
+        store.connection.execute("UPDATE tasks SET updated=updated-7200")
+    process(replica, message("event3", text="more", timestamp="100.000005"))
+    assert agent.responded[2][1].session is None
+    assert store.task(first)["session"] == "sess-two"
+
+
+def test_zero_timeout_never_resumes(config, store, message):
+    config = replace(config, session_timeout=0)
+    agent = Agent(results=[AgentResult("Which file?", "waiting", session="a"), AgentResult("done", session="b")])
+    replica = Replica(config, store, agent, Transport())
+    process(replica, message())
+    process(replica, message("event2", text="answer.txt", timestamp="100.000003"))
+    assert [context.session for _entry, context in agent.responded] == [None, None]

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 
 from .config import Config
@@ -65,8 +66,13 @@ class Replica:
             active = task is not None and task["status"] == "waiting"
             task_id = task["task_id"] if task else (message.task_id or uuid.uuid4().hex)
             turn = max(task["turns"] if task else 0, message.turn) + 1
+            session = task["session"] if task and self.config.resume_sessions else None
+            if session and time.time() - task["updated"] > self.config.session_timeout:
+                logger.info("Session for thread %s is idle beyond session_timeout; a new one will start", message.thread_id)
+                session = None
             context = ConversationContext(
-                self.store.context(message, self.config.context_limit), self.config.owner_id, self.config.profile, task_id, turn
+                self.store.context(message, self.config.context_limit), self.config.owner_id, self.config.profile, task_id, turn,
+                session=session,
             )
             mandatory = mentioned and not message.generated and message.sender_id != self.config.owner_id
             if mandatory and (turn > self.config.max_turns or (task and task["status"] not in {"complete", "waiting"})):
@@ -107,6 +113,9 @@ class Replica:
                 result = await self.agent.respond(message, context)
                 if not isinstance(result, AgentResult) or result.status not in {"complete", "waiting", "blocked"}:
                     raise ValueError("invalid agent result")
+                if self.config.resume_sessions and result.session != context.session:
+                    self.store.save_session(message, result.session)
+                result = AgentResult(result.text, result.status)
                 if not isinstance(result.text, str) or not result.text.strip() or len(result.text) > 3500:
                     raise ValueError("agent response must contain 1 to 3500 characters")
                 if result.status == "waiting" and f"<@{message.sender_id}>" not in result.text:
