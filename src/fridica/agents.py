@@ -38,8 +38,8 @@ OUTPUT_LIMIT = 4 * 1024 * 1024
 
 def _environment(config: Config) -> dict[str, str]:
     excluded = {
-        getattr(config, "app_token_env", "FRIDICA_SLACK_APP_TOKEN"),
-        getattr(config, "user_token_env", "FRIDICA_SLACK_USER_TOKEN"),
+        getattr(config, "app_token_env", "SLACK_APP_TOKEN"),
+        getattr(config, "user_token_env", "SLACK_USER_TOKEN"),
     }
     return {
         key: value for key, value in os.environ.items()

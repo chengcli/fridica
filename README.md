@@ -93,11 +93,17 @@ the person Fridica will represent. An administrator may need to approve the app
 and requested scopes. Copy the **User OAuth Token** starting with `xoxp-`, not a
 bot token (`xoxb-`). Both tokens must belong to the **same app and intended workspace**.
 
+For `SLACK_APP_TOKEN`, open **Basic Information → App-Level Tokens** and copy the
+`xapp-` token already generated in step 1 with `connections:write`. Token generation
+should be complete by this point; reuse that token rather than creating another.
+For `SLACK_USER_TOKEN`, use the `xoxp-` **User OAuth Token** from
+**OAuth & Permissions** after installation.
+
 Export them in the terminal where Fridica will run:
 
    ```bash
-   export FRIDICA_SLACK_APP_TOKEN='xapp-your-token'
-   export FRIDICA_SLACK_USER_TOKEN='xoxp-your-token'
+   export SLACK_APP_TOKEN='xapp-your-token'
+   export SLACK_USER_TOKEN='xoxp-your-token'
    ```
 
 After changing scopes, **reinstall the app**, update the exported user token if

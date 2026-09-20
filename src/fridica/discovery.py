@@ -57,7 +57,7 @@ async def discover(client) -> tuple[str, str, list[dict], list[str]]:
 async def discover_from_config(path: Path) -> tuple[str, str, list[dict], list[str]]:
     with path.expanduser().open("rb") as stream:
         values = tomllib.load(stream)
-    variable = values.get("user_token_env", "FRIDICA_SLACK_USER_TOKEN")
+    variable = values.get("user_token_env", "SLACK_USER_TOKEN")
     if not isinstance(variable, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", variable):
         raise ValueError("user_token_env must name an environment variable")
     token = os.environ.get(variable, "")
