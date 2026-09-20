@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +11,7 @@ from fridica.store import Store
 @pytest.mark.parametrize("changes", [
     {"channels": ()}, {"channels": "CROOM"}, {"owner_id": "wrong"},
     {"timeout": float("nan")}, {"cooldown": -1}, {"max_turns": True},
-    {"context_limit": 1.5}, {"backend": "other"}, {"general_messages": "yes"},
+    {"context_limit": 1.5}, {"backend": "other"}, {"general_messages": "yes"}, {"resume_sessions": 1}, {"contract": Path("relative.md")}, {"session_timeout": -1}, {"session_timeout": "2w"},
     {"app_token_env": "invalid-name"},
 ])
 def test_invalid_config(config, changes):
@@ -87,5 +88,22 @@ def test_restart_preserves_work_and_does_not_repeat_uncertain_actions(config, me
         assert [entry["event_id"] for entry in database.pending()] == ["ready"]
         assert database.task(running)["turns"] == 3
         assert database.cooling_down(ready, 60)
+    finally:
+        database.close()
+
+
+def test_tasks_table_gains_session_column(config):
+    import sqlite3
+    connection = sqlite3.connect(config.state_path)
+    connection.executescript(
+        "CREATE TABLE tasks (workspace TEXT NOT NULL, channel TEXT NOT NULL, thread TEXT NOT NULL, task_id TEXT NOT NULL,"
+        " status TEXT NOT NULL, turns INTEGER NOT NULL DEFAULT 0, updated REAL NOT NULL, PRIMARY KEY(workspace,channel,thread));"
+        "INSERT INTO tasks VALUES('TTEAM','CROOM','100.000001','task','waiting',1,0);"
+    )
+    connection.close()
+    database = Store(config.state_path)
+    try:
+        row = database.connection.execute("SELECT * FROM tasks").fetchone()
+        assert row["session"] is None and row["task_id"] == "task"
     finally:
         database.close()

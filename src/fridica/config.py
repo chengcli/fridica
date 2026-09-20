@@ -33,6 +33,9 @@ class Config:
     cooldown: float = 60
     max_turns: int = 6
     general_messages: bool = True
+    resume_sessions: bool = True
+    session_timeout: float = 14 * 86400
+    contract: Path | None = None
 
     def __post_init__(self) -> None:
         for label, value, pattern in (
@@ -49,17 +52,21 @@ class Config:
             raise ValueError("backend must be claude or codex")
         if not self.state_path.is_absolute():
             raise ValueError("state_path must be an absolute path")
-        for name in ("timeout", "cooldown", "context_limit", "max_turns"):
+        for name in ("timeout", "cooldown", "context_limit", "max_turns", "session_timeout"):
             value = getattr(self, name)
-            minimum = 0 if name == "cooldown" else 1
+            minimum = 0 if name in {"cooldown", "session_timeout"} else 1
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < minimum:
                 raise ValueError(f"{name} must be a finite number >= {minimum}")
             if name in {"context_limit", "max_turns"} and not isinstance(value, int):
                 raise ValueError(f"{name} must be an integer")
-        if not isinstance(self.general_messages, bool):
-            raise ValueError("general_messages must be boolean")
+        for name in ("general_messages", "resume_sessions"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be boolean")
         if not isinstance(self.profile, str) or (self.model is not None and not isinstance(self.model, str)):
             raise ValueError("profile and model must be strings")
+        if self.contract is not None and (not isinstance(self.contract, Path) or not self.contract.is_absolute()
+                                          or not self.contract.is_file()):
+            raise ValueError("contract must be an existing Markdown file")
         for name in ("app_token_env", "user_token_env"):
             value = getattr(self, name)
             if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
@@ -147,6 +154,13 @@ def load_config(path: Path) -> Config:
     if not isinstance(roots, list) or any(not isinstance(root, str) for root in roots):
         raise ValueError("additional_workspaces must be a list of paths")
     values["additional_workspaces"] = tuple(Path(root).expanduser() for root in roots)
+    if "contract" in values:
+        if not isinstance(values["contract"], str) or not values["contract"]:
+            raise ValueError("contract must be a nonempty path")
+        contract = Path(values["contract"]).expanduser()
+        values["contract"] = contract if contract.is_absolute() else (path.expanduser().parent / contract).resolve()
+    elif (path.expanduser().parent / "contract.md").is_file():
+        values["contract"] = path.expanduser().parent / "contract.md"
     return Config(**values)
 
 
@@ -166,4 +180,10 @@ context_limit = 50
 timeout = 600
 cooldown = 60
 max_turns = 6
+resume_sessions = true
+# Seconds of thread inactivity after which a stored session is not resumed (2 weeks).
+session_timeout = 1209600
+# Agent rules live in contract.md beside this file (created by fridica init).
+# Uncomment to use a different file; relative paths resolve from this directory.
+# contract = "contract.md"
 '''

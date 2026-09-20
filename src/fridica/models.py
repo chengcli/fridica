@@ -33,12 +33,14 @@ class ConversationContext:
     profile: str
     task_id: str
     turn: int
+    session: str | None = None
 
 
 @dataclass(frozen=True)
 class AgentResult:
     text: str
     status: str = "complete"
+    session: str | None = None
 
 
 class AgentBackend(Protocol):

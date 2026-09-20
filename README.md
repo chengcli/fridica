@@ -17,17 +17,91 @@ or automation of the Claude/Codex desktop UI.
 
 Use macOS or Linux with Python 3.11 or newer. Install and authenticate either
 [Claude Code](https://code.claude.com/docs/en/setup) or
-[Codex CLI](https://developers.openai.com/codex/cli) separately.
+[Codex CLI](https://developers.openai.com/codex/cli) before you install fridica.
+
+
+### Sandbox dependencies on Linux
+
+Both backends run agent commands inside a [bubblewrap](https://github.com/containers/bubblewrap)
+sandbox on Linux; macOS uses the built-in `sandbox-exec` and needs nothing extra.
+
+| Backend | `bubblewrap` | `socat` | Notes |
+| --- | --- | --- | --- |
+| Claude | required (system package) | required | Fridica starts Claude with `sandbox.failIfUnavailable`, so Claude refuses to run at all when either is missing |
+| Codex | bundled, but a system `bwrap` on `PATH` is preferred | not needed | Installing the system package lets one AppArmor profile cover both backends |
+
+**1. Install the packages.**
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
+# Debian / Ubuntu
+sudo apt install bubblewrap socat
+
+# Fedora
+sudo dnf install bubblewrap socat
+```
+
+**2. Allow bubblewrap to create user namespaces (Ubuntu 24.04 and later).**
+Ubuntu's default AppArmor policy blocks unprivileged user namespaces, so every
+sandboxed command fails with `bwrap: loopback: Failed RTM_NEWADDR: Operation not
+permitted` even though the packages are installed. Check the setting:
+
+```bash
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+If it prints `1`, install an AppArmor profile that grants `bwrap` the
+capability (the profile applies to `bwrap` only, not to the commands it runs
+inside the sandbox), then reload AppArmor:
+
+```bash
+sudo tee /etc/apparmor.d/bwrap > /dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+EOF
+sudo systemctl reload apparmor
+```
+
+If it prints `0` or `No such file or directory`, skip this step. This follows
+[Claude Code's sandboxing guide](https://code.claude.com/docs/en/sandboxing);
+Codex uses the same system `bwrap`, so the profile fixes both backends.
+
+**3. Verify.**
+
+```bash
+fridica doctor   # expect: PASS AI sandbox
+```
+
+`doctor` checks that the packages are present and then runs `/bin/true` inside a
+bubblewrap user namespace, so it fails with the exact `bwrap:` error when either
+step above is incomplete. `start` runs the same check and refuses to launch on
+failure. Without it, a running daemon would return the generic "I couldn't
+complete this request" reply within seconds for any request that needs a
+command. The local log records the agent's exit status and a bounded tail of its
+stderr; that diagnostic text is never sent to Slack.
+
+`init` creates `~/.config/fridica/config.toml`, without overwriting existing
+configuration, and copies two editable files beside it: `manifest.yaml` for the
+Slack app and `contract.md`, the rulebook every agent run reads (see
+[Agent contract](#agent-contract)). For a different location, use
+`fridica init --config /path/config.toml`.
+
+### Install via pypi
+```bash
+pip install fridica
 fridica init
 ```
 
-`init` creates `~/.config/fridica/config.toml`, without overwriting existing
-configuration. For a different location, use `fridica init --config /path/config.toml`.
+### Install locally to an existing python virtual environment
+```bash
+git clone https://github.com/chengcli/fridica
+pip install -e .
+fridica init
+```
 
 ## Configure Slack
 
@@ -173,7 +247,39 @@ context_limit = 50
 timeout = 600
 cooldown = 60
 max_turns = 6
+resume_sessions = true
+session_timeout = 1209600
 ```
+
+### Agent contract
+
+`~/.config/fridica/contract.md` holds the rules that every agent run must read
+and obey. `init` copies the packaged default there; edit it freely. The daemon
+reloads the file for each run, so changes apply to the next reply without a
+restart. Two headings are required:
+
+| Section | Sent to | Purpose |
+| --- | --- | --- |
+| `## Participation` | the tool-less classification call | when to join a conversation that did not @mention you |
+| `## Replies` | the call that does the work | voice, scope, what may be changed, how to end a thread |
+| any other `##` heading | the call that does the work, after `## Replies` | project or team rules, such as the default's `## Repo rules` |
+
+Prose before the first heading is for people and is never sent to the model.
+Fridica appends only the conversation data (owner, profile, task, bounded thread
+history, and the new message) plus a one-line note when a thread's session is
+being resumed. Rules that the code enforces regardless of the contract: replies
+are limited to 3500 characters, the status must be `complete`, `waiting`, or
+`blocked`, the sandbox and workspace roots come from `config.toml`, and Slack
+tokens never reach the agent. A contract that is missing either heading, has an
+empty section, or exceeds 64 KiB fails `fridica doctor`, and until it is fixed
+replies are refused with the generic "I couldn't complete this request" notice
+while the reason is logged locally.
+
+To keep the contract elsewhere, set `contract = "path/to/rules.md"` in
+`config.toml`; relative paths resolve from the config file's directory. Without
+that setting Fridica uses `contract.md` beside `config.toml` when it exists,
+otherwise the packaged default. The default's text is the previous built-in rule
+set, so upgrading without editing changes nothing.
 
 ### 4. Verify reception, then replies
 
@@ -188,6 +294,7 @@ max_turns = 6
 | --- | --- |
 | `Listening as ...`, but no observed event | Enable Events, **user** event subscriptions and matching history scopes, saved changes/reinstallation, channel ID and membership, matching tokens, and no competing Socket Mode daemon |
 | Events observed, no reply | Stop observe-only mode; use another person's explicit @mention; check AI setup and local failure logs |
+| Reply says "I couldn't complete this request" within seconds | The agent process exited before doing work. Read the `WARNING Agent response unavailable` log line, which includes the agent's stderr tail, and run `fridica doctor`. See [Sandbox dependencies](#sandbox-dependencies-on-linux) |
 | `missing_scope` when sending | Confirm `chat:write` is a **User Token Scope**, reinstall, refresh the token if changed, and restart |
 | Metadata-related rejection | Inspect the exact error; adding link or unrelated scopes does not fix metadata restrictions |
 | Old event reported as failed/interrupted/ambiguous | Inspect locally; restarting does not replay agent actions or uncertain replies |
@@ -205,9 +312,13 @@ fridica start
 ```
 
 `doctor` prints a PASS or FAIL for each local check: operating system,
-configuration, each Slack token's format, AI executable availability, required
-CLI flags, and AI sign-in. It runs `claude auth status` or `codex login status`
-for the configured backend without invoking a model or printing account details.
+configuration, the agent contract, each Slack token's format, AI executable
+availability, required CLI flags, sandbox dependencies, and AI sign-in. It runs `claude auth status` or
+`codex login status` for the configured backend without invoking a model or
+printing account details. The sandbox check confirms that the
+[sandbox dependencies](#sandbox-dependencies-on-linux) are on `PATH` and that
+bubblewrap can create a user namespace; `start` performs the same check and
+refuses to run when it fails.
 Independent checks continue after failures; checks blocked by invalid
 configuration or a missing executable show SKIP. The command exits nonzero if
 any check fails or is skipped. Sign-in status does not guarantee that a later
@@ -218,7 +329,8 @@ All subcommands accept `--config PATH`; `python -m fridica` is also supported.
 
 Fridica responds to mentions of the owner and follow-ups while a task is waiting
 for clarification. Other messages pass through a separate classification call
-with tools disabled. Classification failure means silence. Set
+with tools disabled, governed by the `## Participation` section of the
+[agent contract](#agent-contract). Classification failure means silence. Set
 `general_messages = false` to disable unsolicited participation. The owner’s own
 messages supply context but never directly trigger their agent.
 
@@ -230,8 +342,9 @@ override observe-only mode, channel restrictions, duplicate suppression, or
 automated-message loop protection. Slack rejection or uncertain delivery can
 still prevent a reply; inspect the local logs rather than automatically resending.
 
-Only the structured final answer is delivered to Slack. Agent instructions exclude
-internal commentary, unsolicited summaries, and tool transcripts from that answer;
+Only the structured final answer is delivered to Slack. The default contract's
+`## Replies` rules exclude internal commentary, unsolicited summaries, and tool
+transcripts from that answer;
 CLI progress and stderr are never used as reply text. Sanitized failure categories
 stay in local logs, while Slack receives a short actionable notice. This output
 boundary does not guarantee that a model will never put unwanted prose in its final
@@ -248,12 +361,34 @@ Generated messages initiate responses only when explicitly addressed or followin
 an active task. A per-channel cooldown limits unsolicited replies. Other agents'
 metadata is a loop-control hint, not an authorization credential.
 
+### Continuity between turns
+
+With `resume_sessions = true` (the default), each Slack thread maps to one
+backend session. The first reply in a thread starts a session (`claude
+--session-id` or a persisted `codex exec` thread) and Fridica stores its
+identifier with the thread's task. Later turns resume it with `claude --resume`
+or `codex exec resume`, so the agent keeps its own reasoning, tool results, and
+file knowledge instead of re-reading the workspace from scratch. The bounded
+Slack history is still sent as reference, with the new message marked as the
+only new input. Classification calls remain stateless.
+
+A stored session is resumed only while the thread stays active. After
+`session_timeout` seconds without a reply in that thread (default `1209600`,
+two weeks), the next turn starts a fresh session and stores its identifier; set
+`0` to never resume. If the backend reports that a stored session no longer
+exists (for example after the provider's session files were removed), Fridica
+logs it and starts a fresh session for that thread. Other failures are not retried. Resumed turns use the
+same sandbox, permission, and workspace settings as new ones; for Codex, the
+`resume` subcommand receives the equivalent `-c` settings because it lacks the
+`--sandbox` and `--add-dir` flags. Set `resume_sessions = false` to return to
+one ephemeral session per reply.
+
 ## Workspace authority
 
 The selected agent can read, edit, and run commands using its provider-supported
 sandbox in the configured workspace roots. Task-command network access is
 disabled. Provider API access is still needed to run the model. Claude requires
-its sandbox dependencies (including bubblewrap and socat on Linux). Fridica does
+its [sandbox dependencies](#sandbox-dependencies-on-linux). Fridica does
 not enable bypass-permission flags or automatically approve broader access.
 Claude enables native Edit and Write tools in `acceptEdits` mode for the workspace
 and `additional_workspaces`, alongside sandboxed Bash for file operations such as
@@ -270,8 +405,9 @@ Managed provider settings and project instructions remain part of the execution
 environment. Slack tokens are removed from agent subprocess environments, but
 do not store credentials in project files accessible to the agent.
 
-Fridica supplies its own bounded conversation history for each invocation;
-existing desktop conversations are not imported. The optional `model` setting
+Fridica supplies its own bounded conversation history for each invocation and,
+with `resume_sessions`, resumes only sessions it created; existing desktop
+conversations are not imported. The optional `model` setting
 is passed to the selected provider. No model name or paid API key is required by
 Fridica itself; each CLI uses its own authentication and billing.
 
@@ -300,6 +436,13 @@ thread. Restarting cannot guarantee exactly-once execution across an external
 agent, filesystem, and Slack. Raw subprocess output and Slack tokens are not
 logged. Stop the daemon and use a separate state database when changing owner.
 
+When `resume_sessions` is enabled, the providers also keep their own transcripts
+on disk: Claude under `~/.claude/projects/` and Codex under `~/.codex/sessions/`.
+They contain the Slack text Fridica sent and the agent's tool activity, so treat
+them like the state database. Removing them is safe; the next turn in an affected
+thread starts a new session. Setting `resume_sessions = false` stops new
+transcripts from being written.
+
 ## Python interfaces
 
 `fridica.models` defines `Message`, `ConversationContext`, `Decision`,
@@ -308,7 +451,9 @@ configuration, storage, a backend, and a transport. Alternative backends impleme
 `async classify(message, context)` and `async respond(message, context)`;
 transports implement `async send(message, result, task_id, turn)` and return the
 confirmed message timestamp. Backend responses contain `text` and a status of
-`complete`, `waiting`, or `blocked`.
+`complete`, `waiting`, or `blocked`. `fridica.contract.load_contract(path)`
+parses an agent contract into its `participation` and `replies` sections;
+custom backends should send the matching section as their instruction.
 
 ## Validate
 

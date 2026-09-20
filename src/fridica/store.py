@@ -65,6 +65,9 @@ class Store:
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(events)")}
         if "reply_only" not in columns:
             self.connection.execute("ALTER TABLE events ADD COLUMN reply_only INTEGER NOT NULL DEFAULT 0")
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(tasks)")}
+        if "session" not in columns:
+            self.connection.execute("ALTER TABLE tasks ADD COLUMN session TEXT")
         with self.connection:
             self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
             self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
@@ -138,9 +141,18 @@ class Store:
                 (task_id, turn, message.event_id),
             )
             self.connection.execute(
-                "INSERT INTO tasks VALUES(?,?,?,?,?,?,?) ON CONFLICT(workspace,channel,thread) "
+                "INSERT INTO tasks(workspace,channel,thread,task_id,status,turns,updated) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(workspace,channel,thread) "
                 "DO UPDATE SET task_id=excluded.task_id,status=excluded.status,turns=excluded.turns,updated=excluded.updated",
                 (message.workspace_id, message.channel_id, message.thread_id, task_id, "running", turn, time.time()),
+            )
+
+    def save_session(self, message: Message, session: str | None) -> None:
+        """Record the backend session that continues this thread's conversation."""
+        with self.connection:
+            self.connection.execute(
+                "UPDATE tasks SET session=? WHERE workspace=? AND channel=? AND thread=?",
+                (session, message.workspace_id, message.channel_id, message.thread_id),
             )
 
     def save_result(self, message: Message, result: AgentResult) -> None:
