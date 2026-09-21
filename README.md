@@ -357,7 +357,30 @@ direct address or use plain names. Mentions are reserved for `waiting` replies
 that need someone's response. Built-in blocker notices do not mention anyone.
 
 Replies stay in their original thread. Each thread has a persistent six-turn
-default budget; use a new thread for a new task after that budget is exhausted.
+default budget (`max_turns`). When the last allowed reply has been delivered,
+Fridica wraps the thread up: it posts a short stop notice in the thread, asks the
+agent for a summary of the whole discussion (a tool-less call governed by the
+contract's `## Thread summaries` section), posts that summary as a new top-level
+message in the channel, and prepares the new thread with a fresh turn budget and
+the old thread's session so the work continues with full context. The summary
+post @mentions nobody, so the new thread only continues when a person replies
+to it; two agents cannot chain threads indefinitely. The exhausted thread stays
+paused (visible in the dashboard with the reason and the new thread's
+timestamp) and later mentions there are recorded but not answered. If the
+summary cannot be produced or posted, the stop notice says so, the failure is
+logged, and nothing is retried automatically.
+
+Every reply also carries the agent's judgement of whether the discussion is
+finished: the original request resolved, every action item raised in the thread
+done or explicitly handed off, and nobody waiting on anyone. When a delivered
+reply says `finished` (only possible with status `complete`), Fridica asks the
+agent for a debrief (a tool-less call governed by the contract's `## Debriefs`
+section) and posts it as a new top-level channel message headed "Debrief: this
+discussion is finished." It names people plainly and @mentions nobody. A thread
+is debriefed once per finish; if the conversation continues afterwards, a later
+finished reply produces a fresh debrief. A finished thread that is also at its
+turn limit gets the debrief instead of the continuation summary. A failed
+debrief is logged and not retried.
 Generated messages initiate responses only when explicitly addressed or following
 an active task. A per-channel cooldown limits unsolicited replies. Other agents'
 metadata is a loop-control hint, not an authorization credential.
@@ -602,7 +625,13 @@ send order, not incoming event order. Configure `max_wait_replies` and
 `max_turns` in `config.toml`.
 
 A paused request appears in Inbox with its reason. It remains paused after a
-restart and makes no model calls or automatic replies. **Resume** resets its
+restart and makes no model calls or automatic replies. A thread that reached
+`max_turns` and was wrapped up automatically is not an Inbox item: it shows as
+"Continued in a new thread" under Finished, can be archived directly, and its
+detail names the reason; the continuation thread appears as its own request. A
+discussion the agent declared finished shows as "Finished · debrief posted".
+Both automatic actions appear in Activity as local request controls. Resuming a
+wrapped-up thread gives it a fresh budget and allows another wrap-up later. **Resume** resets its
 budget for future messages; earlier or delayed pre-resume messages are not
 replayed. Pending approved file operations can continue after resume.
 **Close request** stops further automatic processing of that thread. These

@@ -99,7 +99,8 @@ class Store:
         if "session" not in columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN session TEXT")
         for name, definition in {"control_state": "TEXT NOT NULL DEFAULT 'active'", "pause_reason": "TEXT",
-                                 "reset_at": "REAL NOT NULL DEFAULT 0", "control_revision": "INTEGER NOT NULL DEFAULT 0"}.items():
+                                 "reset_at": "REAL NOT NULL DEFAULT 0", "control_revision": "INTEGER NOT NULL DEFAULT 0",
+                                 "continuation": "TEXT", "debriefed_turn": "INTEGER NOT NULL DEFAULT 0"}.items():
             if name not in columns:
                 self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
         self.connection.execute("CREATE TABLE IF NOT EXISTS thread_decisions (workspace TEXT, channel TEXT, thread TEXT, action TEXT, decided_at REAL)")
@@ -182,6 +183,71 @@ class Store:
                 (message.workspace_id, message.channel_id, float(message.timestamp), message.event_id, limit),
             ).fetchall()
         return [Message(**json.loads(row["payload"])) for row in reversed(rows)]
+
+    def thread_messages(self, message: Message, limit: int) -> list[Message]:
+        """Every stored message of the thread, oldest first, including the latest delivered reply."""
+        rows = self.connection.execute(
+            "SELECT payload FROM events WHERE workspace=? AND channel=? AND thread=? "
+            "AND json_extract(payload,'$.text')!='' ORDER BY timestamp DESC LIMIT ?",
+            (message.workspace_id, message.channel_id, message.thread_id, limit),
+        ).fetchall()
+        return [Message(**json.loads(row["payload"])) for row in reversed(rows)]
+
+    def has_open_file_requests(self, message: Message) -> bool:
+        """True while a scoped file operation in this thread still awaits the owner's decision or execution."""
+        return self.connection.execute(
+            "SELECT 1 FROM file_requests r JOIN events e ON r.event_id=e.event_id "
+            "WHERE e.workspace=? AND e.channel=? AND e.thread=? AND r.status IN ('pending','approved','applying') LIMIT 1",
+            (message.workspace_id, message.channel_id, message.thread_id),
+        ).fetchone() is not None
+
+    def claim_debrief(self, message: Message) -> bool:
+        """Claim the debrief for the thread's current turn; False when this turn was already debriefed."""
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE tasks SET debriefed_turn=turns WHERE workspace=? AND channel=? AND thread=? AND debriefed_turn<turns",
+                (message.workspace_id, message.channel_id, message.thread_id),
+            )
+        return cursor.rowcount == 1
+
+    def record_debrief(self, message: Message) -> None:
+        """Add the posted debrief to the activity feed."""
+        with self.connection:
+            self.connection.execute("INSERT INTO thread_decisions VALUES(?,?,?,?,?)",
+                                    (message.workspace_id, message.channel_id, message.thread_id, "debriefed", time.time()))
+
+    def begin_continuation(self, message: Message) -> bool:
+        """Claim the one-time wrap-up of a thread; False when it already happened or is under way."""
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE tasks SET continuation='pending' WHERE workspace=? AND channel=? AND thread=? AND continuation IS NULL",
+                (message.workspace_id, message.channel_id, message.thread_id),
+            )
+        return cursor.rowcount == 1
+
+    def finish_continuation(self, message: Message, continuation: str, task_id: str | None, session: str | None) -> None:
+        """Record where a wrapped-up thread continues and seed that new thread with a fresh budget.
+
+        ``continuation`` is the new thread's root timestamp, or ``failed`` when no summary
+        could be posted. The exhausted thread stays paused so the owner can still resume it.
+        """
+        with self.connection:
+            reason = ("Thread reached its turn limit; the discussion continues in a new thread."
+                      if continuation != "failed" else "Thread reached its turn limit; the summary post failed.")
+            self.connection.execute(
+                "UPDATE tasks SET continuation=?, pause_reason=?, "
+                "control_state=CASE WHEN control_state='active' THEN 'paused' ELSE control_state END, "
+                "control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=?",
+                (continuation, reason, message.workspace_id, message.channel_id, message.thread_id),
+            )
+            if task_id is not None and continuation != "failed":
+                self.connection.execute(
+                    "INSERT INTO tasks(workspace,channel,thread,task_id,status,turns,updated,session) VALUES(?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(workspace,channel,thread) DO NOTHING",
+                    (message.workspace_id, message.channel_id, continuation, task_id, "complete", 0, time.time(), session),
+                )
+                self.connection.execute("INSERT INTO thread_decisions VALUES(?,?,?,?,?)",
+                                        (message.workspace_id, message.channel_id, message.thread_id, "continued", time.time()))
 
     def task(self, message: Message) -> sqlite3.Row | None:
         return self.connection.execute(

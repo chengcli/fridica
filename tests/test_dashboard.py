@@ -219,3 +219,45 @@ def test_sender_filter_is_exact_scoped_and_applied_before_pagination(config, sto
             assert data['total'] == 1
             assert data['items'][0]['sender'] == 'UBOB'
     asyncio.run(run())
+
+
+def test_continued_and_finished_threads_are_finished_not_attention(config, store, message):
+    from fridica.dashboard import task_page
+    store.bind(config.owner_id, config.workspace_id)
+    # Thread A: wrapped up at the turn limit and continued in thread C.
+    a = message()
+    store.add(a)
+    store.begin(a, 'task-a', 6)
+    store.save_result(a, AgentResult('Which branch?', 'waiting'))
+    store.delivered(a, '100.000002')
+    store.pause_loop(a, 6, 3)
+    store.begin_continuation(a)
+    store.finish_continuation(a, '900.000001', 'task-c', 'sess')
+    # Thread B: the agent declared the discussion finished and a debrief was posted.
+    b = message('event-b', timestamp='200.000001', thread_id='200.000001')
+    store.add(b)
+    store.begin(b, 'task-b', 2)
+    store.save_result(b, AgentResult('All done.', finished=True))
+    store.delivered(b, '200.000002')
+    assert store.claim_debrief(b)
+    store.record_debrief(b)
+
+    snap = snapshot(config)
+    statuses = {t['thread']: t['status'] for t in snap['tasks']}
+    assert statuses[a.thread_id] == 'continued' and statuses[b.thread_id] == 'finished'
+    assert statuses['900.000001'] == 'complete'
+    assert snap['config']['allowed_domains'] == [] and snap['config']['resume_sessions'] is True
+    assert snap['config']['session_timeout'] == 14 * 86400
+
+    page = task_page(config)
+    by_thread = {item['thread']: item for item in page['items']}
+    assert by_thread[a.thread_id]['status'] == 'continued' and by_thread[a.thread_id]['bucket'] == 'complete'
+    assert by_thread[b.thread_id]['status'] == 'finished' and by_thread[b.thread_id]['bucket'] == 'complete'
+    assert 'continues in a new thread' in by_thread[a.thread_id]['pause_reason']
+    assert task_page(config, view='attention')['counts']['attention'] == 0
+    assert {i['thread'] for i in task_page(config, view='complete')['items']} >= {a.thread_id, b.thread_id}
+
+    from fridica.activity import activity_page
+    feed = activity_page(config)
+    texts = [item['text'] for item in feed['items'] if item['kind'] == 'control']
+    assert any('summary posted as a new thread' in t for t in texts) and any('debrief posted' in t for t in texts)

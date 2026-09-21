@@ -29,6 +29,15 @@ class DeliveryRejected(Exception):
         super().__init__(self.code)
 
 
+STOP_NOTICE = ("This thread has reached its turn limit, so I'm stopping here. I've posted a summary of the discussion "
+               "in the channel; please continue in that new thread.")
+STOP_NOTICE_NO_SUMMARY = ("This thread has reached its turn limit, so I'm stopping here. I couldn't post a summary; "
+                          "please start a new thread to continue.")
+SUMMARY_HEADER = "Continuing from a thread that reached its turn limit. Summary of the discussion so far:\n\n"
+SUMMARY_FOOTER = "\n\nReply in this thread to continue."
+DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
+
+
 class Replica:
     def __init__(self, config: Config, store: Store, agent: AgentBackend | None, transport: Transport, observe_only: bool = False, config_path=None):
         self.base_config = config
@@ -127,8 +136,11 @@ class Replica:
                 if turn > self.config.max_turns:
                     with self.store.connection:
                         self.store.connection.execute("UPDATE tasks SET control_state='paused',pause_reason='Thread turn limit reached.',control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=? AND control_state='active'", (message.workspace_id,message.channel_id,message.thread_id))
-                if self.store.task(message)['control_state'] == 'paused':
+                paused = self.store.task(message)
+                if paused['control_state'] == 'paused':
                     self.store.mark(message.event_id, 'observed', 'paused')
+                    if paused['turns'] >= self.config.max_turns and paused['continuation'] is None:
+                        await self._wrap_up(message)
                     return
             session = task["session"] if task and self.config.resume_sessions else None
             if session and time.time() - task["updated"] > self.config.session_timeout:
@@ -180,12 +192,12 @@ class Replica:
                     raise ValueError("invalid agent result")
                 if self.config.resume_sessions and result.session != context.session:
                     self.store.save_session(message, result.session)
-                result = AgentResult(result.text, result.status)
+                result = AgentResult(result.text, result.status, finished=bool(result.finished) and result.status == "complete")
                 if not isinstance(result.text, str) or not result.text.strip() or len(result.text) > 3500:
                     raise ValueError("agent response must contain 1 to 3500 characters")
                 if result.status == "waiting" and f"<@{message.sender_id}>" not in result.text:
-                    result = AgentResult(f"<@{message.sender_id}> {result.text}", result.status)
-                result = AgentResult(format_reply(result.text, message, context), result.status)
+                    result = AgentResult(f"<@{message.sender_id}> {result.text}", result.status, finished=result.finished)
+                result = AgentResult(format_reply(result.text, message, context), result.status, finished=result.finished)
                 if not result.text.strip() or len(result.text) > 3500:
                     raise ValueError("formatted response must contain 1 to 3500 characters")
             except asyncio.CancelledError:
@@ -235,6 +247,115 @@ class Replica:
         ), state="sent")
         if result.status == 'waiting':
             self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
+        task = self.store.task(message)
+        if task and not row["reply_only"] and result.finished and result.status == "complete":
+            await self._debrief(message)
+            return
+        # A thread whose last reply proposed a file operation still awaiting the owner's decision
+        # is left alone so the approval flow can finish first.
+        if (task and not row["reply_only"] and result.status != "blocked"
+                and task["turns"] >= self.config.max_turns and task["continuation"] is None
+                and not self.store.has_open_file_requests(message)):
+            self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
+            await self._wrap_up(message)
+
+    async def _debrief(self, message: Message) -> None:
+        """Post the closing debrief of a discussion the agent declared finished.
+
+        The debrief is written by a stateless, tool-less agent call governed by the
+        contract's ``## Debriefs`` section and posted as a new top-level channel message
+        with no @mentions. It runs once per finish: a thread that continues afterwards
+        can be debriefed again only after further replies. A finished thread at its
+        turn limit gets a debrief instead of a continuation summary.
+        """
+        task = self.store.task(message)
+        if task is None or self.agent is None or not self.store.claim_debrief(message):
+            return
+        history = self.store.thread_messages(message, self.config.context_limit)
+        context = ConversationContext(history, self.config.owner_id, self.config.profile, task["task_id"], task["turns"],
+                                      session=task["session"])
+        try:
+            debrief = await self.agent.debrief(context)
+            if not isinstance(debrief, str) or not debrief.strip() or len(debrief) > 3000:
+                raise ValueError("invalid debrief")
+            text = DEBRIEF_HEADER + format_reply(debrief, message, context)
+            root_ts = await self.transport.announce(message, text, task["task_id"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error("Debrief for thread %s could not be posted (%s)", message.thread_id, type(error).__name__)
+            return
+        self.store.add(Message(
+            event_id="outgoing:" + message.workspace_id + ":" + message.channel_id + ":" + root_ts,
+            workspace_id=message.workspace_id, channel_id=message.channel_id, sender_id=self.config.owner_id,
+            text=text, timestamp=root_ts, thread_id=root_ts, generated=True,
+            task_id=task["task_id"], turn=task["turns"], task_status="complete",
+        ), state="sent")
+        if task["turns"] >= self.config.max_turns and task["continuation"] is None:
+            with self.store.connection:
+                self.store.connection.execute(
+                    "UPDATE tasks SET continuation='debriefed' WHERE workspace=? AND channel=? AND thread=?",
+                    (message.workspace_id, message.channel_id, message.thread_id))
+        self.store.record_debrief(message)
+        logger.info("Thread %s finished; debrief posted as %s", message.thread_id, root_ts)
+
+    async def _wrap_up(self, message: Message) -> None:
+        """Close out a thread that reached ``max_turns``.
+
+        Posts a stop notice in the thread, asks the agent for a summary of the whole
+        thread, posts that summary as a new top-level channel message, and seeds the
+        new thread with a fresh turn budget and the old thread's session so the
+        discussion can continue there. Nobody is @mentioned in the new thread, so it
+        only continues when a person replies to it; two agents cannot chain threads
+        forever. Runs at most once per thread; failures are recorded, not retried.
+        """
+        task = self.store.task(message)
+        if task is None or self.agent is None or not self.store.begin_continuation(message):
+            return
+        history = self.store.thread_messages(message, self.config.context_limit)
+        context = ConversationContext(history, self.config.owner_id, self.config.profile, task["task_id"], task["turns"],
+                                      session=task["session"])
+        summary = None
+        try:
+            summary = await self.agent.summarize(context)
+            if not isinstance(summary, str) or not summary.strip() or len(summary) > 3000:
+                raise ValueError("invalid summary")
+        except asyncio.CancelledError:
+            self.store.finish_continuation(message, "failed", None, None)
+            raise
+        except Exception as error:
+            summary = None
+            logger.error("Thread summary unavailable for %s (%s)", message.thread_id, type(error).__name__)
+        notice = STOP_NOTICE if summary else STOP_NOTICE_NO_SUMMARY
+        try:
+            stop_ts = await self.transport.send(message, AgentResult(notice, "complete"), task["task_id"], task["turns"])
+            self.store.add(Message(
+                event_id="outgoing:" + message.workspace_id + ":" + message.channel_id + ":" + stop_ts,
+                workspace_id=message.workspace_id, channel_id=message.channel_id, sender_id=self.config.owner_id,
+                text=notice, timestamp=stop_ts, thread_id=message.thread_id, generated=True,
+                task_id=task["task_id"], turn=task["turns"], task_status="complete",
+            ), state="sent")
+            if summary is None:
+                self.store.finish_continuation(message, "failed", None, None)
+                return
+            text = SUMMARY_HEADER + format_reply(summary, message, context) + SUMMARY_FOOTER
+            new_task_id = uuid.uuid4().hex
+            root_ts = await self.transport.announce(message, text, new_task_id)
+        except asyncio.CancelledError:
+            self.store.finish_continuation(message, "failed", None, None)
+            raise
+        except Exception as error:
+            logger.error("Could not post the wrap-up for thread %s (%s); inspect locally", message.thread_id, type(error).__name__)
+            self.store.finish_continuation(message, "failed", None, None)
+            return
+        self.store.add(Message(
+            event_id="outgoing:" + message.workspace_id + ":" + message.channel_id + ":" + root_ts,
+            workspace_id=message.workspace_id, channel_id=message.channel_id, sender_id=self.config.owner_id,
+            text=text, timestamp=root_ts, thread_id=root_ts, generated=True,
+            task_id=new_task_id, turn=0, task_status="complete",
+        ), state="sent")
+        self.store.finish_continuation(message, root_ts, new_task_id, task["session"])
+        logger.info("Thread %s reached its turn limit; summary posted as %s", message.thread_id, root_ts)
 
     async def run(self) -> None:
         while True:

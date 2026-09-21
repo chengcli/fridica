@@ -33,13 +33,30 @@ CLASSIFICATION_SCHEMA = {
     "required": ["decision"],
     "additionalProperties": False,
 }
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {"summary": {"type": "string", "description": "A plain-text summary of the thread for people continuing it."}},
+    "required": ["summary"],
+    "additionalProperties": False,
+}
+SUMMARY_LIMIT = 2500
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "text": {"type": "string", "description": "Only the final user-facing Slack answer, never internal deliberation, tool transcripts, or operational diagnostics."},
         "status": {"type": "string", "enum": ["complete", "waiting", "blocked"]},
+        "discussion": {
+            "type": "string", "enum": ["ongoing", "finished"],
+            "description": "finished only when the request is fully resolved, every action item raised in the thread is done or explicitly handed off, and nobody is waiting on anyone; otherwise ongoing.",
+        },
     },
-    "required": ["text", "status"],
+    "required": ["text", "status", "discussion"],
+    "additionalProperties": False,
+}
+DEBRIEF_SCHEMA = {
+    "type": "object",
+    "properties": {"debrief": {"type": "string", "description": "A plain-text debrief of a finished discussion for the channel."}},
+    "required": ["debrief"],
     "additionalProperties": False,
 }
 FILE_PLAN_SCHEMA = {
@@ -198,7 +215,8 @@ class CLIBackend:
                 raise BackendError("Agent returned an empty response.")
             if result.get("status") not in {"complete", "waiting", "blocked"}:
                 raise BackendError("Agent returned an invalid status.")
-            return AgentResult(text=result["text"], status=result["status"], session=session)
+            finished = result.get("discussion") == "finished" and result["status"] == "complete"
+            return AgentResult(text=result["text"], status=result["status"], session=session, finished=finished)
         except (BackendError, ValueError, KeyError, TypeError, TimeoutError, OSError) as error:
             logging.getLogger(__name__).warning(
                 "Agent response unavailable (%s): %s", type(error).__name__, error or "no detail",
@@ -207,6 +225,28 @@ class CLIBackend:
                 text="I couldn't complete this request. Please check Fridica locally before retrying; partial changes may exist.",
                 status="blocked",
             )
+
+    async def summarize(self, context: ConversationContext) -> str:
+        """Summarize a thread that hit its turn limit; a stateless, tool-less run governed by ``## Thread summaries``."""
+        return await self._digest(context, self.contract().summaries, SUMMARY_SCHEMA, "summary")
+
+    async def debrief(self, context: ConversationContext) -> str:
+        """Write the closing debrief of a finished discussion; a stateless, tool-less run governed by ``## Debriefs``."""
+        return await self._digest(context, self.contract().debriefs, DEBRIEF_SCHEMA, "debrief")
+
+    async def _digest(self, context: ConversationContext, instruction: str, schema: dict, key: str) -> str:
+        payload = {
+            "owner_id": context.owner_id, "profile": context.profile, "task_id": context.task_id,
+            "turns": context.turn,
+            "thread": [{"sender": item.sender_id, "generated": item.generated, "text": item.text} for item in context.messages],
+        }
+        prompt = instruction + "\n\nThread data:\n" + json.dumps(payload)
+        result, _session = await self._invoke(prompt, True, schema=schema)
+        text = result.get(key)
+        if not isinstance(text, str) or not text.strip():
+            raise BackendError(f"Agent returned an empty {key}.")
+        text = text.strip()
+        return text if len(text) <= SUMMARY_LIMIT else text[:SUMMARY_LIMIT - 1].rstrip() + "…"
 
     async def plan(self, message, context, files, roots) -> dict:
         prompt = _prompt(message, replace(context, session=None), False, self.contract())

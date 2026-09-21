@@ -17,7 +17,10 @@ from pathlib import Path
 import re
 
 CONTRACT_LIMIT = 64 * 1024
-SECTIONS = {"participation": ("participation", "classification"), "replies": ("replies", "response", "responses")}
+SECTIONS = {"participation": ("participation", "classification"), "replies": ("replies", "response", "responses"),
+            "summaries": ("thread summaries", "summaries", "summary"), "debriefs": ("debriefs", "debrief")}
+OPTIONAL = ("summaries", "debriefs")
+REQUIRED = ("participation", "replies")
 HEADING = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
 
@@ -25,6 +28,8 @@ HEADING = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 class Contract:
     participation: str
     replies: str
+    summaries: str = ""
+    debriefs: str = ""
 
 
 def default_contract_text() -> str:
@@ -48,12 +53,13 @@ def parse_contract(text: str) -> Contract:
                 extra.append(f"## {title}\n\n{body}")
         elif key not in found:
             found[key] = body
-    missing = [key for key in SECTIONS if not found.get(key)]
+    missing = [key for key in REQUIRED if not found.get(key)]
     if missing:
         raise ValueError(
             "contract is missing or has an empty section: " + ", ".join(f"## {key.capitalize()}" for key in missing)
         )
-    return Contract(found["participation"], "\n\n".join([found["replies"], *extra]))
+    return Contract(found["participation"], "\n\n".join([found["replies"], *extra]),
+                    found.get("summaries", ""), found.get("debriefs", ""))
 
 
 def load_contract(path: Path | None) -> Contract:
@@ -65,6 +71,12 @@ def load_contract(path: Path | None) -> Contract:
     except OSError as error:
         raise ValueError(f"cannot read contract {path}: {type(error).__name__}") from None
     try:
-        return parse_contract(text)
+        contract = parse_contract(text)
     except ValueError as error:
         raise ValueError(f"{path}: {error}") from None
+    if not contract.summaries or not contract.debriefs:
+        # ``## Thread summaries`` and ``## Debriefs`` are optional in an owner's contract; the packaged rules apply.
+        default = parse_contract(default_contract_text())
+        contract = Contract(contract.participation, contract.replies,
+                            contract.summaries or default.summaries, contract.debriefs or default.debriefs)
+    return contract

@@ -8,9 +8,12 @@ Only the text under `##` headings is sent to the model; this introduction is
 for people. Two headings are required. `## Participation` governs the tool-less
 classification call that decides whether to join a conversation nobody
 @mentioned you in. `## Replies` governs the call that does the work and writes
-the Slack reply. Every other `##` section, such as `## Repo rules` below, is
-appended to the reply instruction under its own heading, so add as many as you
-like. Structural limits still apply regardless of what this file says: replies
+the Slack reply. `## Thread summaries` and `## Debriefs` are optional and govern
+the tool-less calls that summarize a thread once it reaches its turn limit and
+that write the closing debrief once a discussion is finished; when either is
+absent the packaged rules apply. Every other `##` section, such as `## Repo rules`
+below, is appended to the reply instruction under its own heading, so add as
+many as you like. Structural limits still apply regardless of what this file says: replies
 are truncated at 3500 characters, statuses must be `complete`, `waiting`, or
 `blocked`, and the sandbox and writable workspace roots come from `config.toml`.
 
@@ -41,7 +44,26 @@ are truncated at 3500 characters, statuses must be `complete`, `waiting`, or
 - When ending the conversation (status complete or blocked), do not @mention anyone: omit direct address or use a known plain name, never a bare user ID.
 - Only use Slack <@USER_ID> mentions when status is waiting and you need that person's response.
 - Return a concise reply of at most 3500 characters and status: complete, waiting if clarification is needed, or blocked if authority or local intervention is required.
+- Set discussion to finished only when the original request is fully resolved, every action item raised in the thread is done or explicitly handed off to a named person, and nobody is waiting on anyone. Otherwise set it to ongoing. Never combine finished with status waiting or blocked. Fridica posts a debrief to the channel when you mark a discussion finished.
 - Do not claim actions you did not perform.
+
+## Thread summaries
+
+- Summarize the Slack thread for people who will continue the discussion in a new thread. Write in the owner's first-person voice.
+- Cover, in this order: what was asked, what was decided or done, what is still open, and who is expected to do what next. Keep facts and numbers exactly as stated in the thread.
+- Do not @mention anyone and do not use bare user IDs; refer to people by the plain names used in the thread, or by role.
+- Use plain sentences or short dashes, no headings, no code blocks unless the thread's essential content is code, and at most 2500 characters.
+- Do not add commentary about the turn limit, the tooling, or this summary process; Fridica adds that framing.
+- Use no tools.
+
+## Debriefs
+
+- Write the closing debrief of a finished Slack discussion for the whole channel, in the owner's first-person voice.
+- Cover, in this order: the original request, what was done and by whom, concrete outcomes (files, branches, pull requests, measurements, decisions) exactly as stated in the thread, and any follow-up that was handed off, with the person responsible named plainly.
+- Do not @mention anyone and do not use bare user IDs; refer to people by the plain names used in the thread, or by role.
+- Use plain sentences or short dashes, no headings, no code blocks unless the essential content is code, and at most 2500 characters.
+- Do not add commentary about the debrief process or the tooling; Fridica adds the framing.
+- Use no tools.
 
 ## Repo rules
 

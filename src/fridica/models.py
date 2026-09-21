@@ -41,6 +41,8 @@ class AgentResult:
     text: str
     status: str = "complete"
     session: str | None = None
+    finished: bool = False
+    """The agent judged the whole discussion finished: request resolved, every action item done or handed off."""
 
 
 class AgentBackend(Protocol):
@@ -48,6 +50,14 @@ class AgentBackend(Protocol):
 
     async def respond(self, message: Message, context: ConversationContext) -> AgentResult: ...
 
+    async def summarize(self, context: ConversationContext) -> str: ...
+
+    async def debrief(self, context: ConversationContext) -> str: ...
+
 
 class Transport(Protocol):
     async def send(self, message: Message, result: AgentResult, task_id: str, turn: int) -> str: ...
+
+    async def announce(self, message: Message, text: str, task_id: str) -> str:
+        """Post ``text`` as a new top-level message in the message's channel and return its timestamp."""
+        ...

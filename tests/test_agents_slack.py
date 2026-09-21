@@ -8,7 +8,7 @@ import sys
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from fridica.agents import BackendError, ClaudeBackend, CodexBackend, SessionUnavailable, _run
+from fridica.agents import RESPONSE_SCHEMA, BackendError, ClaudeBackend, CodexBackend, SessionUnavailable, _run
 from fridica.models import AgentResult, ConversationContext, Decision
 from fridica.replica import DeliveryRejected, RateLimited
 from fridica.slack import MARKER, SlackTransport, dropped_mention, normalize
@@ -301,6 +301,63 @@ def test_allowed_domains_open_network_for_tasks_only(config, tmp_path, backend_t
             for command in (execute, resumed):
                 assert f"sandbox_workspace_write.network_access={'true' if expected else 'false'}" in command
                 assert 'web_search="disabled"' in command
+
+
+@pytest.mark.parametrize("backend_type,name", [(ClaudeBackend, "claude"), (CodexBackend, "codex")])
+def test_summarize_is_stateless_and_tool_less(config, tmp_path, monkeypatch, message, backend_type, name):
+    executable = tmp_path / name
+    executable.write_text(f'#!{sys.executable}\n' + '''import json, os, pathlib, sys
+arguments = sys.argv[1:]
+prompt = sys.stdin.read()
+assert "Thread data:" in prompt and "Summarize the Slack thread" in prompt
+assert "--resume" not in arguments and arguments[:2] != ["exec", "resume"]
+if "--tools" in arguments:
+    assert arguments[arguments.index("--tools") + 1] == ""
+    assert "--no-session-persistence" in arguments
+else:
+    assert arguments[arguments.index("--sandbox") + 1] == "read-only" and "--ephemeral" in arguments
+schema = json.loads(arguments[arguments.index("--json-schema") + 1]) if "--json-schema" in arguments else json.loads(pathlib.Path(arguments[arguments.index("--output-schema") + 1]).read_text())
+assert list(schema["required"]) == ["summary"]
+result = {"summary": "  Asked for a plan; agreed on two PRs. " + "x" * 3000}
+if "--output-last-message" in arguments:
+    pathlib.Path(arguments[arguments.index("--output-last-message") + 1]).write_text(json.dumps(result))
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message"}}))
+else:
+    print(json.dumps({"structured_output": result}))
+''')
+    executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    context = ConversationContext([message(), message("e2", text="reply", timestamp="100.000002")], config.owner_id, "profile", "task", 6)
+    summary = asyncio.run(backend_type(config).summarize(context))
+    assert summary.startswith("Asked for a plan; agreed on two PRs.") and summary.endswith("…") and len(summary) == 2500
+
+
+def test_transport_announce_posts_top_level(config, message):
+    client = Client()
+    transport = SlackTransport(config, client)
+    timestamp = asyncio.run(transport.announce(message(), "Summary text", "task9"))
+    assert timestamp == "101.000001"
+    assert "thread_ts" not in client.post and client.post["channel"] == "CROOM" and client.post["text"] == "Summary text"
+    assert client.post["metadata"]["event_payload"] == {"owner": "UOWNER", "task_id": "task9", "turn": 0, "status": "complete"}
+    assert client.post["unfurl_links"] is False
+
+
+@pytest.mark.parametrize("discussion,status,finished", [
+    ("finished", "complete", True), ("ongoing", "complete", False), ("finished", "waiting", False), (None, "complete", False),
+])
+def test_respond_reports_finished_discussions(config, tmp_path, monkeypatch, message, discussion, status, finished):
+    executable = tmp_path / "claude"
+    result = {"text": "ok", "status": status}
+    if discussion:
+        result["discussion"] = discussion
+    executable.write_text(f'#!{sys.executable}\n' + 'import json, sys\nsys.stdin.read()\nprint(json.dumps({"structured_output": ' + json.dumps(result) + '}))\n')
+    executable.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    context = ConversationContext([], config.owner_id, "profile", "task", 1)
+    outcome = asyncio.run(ClaudeBackend(replace(config, resume_sessions=False)).respond(message(), context))
+    assert outcome.finished is finished and outcome.status == status
+    assert RESPONSE_SCHEMA["properties"]["discussion"]["enum"] == ["ongoing", "finished"]
+    assert "discussion" in RESPONSE_SCHEMA["required"]
 
 
 def test_session_id_extraction(config):
