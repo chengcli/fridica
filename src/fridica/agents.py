@@ -270,6 +270,20 @@ class CLIBackend:
         return None
 
 
+def _describe_denials(denials: object) -> str:
+    """Summarise denied tool calls for the local log: tool name plus the command's first word or the target path."""
+    parts = []
+    for denial in (denials if isinstance(denials, list) else [])[:5]:
+        if not isinstance(denial, dict):
+            continue
+        name = str(denial.get("tool_name", "?"))
+        params = denial.get("tool_input") if isinstance(denial.get("tool_input"), dict) else {}
+        target = params.get("command") or params.get("file_path") or params.get("path") or params.get("pattern") or ""
+        target = " ".join(str(target).split())[:120]
+        parts.append(f"{name}({target})" if target else name)
+    return ", ".join(parts) or "unknown tool"
+
+
 def _valid_session(value: object) -> str | None:
     return value if isinstance(value, str) and SESSION_ID.fullmatch(value) else None
 
@@ -296,9 +310,10 @@ class CodexBackend(CLIBackend):
                 "--output-schema", str(schema_path), "--output-last-message", str(directory / "result.json"),
                 "--color", "never", "--json",
             ]
+        network = "true" if not classify and self.config.allowed_domains else "false"
         settings = [
             'approval_policy="never"', 'web_search="disabled"',
-            "sandbox_workspace_write.network_access=false", "allow_login_shell=false",
+            f"sandbox_workspace_write.network_access={network}", "allow_login_shell=false",
             "features.apps=false", "features.plugins=false", "features.hooks=false",
             "features.multi_agent=false", "features.browser_use=false", "features.computer_use=false",
             "features.image_generation=false", "features.shell_snapshot=false",
@@ -364,7 +379,8 @@ class ClaudeBackend(CLIBackend):
                 "enabled": True, "failIfUnavailable": True,
                 "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
                 "excludedCommands": [],
-                "network": {"allowedDomains": [], "allowLocalBinding": False},
+                "network": {"allowedDomains": [] if classify else list(self.config.allowed_domains),
+                            "allowLocalBinding": False},
             },
         }
         command = [
@@ -400,8 +416,15 @@ class ClaudeBackend(CLIBackend):
         envelope = json.loads(output)
         if not isinstance(envelope, dict) or envelope.get("is_error"):
             raise BackendError("Claude reported an execution error.")
-        if envelope.get("permission_denials"):
-            raise BackendError("Claude requires additional local permissions.")
+        denials = envelope.get("permission_denials")
+        if denials:
+            # Denied tool calls are a normal part of a sandboxed run: Claude is told about each
+            # denial and adapts, and the contract requires it to report what it could not do.
+            # Log them for the owner and deliver the answer instead of discarding the whole run.
+            logging.getLogger(__name__).warning(
+                "Claude was denied %d tool call(s) and continued without them: %s",
+                len(denials) if isinstance(denials, list) else 1, _describe_denials(denials),
+            )
         result = envelope.get("structured_output")
         if not isinstance(result, dict):
             raise BackendError("Claude did not return a structured response.")

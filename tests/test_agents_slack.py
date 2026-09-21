@@ -164,7 +164,7 @@ def test_backend_permission_flags(config, tmp_path, backend_type):
 def test_parsers_fail_closed(config, tmp_path):
     claude = ClaudeBackend(config)
     with pytest.raises(BackendError):
-        claude.parse(json.dumps({"permission_denials": ["Write"], "structured_output": {"text": "done"}}), tmp_path)
+        claude.parse(json.dumps({"is_error": True, "structured_output": {"text": "done"}}), tmp_path)
     with pytest.raises(BackendError):
         claude.parse('{"structured_output": []}', tmp_path)
     with pytest.raises(BackendError):
@@ -263,6 +263,44 @@ def test_codex_classifier_distinguishes_diagnostics_from_tools(config, monkeypat
     else:
         with pytest.raises(BackendError, match="attempted to use tools"):
             asyncio.run(backend._invoke("x", True))
+
+
+def test_denied_tool_calls_are_logged_not_fatal(config, tmp_path, caplog):
+    envelope = {"structured_output": {"text": "done without fetch", "status": "complete"}, "permission_denials": [
+        {"tool_name": "Bash", "tool_input": {"command": "git fetch --all  --prune 2>&1 | tail -20", "allowed_domains": ["github.com"]}},
+        {"tool_name": "Write", "tool_input": {"file_path": "/tmp/claude/report.sh", "content": "SECRET CONTENT"}},
+        "garbage",
+    ]}
+    with caplog.at_level(logging.WARNING, logger="fridica.agents"):
+        assert ClaudeBackend(config).parse(json.dumps(envelope), tmp_path) == envelope["structured_output"]
+    assert "denied 3 tool call(s)" in caplog.text
+    assert "Bash(git fetch --all --prune 2>&1 | tail -20)" in caplog.text
+    assert "Write(/tmp/claude/report.sh)" in caplog.text
+    assert "SECRET CONTENT" not in caplog.text
+
+
+@pytest.mark.parametrize("backend_type", [ClaudeBackend, CodexBackend])
+def test_allowed_domains_open_network_for_tasks_only(config, tmp_path, backend_type):
+    schema = tmp_path / "schema.json"
+    schema.write_text("{}")
+    closed = backend_type(config)
+    open_ = backend_type(replace(config, allowed_domains=("github.com", "*.pypi.org")))
+    session = "2b1f0d2e-6a8e-4c39-9a33-0d8c9a0f1b22"
+    for backend, expected in ((closed, False), (open_, True)):
+        classify = backend.command(tmp_path, schema, True, None, False)
+        execute = backend.command(tmp_path, schema, False, session, False)
+        resumed = backend.command(tmp_path, schema, False, session, True)
+        if backend_type is ClaudeBackend:
+            for command, wanted in ((classify, []), (execute, ["github.com", "*.pypi.org"] if expected else []),
+                                    (resumed, ["github.com", "*.pypi.org"] if expected else [])):
+                settings = json.loads(command[command.index("--settings") + 1])
+                assert settings["sandbox"]["network"]["allowedDomains"] == wanted
+                assert settings["sandbox"]["enabled"] and not settings["sandbox"]["network"]["allowLocalBinding"]
+        else:
+            assert "sandbox_workspace_write.network_access=false" in classify
+            for command in (execute, resumed):
+                assert f"sandbox_workspace_write.network_access={'true' if expected else 'false'}" in command
+                assert 'web_search="disabled"' in command
 
 
 def test_session_id_extraction(config):
