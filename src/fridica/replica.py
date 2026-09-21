@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict, replace
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -28,7 +30,10 @@ class DeliveryRejected(Exception):
 
 
 class Replica:
-    def __init__(self, config: Config, store: Store, agent: AgentBackend | None, transport: Transport, observe_only: bool = False):
+    def __init__(self, config: Config, store: Store, agent: AgentBackend | None, transport: Transport, observe_only: bool = False, config_path=None):
+        self.base_config = config
+        self.config_path = config_path
+        self.config_revision = None
         self.config = config
         self.store = store
         self.agent = agent
@@ -36,10 +41,38 @@ class Replica:
         self.observe_only = observe_only
         self._lock = asyncio.Lock()
         self.store.bind(config.owner_id, config.workspace_id)
+        if not observe_only:
+            for row in store.connection.execute("SELECT e.payload FROM tasks t JOIN events e ON e.event_id=("
+                "SELECT x.event_id FROM events x WHERE x.workspace=t.workspace AND x.channel=t.channel AND x.thread=t.thread ORDER BY x.timestamp DESC LIMIT 1) "
+                "WHERE t.workspace=? AND t.status='waiting' AND t.control_state='active'", (config.workspace_id,)).fetchall():
+                message = Message(**json.loads(row['payload']))
+                if message.channel_id in config.channels:
+                    store.pause_loop(message, config.max_turns, config.max_wait_replies)
         self.permissions = None
         if config.file_access:
             from .permissions import Permissions
             self.permissions = Permissions(config, store, agent)
+
+    def reload_config(self, *, idle=False):
+        if self.config_path is None:
+            return
+        from .settings import configured_snapshot, fingerprint
+        if idle and fingerprint(self.config_path) == self.config_revision:
+            return
+        current, revision = configured_snapshot(self.base_config, self.config_path)
+        if revision == self.config_revision:
+            return
+        if current != self.config:
+            from .agents import create_backend
+            self.agent = None if self.observe_only else create_backend(current)
+            self.config = current
+            if current.file_access:
+                from .permissions import Permissions
+                self.permissions = Permissions(current, self.store, self.agent)
+        with self.store.connection:
+            self.store.connection.execute('CREATE TABLE IF NOT EXISTS configuration_runtime (id INTEGER PRIMARY KEY,revision TEXT,pid INTEGER)')
+            self.store.connection.execute('INSERT OR REPLACE INTO configuration_runtime VALUES(1,?,?)',(revision,os.getpid()))
+        self.config_revision = revision
 
     def receive(self, message: Message) -> bool:
         if message.workspace_id != self.config.workspace_id or message.channel_id not in self.config.channels:
@@ -48,6 +81,11 @@ class Replica:
 
     async def process(self, message: Message) -> None:
         async with self._lock:
+            try:
+                self.reload_config()
+            except (ValueError, OSError):
+                logger.error('Configuration could not be loaded; this request remains queued.')
+                return
             row = self.store.get(message.event_id)
             if row is None or row["state"] not in {"pending", "ready"}:
                 return
@@ -60,6 +98,18 @@ class Replica:
                 self.store.mark(message.event_id, "observed", Decision.OBSERVE.value)
                 logger.info("Observed event %s in %s; no agent or delivery", message.event_id, message.channel_id)
                 return
+            task = self.store.task(message)
+            if task and task['control_state'] != 'active':
+                if row['state'] == 'pending':
+                    if task['control_state'] == 'cleaned':
+                        with self.store.connection:
+                            self.store.connection.execute("UPDATE events SET payload=? WHERE event_id=?",
+                                (json.dumps(asdict(replace(message, text=''))), message.event_id))
+                    self.store.mark(message.event_id, 'observed', task['control_state'])
+                return
+            if task and row['state'] == 'pending' and float(message.timestamp) <= task['reset_at']:
+                self.store.mark(message.event_id, 'observed', 'before_resume')
+                return
             if row["state"] == "ready":
                 await self._deliver(message)
                 return
@@ -71,7 +121,15 @@ class Replica:
             mentioned = f"<@{self.config.owner_id}>" in message.text
             active = task is not None and task["status"] == "waiting"
             task_id = task["task_id"] if task else (message.task_id or uuid.uuid4().hex)
-            turn = max(task["turns"] if task else 0, message.turn) + 1
+            turn = max(task["turns"] if task else 0, 0 if task and task['reset_at'] else message.turn) + 1
+            if task and message.sender_id != self.config.owner_id:
+                self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
+                if turn > self.config.max_turns:
+                    with self.store.connection:
+                        self.store.connection.execute("UPDATE tasks SET control_state='paused',pause_reason='Thread turn limit reached.',control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=? AND control_state='active'", (message.workspace_id,message.channel_id,message.thread_id))
+                if self.store.task(message)['control_state'] == 'paused':
+                    self.store.mark(message.event_id, 'observed', 'paused')
+                    return
             session = task["session"] if task and self.config.resume_sessions else None
             if session and time.time() - task["updated"] > self.config.session_timeout:
                 logger.info("Session for thread %s is idle beyond session_timeout; a new one will start", message.thread_id)
@@ -175,9 +233,18 @@ class Replica:
             task_id=row["task_id"], turn=row["turn"],
             task_status=result.status,
         ), state="sent")
+        if result.status == 'waiting':
+            self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
 
     async def run(self) -> None:
         while True:
+            try:
+                async with self._lock:
+                    self.reload_config(idle=True)
+            except (ValueError, OSError):
+                logger.error('Configuration could not be loaded; processing is paused until it is repaired.')
+                await asyncio.sleep(5)
+                continue
             if self.permissions and not self.observe_only:
                 async with self._lock:
                     await self.permissions.process_approved(self)

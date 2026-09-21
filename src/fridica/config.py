@@ -31,6 +31,8 @@ class Config:
     additional_workspaces: tuple[Path, ...] = ()
     backend: str = "claude"
     model: str | None = None
+    reasoning_effort: str | None = None
+    max_wait_replies: int = 3
     profile: str = ""
     state_path: Path = DEFAULT_STATE
     app_token_env: str = "SLACK_APP_TOKEN"
@@ -61,18 +63,20 @@ class Config:
             raise ValueError("backend must be claude or codex")
         if not self.state_path.is_absolute():
             raise ValueError("state_path must be an absolute path")
-        for name in ("timeout", "cooldown", "context_limit", "max_turns", "session_timeout"):
+        for name in ("timeout", "cooldown", "context_limit", "max_turns", "max_wait_replies", "session_timeout"):
             value = getattr(self, name)
             minimum = 0 if name in {"cooldown", "session_timeout"} else 1
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < minimum:
                 raise ValueError(f"{name} must be a finite number >= {minimum}")
-            if name in {"context_limit", "max_turns"} and not isinstance(value, int):
+            if name in {"context_limit", "max_turns", "max_wait_replies"} and not isinstance(value, int):
                 raise ValueError(f"{name} must be an integer")
         for name in ("general_messages", "resume_sessions", "file_access"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
         if not isinstance(self.profile, str) or (self.model is not None and not isinstance(self.model, str)):
             raise ValueError("profile and model must be strings")
+        if self.reasoning_effort not in {None, "low", "medium", "high", "xhigh", "max", "ultra"}:
+            raise ValueError("invalid reasoning_effort")
         if self.contract is not None and (not isinstance(self.contract, Path) or not self.contract.is_absolute()
                                           or not self.contract.is_file()):
             raise ValueError("contract must be an existing Markdown file")
@@ -152,9 +156,8 @@ def set_slack_ids(path: Path, *, owner_id: str | None = None,
             temporary.unlink(missing_ok=True)
 
 
-def load_config(path: Path) -> Config:
-    with path.expanduser().open("rb") as stream:
-        values = tomllib.load(stream)
+def load_config(path: Path, *, contents: bytes | None = None) -> Config:
+    values = tomllib.loads((path.expanduser().read_bytes() if contents is None else contents).decode("utf-8"))
     allowed = set(Config.__dataclass_fields__)
     if set(values) - allowed:
         raise ValueError("unknown configuration fields: " + ", ".join(sorted(set(values) - allowed)))
@@ -198,6 +201,7 @@ file_access = false
 read_only_workspaces = []
 backend = "claude"
 # model = "your-preferred-model"
+# reasoning_effort = "low"  # Codex only
 profile = "My projects and expertise: ..."
 app_token_env = "SLACK_APP_TOKEN"
 user_token_env = "SLACK_USER_TOKEN"
@@ -206,6 +210,7 @@ context_limit = 50
 timeout = 600
 cooldown = 60
 max_turns = 6
+max_wait_replies = 3
 resume_sessions = true
 # Seconds of thread inactivity after which a stored session is not resumed (2 weeks).
 session_timeout = 1209600

@@ -1,33 +1,50 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fridica · Local monitor</title><link rel="stylesheet" href="/dashboard.css">
-  <script src="/dashboard.js" defer></script>
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fridica · Workspace</title><link rel="stylesheet" href="/dashboard.css"><script src="/dashboard.js" defer></script></head>
 <body>
-<header><div class="brand"><span class="logo">f</span><div><h1>Fridica <span>Local monitor</span></h1><p id="identity">Connecting to local state…</p></div></div><div class="live"><span id="connection" class="badge">Unknown</span><p id="refreshed">Waiting for first update</p></div></header>
-<main>
+<aside class="sidebar">
+  <div class="brand"><span class="mark">f</span><strong>Fridica</strong><span class="local">Local</span></div>
+  <nav aria-label="Main navigation">
+    <button data-view="overview" class="nav active" aria-current="page"><span class="nav-icon">▦</span>Overview</button>
+    <button data-view="inbox" class="nav"><span class="nav-icon">⌑</span>Inbox<span id="inbox-count" class="count">0</span></button>
+    <button data-view="tasks" class="nav"><span class="nav-icon">☷</span>Requests<span id="task-count" class="count">0</span></button>
+    <button data-view="projects" class="nav"><span class="nav-icon">▱</span>Projects & access</button>
+    <button data-view="history" class="nav"><span class="nav-icon">◷</span>Activity</button>
+    <button data-view="settings" class="nav"><span class="nav-icon">⚙</span>Settings</button>
+  </nav>
+  <div class="sidebar-note">Slack requests<br>Review, decide, and follow up.</div>
+  <div class="identity"><div class="avatar" id="owner-avatar">T</div><div><strong id="owner-name">Local owner</strong><small id="channel-name">Loading configuration</small></div></div>
+  <button id="connection" class="connection">Connection unknown</button>
+</aside>
+<div class="workspace">
+  <header><div><span class="eyebrow" id="breadcrumb">Workspace</span><h1 id="heading">Overview</h1></div><div class="header-actions"><span id="refresh-state" class="muted">Connecting</span><button id="refresh" title="Refresh now">Refresh</button></div></header>
   <div id="error" role="alert" hidden></div>
-  <section class="metrics" aria-label="Overview">
-    <article><p>LISTENER</p><h2 id="listener">Unknown</h2><small id="heartbeat">No heartbeat recorded</small></article>
-    <article><p>ACTIVE TASKS</p><h2 id="active">—</h2><small>Running or delivering · latest 100</small></article>
-    <article><p>NEEDS ATTENTION</p><h2 id="attention">—</h2><small>Approvals, errors or uncertain delivery</small></article>
-    <article><p>LAST MESSAGE</p><h2 id="last-message">—</h2><small id="messages">Recorded channel activity</small></article>
+  <div id="notice" role="status" hidden></div>
+  <div id="system-alert" hidden></div>
+  <section id="overview-view" class="content-view">
+    <div class="overview-intro"><div><span class="section-kicker">YOUR WORKSPACE</span><p class="description">A clear view of what needs you.</p></div><details class="people-tray"><summary id="people-summary">Recent requesters</summary><div id="people-list"></div></details></div>
+    <div id="scorecards" class="scorecards"></div>
+    <div class="overview-columns"><section class="overview-panel"><div class="panel-heading"><h2>Recent requests</h2><button data-view="tasks">View all</button></div><div id="recent-requests"></div></section><details class="overview-panel workspace-tray"><summary class="panel-heading"><span>Workspace & access</span><span class="tray-hint">Details</span></summary><div id="workspace-summary"></div><div class="tray-footer"><button data-view="projects">Manage projects & access ↗</button></div></details></div>
   </section>
-  <div class="layout">
-    <section class="panel activity"><div class="panel-head"><div><h2>Activity</h2><p>Recorded events and results. Select a row to inspect its thread.</p></div><span class="quiet">LIVE · 2s</span></div>
-      <div class="filters"><input id="search" type="search" placeholder="Search message, sender or task…" aria-label="Search activity"><select id="filter" aria-label="Filter activity"><option value="all">All activity</option><option value="tasks">Tasks</option><option value="attention">Needs attention</option><option value="outgoing">Sent replies</option></select></div>
-      <div id="activity" class="rows" aria-label="Recent activity"></div><p class="footnote">Latest 200 recorded messages. Times are local. No model usage is measured here.</p>
-    </section>
-    <aside>
-      <section class="panel"><div class="panel-head"><h2>Permissions</h2><span class="badge">Read-only view</span></div><div id="permissions" class="panel-body"></div></section>
-      <section class="panel"><div class="panel-head"><h2>Directory boundaries</h2></div><div id="roots" class="panel-body"></div></section>
-      <section class="panel"><div class="panel-head"><h2>About this monitor</h2></div><div class="panel-body"><p>Runs on this Mac. Reads local state; does not call a model or send Slack messages.</p><p>Approvals and grants remain in the local <code>fridica permissions</code> commands.</p><p>A connected socket and recent activity are separate signals. Unknown or stale heartbeat means the listener needs checking.</p></div></section>
-    </aside>
-  </div>
-  <section id="details" class="panel" hidden><div class="panel-head"><div><h2>Thread timeline</h2><p id="thread-label"></p></div><button id="close" type="button">Close</button></div><div id="timeline" class="panel-body"></div></section>
-</main>
-<footer>FRIDICA <span>Local state · No cloud dashboard · No write controls</span></footer>
+  <section id="task-view" hidden>
+    <div class="view-intro"><p id="intro">Decisions and issues that need your attention.</p><span id="mode-label" class="muted">Read-only mode</span></div>
+    <div class="toolbar"><div id="tabs" class="tabs"></div><div class="list-tools"><div id="layout-switch" class="layout-switch" aria-label="Request layout"><button id="list-layout" aria-pressed="true">List</button><button id="card-layout" aria-pressed="false">Cards</button></div><select id="sender-filter" aria-label="Filter by requester"><option value="">All requesters</option></select><button id="clear-sender" hidden>Clear person filter</button><input id="search" type="search" placeholder="Search requests or people" aria-label="Search tasks"></div></div>
+    <div class="work-area"><section class="task-list" aria-label="Task list"><div class="list-heading"><span>Request</span><span>Status / Updated</span></div><div id="task-list"></div><div class="pagination"><button id="previous">Previous</button><span id="page-info"></span><button id="next">Next</button></div></section>
+    <aside id="detail" class="detail" hidden><div class="detail-top"><span>Task details</span><button id="close-detail" aria-label="Close task details">×</button></div><div id="detail-body"></div></aside></div>
+  </section>
+  <section id="projects-view" class="content-view" hidden><p class="description">Identify the repositories behind your requests and see their current file boundaries.</p><section id="project-lock" class="setting vertical"><h2>Unlock to edit projects & access</h2><p>Forms are below. Unlock local controls in Settings to save directories, link repositories, or manage grants.</p><button id="project-unlock">Go to unlock</button></section><section class="setting vertical"><div class="editor-heading"><h2>Directory access</h2><button class="reload-settings" type="button">Reload saved values</button></div><p>Choose existing local folders the agent may read. Writes still need a matching grant or your approval. Removing a folder does not delete it.</p><form id="directory-form" class="editor-form"><label>Default working directory<input id="directory-main" required placeholder="/Users/you/projects/my-project"></label><label>Additional directories for managed writes<textarea id="directory-write" rows="3" placeholder="One absolute directory path per line"></textarea></label><label>Read-only directories<textarea id="directory-read" rows="3" placeholder="One absolute directory path per line"></textarea></label><button class="primary" type="submit">Review directory access</button></form></section><h2>Repository labels</h2><p class="description">Connect a configured folder to its GitHub repository.</p><div id="project-list"></div><section class="setting vertical"><h2>Automatic write grants</h2><p>Allow one person to request text-file changes within one path. Deletes need individual approval. Git commands and external actions are not supported here. Revoking a grant affects future operations; an operation already started may finish.</p><form id="grant-form" class="editor-form"><div class="form-columns"><label>Requester<select id="grant-person" required></select></label><label>Channel<select id="grant-channel"></select></label></div><label id="grant-member-label" hidden>Slack member ID<input id="grant-member" placeholder="U…"></label><label>Allowed file or directory<input id="grant-path" required placeholder="Absolute path inside a managed write directory" list="grant-roots"><datalist id="grant-roots"></datalist></label><label>Expires after<select id="grant-ttl"><option value="3600">1 hour</option><option value="86400">24 hours</option><option value="604800">7 days</option><option value="">Until revoked</option></select></label><button class="primary" type="submit">Review write grant</button></form><h3>Current grants</h3><div id="grant-list"></div></section></section>
+  <section id="history-view" class="content-view" hidden><p class="description">Move older entries into Archived to keep the main feed clear. Requests, approvals, and Slack messages stay unchanged.</p><section class="setting vertical"><div class="tabs" aria-label="Activity view"><button id="activity-current" class="tab selected" aria-pressed="true">Current</button><button id="activity-archived" class="tab" aria-pressed="false">Archived</button></div><form id="activity-archive-form" class="activity-tools"><label>Archive entries before<input id="activity-before" type="date" required></label><button id="activity-archive" type="submit">Review archive</button><button id="activity-restore" type="button">Restore archived activity</button></form><p id="activity-access" class="muted"></p></section><div id="history-list"></div><button id="history-more">Load earlier activity</button></section>
+  <section id="settings-view" class="content-view" hidden>
+    <p class="description">Choose the model, control conversation loops, and manage this monitor.</p>
+    <section class="setting"><div><h2>Page updates</h2><p>Refresh every 5 seconds while visible. Updates pause in the background and never call a model.</p></div><label class="switch"><input id="auto-refresh" type="checkbox" checked>Auto-refresh</label></section>
+    <section class="setting vertical"><h2>Local approvals</h2><p id="access-description">Read-only by default. Unlock to review file diffs and approve or reject individual requests.</p><form id="unlock-form"><label for="access-key">Local access key</label><div class="inline"><input id="access-key" type="password" autocomplete="off" placeholder="Enter the key generated when the monitor started" required><button type="submit" class="primary">Unlock</button></div></form><button id="lock" hidden>Lock controls</button><p id="unlock-help" class="muted"></p></section>
+    <section class="setting vertical"><div class="editor-heading"><h2>Model & loop protection</h2><button class="reload-settings" type="button">Reload saved values</button></div><p>Saved settings apply between requests. The current request finishes with the settings it started with.</p><p id="settings-status" role="status"></p><form id="agent-form" class="editor-form"><div class="form-columns"><label>Model<input id="setting-model" placeholder="gpt-5.6-luna; blank uses the backend default"></label><label>Reasoning effort<select id="setting-effort"><option value="">Backend default</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option><option>ultra</option></select></label></div><p class="muted">Use a model and reasoning effort supported by your signed-in CLI account. Saving does not make a test model call.</p><div class="form-columns"><label>Pause after consecutive waiting replies<input id="setting-waits" type="number" min="1" max="100" required></label><label>Maximum turns per thread<input id="setting-turns" type="number" min="1" max="100" required></label></div><p class="muted">Paused threads stay paused until you resume them in Inbox.</p><button class="primary" type="submit">Review and save settings</button></form><div id="agent-config"></div></section>
+    <section class="setting vertical"><h2>Listener & monitor</h2><div id="service-info"></div><p>Closing this tab leaves the services running. Stopping the monitor releases its resources; Slack continues listening and pending requests remain saved.</p><button id="stop-monitor" class="danger" disabled>Stop monitor; keep Slack listening</button><p class="muted">Restart the monitor from Desktop or your terminal. It does not start with the listener by default.</p></section>
+    <details class="technical"><summary>Technical details</summary><pre id="diagnostics"></pre></details>
+  </section>
+</div>
+<dialog id="review-dialog" aria-labelledby="review-heading"><form method="dialog" class="dialog-heading"><h2 id="review-heading">Review file change</h2><button aria-label="Close review">×</button></form><div id="review-body"></div><div id="review-error" role="alert" hidden></div><div class="dialog-actions"><button id="reject-request">Reject</button><button id="approve-request" class="primary">Approve once</button></div></dialog>
+<dialog id="cleanup-dialog"><form method="dialog" class="dialog-heading"><h2>Clear local request contents</h2><button aria-label="Cancel cleanup">×</button></form><div class="cleanup-body"><div id="cleanup-preview"></div><label><input id="cleanup-confirm" type="checkbox">I understand this cannot be undone.</label><p id="cleanup-error" role="alert" hidden></p></div><div class="dialog-actions"><button id="cleanup-cancel">Cancel</button><button id="cleanup-submit" class="danger" disabled>Permanently clear contents</button></div></dialog>
+<dialog id="settings-dialog"><form method="dialog" class="dialog-heading"><h2 id="settings-review-title">Review changes</h2><button aria-label="Cancel settings review">×</button></form><div class="cleanup-body"><div id="settings-review-body"></div><p id="settings-review-error" role="alert" hidden></p></div><div class="dialog-actions"><button id="settings-review-cancel">Cancel</button><button id="settings-review-save" class="primary">Confirm changes</button></div></dialog>
 </body>
 </html>

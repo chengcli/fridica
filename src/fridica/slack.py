@@ -123,7 +123,7 @@ class SlackTransport:
         return timestamp
 
 
-async def serve(config: Config, store, agent, observe_only: bool = False) -> None:
+async def serve(config: Config, store, agent, observe_only: bool = False, config_path=None) -> None:
     started_at = time.time()
     store.heartbeat('connecting', observe_only, started_at)
     app_token, user_token = config.tokens()
@@ -131,7 +131,7 @@ async def serve(config: Config, store, agent, observe_only: bool = False) -> Non
         web = AsyncWebClient(token=user_token, session=session, retry_handlers=[])
         transport = SlackTransport(config, web)
         await transport.validate()
-        replica = Replica(config, store, agent, transport, observe_only)
+        replica = Replica(config, store, agent, transport, observe_only, config_path=config_path)
         socket = SocketModeClient(app_token=app_token, web_client=web)
 
         async def receive(client, request):

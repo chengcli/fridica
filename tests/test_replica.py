@@ -173,8 +173,8 @@ def test_turn_limit_persists_without_metadata(config, message):
         entry = message("followup", timestamp="102.000001")
         process(Replica(config, database, agent, Transport()), entry)
         assert not agent.responded
-        assert database.get(entry.event_id)["decision"] == "respond"
-        assert database.get(entry.event_id)["reply_only"] == 1
+        assert database.get(entry.event_id)["decision"] == "paused"
+        assert database.task(entry)["control_state"] == "paused"
         assert database.task(entry)["turns"] == 1
         assert database.task(entry)["status"] == "waiting"
     finally:

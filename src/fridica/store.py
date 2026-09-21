@@ -98,6 +98,12 @@ class Store:
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(tasks)")}
         if "session" not in columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN session TEXT")
+        for name, definition in {"control_state": "TEXT NOT NULL DEFAULT 'active'", "pause_reason": "TEXT",
+                                 "reset_at": "REAL NOT NULL DEFAULT 0", "control_revision": "INTEGER NOT NULL DEFAULT 0"}.items():
+            if name not in columns:
+                self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+        self.connection.execute("CREATE TABLE IF NOT EXISTS thread_decisions (workspace TEXT, channel TEXT, thread TEXT, action TEXT, decided_at REAL)")
+        self.connection.commit()
         if not control:
             with self.connection:
                 self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
@@ -126,17 +132,26 @@ class Store:
 
     def add(self, message: Message, state: str = "pending") -> bool:
         with self.connection:
+            if not self.connection.in_transaction:
+                self.connection.execute('BEGIN IMMEDIATE')
+            task = self.task(message)
+            payload = asdict(message)
+            decision = None
+            if task and task['control_state'] != 'active':
+                state, decision = 'observed', task['control_state']
+                if decision == 'cleaned':
+                    payload['text'] = ''
             cursor = self.connection.execute(
-                "INSERT OR IGNORE INTO events(event_id,payload,workspace,channel,thread,timestamp,state) VALUES(?,?,?,?,?,?,?)",
-                (message.event_id, json.dumps(asdict(message)), message.workspace_id, message.channel_id,
-                 message.thread_id, float(message.timestamp), state),
+                "INSERT OR IGNORE INTO events(event_id,payload,workspace,channel,thread,timestamp,state,decision) VALUES(?,?,?,?,?,?,?,?)",
+                (message.event_id, json.dumps(payload), message.workspace_id, message.channel_id,
+                 message.thread_id, float(message.timestamp), state, decision),
             )
         return cursor.rowcount == 1
 
     def pending(self) -> list[sqlite3.Row]:
         return self.connection.execute(
             "SELECT e.* FROM events e WHERE e.state IN ('pending','ready') AND e.retry_at<=? "
-            "AND (e.state='ready' OR (NOT EXISTS ("
+            "AND (e.state='ready' OR EXISTS (SELECT 1 FROM tasks t WHERE t.workspace=e.workspace AND t.channel=e.channel AND t.thread=e.thread AND t.control_state!='active') OR (NOT EXISTS ("
             "SELECT 1 FROM file_requests r JOIN events original ON r.event_id=original.event_id "
             "WHERE r.notified=0 AND original.workspace=e.workspace AND original.channel=e.channel AND original.thread=e.thread) "
             "AND NOT EXISTS (SELECT 1 FROM events earlier WHERE earlier.state='ready' "
@@ -173,6 +188,31 @@ class Store:
             "SELECT * FROM tasks WHERE workspace=? AND channel=? AND thread=?",
             (message.workspace_id, message.channel_id, message.thread_id),
         ).fetchone()
+
+    def pause_loop(self, message: Message, max_turns: int, max_wait_replies: int) -> None:
+        task = self.task(message)
+        if task is None or task['control_state'] != 'active':
+            return
+        reason = None
+        if task['turns'] >= max_turns:
+            reason = f'Thread reached the {max_turns}-turn limit.'
+        else:
+            rows = self.connection.execute(
+                "SELECT json_extract(result,'$.status') AS status FROM events e "
+                "WHERE workspace=? AND channel=? AND thread=? AND state='sent' AND reply_only=0 "
+                "AND result IS NOT NULL AND timestamp>? "
+                "AND NOT (json_extract(result,'$.status')='waiting' AND EXISTS ("
+                "SELECT 1 FROM file_requests r WHERE r.event_id=e.event_id)) "
+                "ORDER BY CAST(sent_ts AS REAL) DESC LIMIT ?",
+                (message.workspace_id, message.channel_id, message.thread_id, task['reset_at'], max_wait_replies),
+            ).fetchall()
+            if len(rows) == max_wait_replies and all(r['status'] == 'waiting' for r in rows):
+                reason = f'{max_wait_replies} consecutive replies needed more information; possible conversation loop.'
+        if reason:
+            with self.connection:
+                self.connection.execute("UPDATE tasks SET control_state='paused',pause_reason=?,control_revision=control_revision+1 "
+                                        "WHERE workspace=? AND channel=? AND thread=? AND control_state='active'",
+                                        (reason, message.workspace_id, message.channel_id, message.thread_id))
 
     def awaiting_delivery(self, message: Message) -> bool:
         return self.connection.execute(

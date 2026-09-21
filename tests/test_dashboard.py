@@ -151,3 +151,71 @@ def test_confirmed_socket_echo_is_a_sent_reply(config, store, message):
     assert state['events'][0]['state'] == 'sent'
     assert state['events'][0]['task_id'] == 'task1'
     assert state['last_message'] == float(original.timestamp)
+
+
+def test_task_counts_and_pending_requests_survive_history_window(config, store, message):
+    from fridica.dashboard import task_page, thread_detail
+    store.bind(config.owner_id, config.workspace_id)
+    for i in range(130):
+        msg = message('e'+str(i), timestamp=f'{100+i}.000001', thread_id=f'{100+i}.000001')
+        store.add(msg)
+        store.begin(msg, 't'+str(i), 1)
+        store.save_result(msg, AgentResult('Waiting for more detail', 'waiting'))
+        with store.connection:
+            store.connection.execute("UPDATE events SET state='sent' WHERE event_id=?", (msg.event_id,))
+    with store.connection:
+        store.connection.execute("INSERT INTO file_requests(id,event_id,sender,channel,operation,path,content,status,created) VALUES('old','e0','UALICE','CROOM','write','a.txt','','pending',1)")
+    page = task_page(config)
+    assert len(page['items']) == 50
+    assert page['counts']['all'] == 130
+    assert page['counts']['attention'] == 1
+    assert page['counts']['waiting'] == 129
+    inbox = task_page(config, view='attention')
+    assert inbox['items'][0]['task_id'] == 't0'
+    assert thread_detail(config, 'CROOM', '100.000001')['requests'][0]['id'] == 'old'
+    assert len(task_page(config, offset=100)['items']) == 30
+
+
+def test_ignored_followup_does_not_clear_task_failure(config, store, message):
+    from fridica.dashboard import task_page
+    original = message()
+    store.add(original)
+    store.begin(original, 'task1', 1)
+    store.save_result(original, AgentResult('answer'))
+    store.mark(original.event_id, 'ambiguous')
+    store.add(message('ignored', timestamp='102.000001'), 'ignored')
+    page = task_page(config)
+    assert page['items'][0]['status'] == 'ambiguous'
+    assert page['counts']['attention'] == 1
+
+
+def test_sender_filter_is_exact_scoped_and_applied_before_pagination(config, store, message):
+    from fridica.dashboard import task_page
+    for i, sender in enumerate(['UALICE', 'UBOB', 'UALICE', 'UALICE2']):
+        msg = message('person'+str(i), sender_id=sender, timestamp=f'{200+i}.000001',
+                      thread_id=f'{200+i}.000001', text='UALICE mentioned in every request')
+        store.add(msg)
+        store.begin(msg, 'person-task'+str(i), 1)
+        store.save_result(msg, AgentResult('reply', 'waiting' if i == 0 else 'complete'))
+        store.mark(msg.event_id, 'sent')
+    other = message('outside', channel_id='COTHER', sender_id='UOTHER', timestamp='300.000001', thread_id='300.000001')
+    store.add(other)
+    store.begin(other, 'outside', 1)
+    page = task_page(config, sender='UALICE', limit=1, offset=1)
+    assert page['total'] == 2
+    assert [t['sender'] for t in page['items']] == ['UALICE']
+    assert page['counts']['all'] == 2
+    assert page['counts']['waiting'] == 1
+    assert page['counts']['complete'] == 1
+    assert set(page['senders']) == {'UALICE', 'UBOB', 'UALICE2'}
+    assert task_page(config, sender='UALICE', view='waiting')['total'] == 1
+    assert task_page(config, sender='UALICE', query='missing')['total'] == 0
+    assert task_page(config, sender='UNKNOWN')['counts']['all'] == 0
+    assert task_page(config)['total'] == 4
+
+    async def run():
+        async with TestClient(TestServer(create_app(config))) as client:
+            data = await (await client.get('/api/tasks?sender=UBOB')).json()
+            assert data['total'] == 1
+            assert data['items'][0]['sender'] == 'UBOB'
+    asyncio.run(run())

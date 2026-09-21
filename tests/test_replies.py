@@ -5,7 +5,7 @@ import json
 import pytest
 
 from fridica.agents import ClaudeBackend, CodexBackend, RESPONSE_SCHEMA, _prompt
-from fridica.models import AgentResult, ConversationContext, Decision
+from fridica.models import AgentResult, ConversationContext
 from fridica.replica import RateLimited, Replica
 from fridica.replies import format_reply
 
@@ -122,7 +122,7 @@ def test_blocker_notice_preserves_task(config, store, message, status):
 def test_rate_limited_notice_defers_next_mention(config, store, message):
     entry = message()
     store.add(entry)
-    store.begin(entry, "original", config.max_turns)
+    store.begin(entry, "original", config.max_turns - 1)
     store.mark(entry.event_id, "failed")
     agent, transport = Agent(), Transport()
     transport.error = RateLimited(1)
@@ -138,7 +138,7 @@ def test_rate_limited_notice_defers_next_mention(config, store, message):
     process(replica, second)
     assert len(transport.sent) == 2
     assert not agent.calls
-    assert store.task(entry)["turns"] == config.max_turns
+    assert store.task(entry)["turns"] == config.max_turns - 1
 
 
 @pytest.mark.parametrize("result", [RuntimeError("SECRET"), AgentResult("UALICE " * 499)])
