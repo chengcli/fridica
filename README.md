@@ -361,6 +361,14 @@ Generated messages initiate responses only when explicitly addressed or followin
 an active task. A per-channel cooldown limits unsolicited replies. Other agents'
 metadata is a loop-control hint, not an authorization credential.
 
+Messages from other people's Fridica instances arrive as that person's own
+messages. If their Slack app also has a bot user, Slack adds a `bot_id` to the
+user-token post; Fridica still accepts it because the `user` field names the
+sender. Only messages without a `user` (true bot posts) and edits, joins, and
+other subtypes are ignored. When an ignored event @mentions you, the daemon logs
+a warning naming the event and the fields that caused the rejection so a missing
+reply can be traced without reading Slack.
+
 ### Continuity between turns
 
 With `resume_sessions = true` (the default), each Slack thread maps to one

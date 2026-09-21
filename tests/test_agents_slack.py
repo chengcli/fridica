@@ -11,7 +11,7 @@ from slack_sdk.errors import SlackApiError
 from fridica.agents import BackendError, ClaudeBackend, CodexBackend, SessionUnavailable, _run
 from fridica.models import AgentResult, ConversationContext, Decision
 from fridica.replica import DeliveryRejected, RateLimited
-from fridica.slack import MARKER, SlackTransport, normalize
+from fridica.slack import MARKER, SlackTransport, dropped_mention, normalize
 
 
 @pytest.fixture
@@ -30,10 +30,35 @@ def test_normalize_metadata_and_fallback(payload):
     assert normalize(payload).generated
 
 
-@pytest.mark.parametrize("changes", [{"subtype": "message_changed"}, {"subtype": []}, {"bot_id": "B1"}, {"ts": "nan"}, {"thread_ts": []}, {"user": None}])
+@pytest.mark.parametrize("changes", [
+    {"subtype": "message_changed"}, {"subtype": []}, {"subtype": "bot_message", "bot_id": "B1"},
+    {"bot_id": "B1", "user": None}, {"ts": "nan"}, {"thread_ts": []}, {"user": None},
+])
 def test_normalize_rejects_invalid_events(payload, changes):
     payload["event"].update(changes)
     assert normalize(payload) is None
+
+
+def test_other_owners_fridica_replies_are_accepted(payload):
+    """A user-token post from an app with a bot user carries user, bot_id, and app_id together."""
+    payload["event"].update({
+        "user": "UTIANHAO", "bot_id": "B0C33358M6Z", "app_id": "A0C37SMPCCS", "bot_profile": {"name": "Tianhao Fridica"},
+        "text": "<@UOWNER> Please provide the repository path.", "thread_ts": "99.000001",
+        "metadata": {"event_type": "fridica_message", "event_payload": {"owner": "UTIANHAO", "task_id": "t", "turn": 1, "status": "waiting"}},
+    })
+    entry = normalize(payload)
+    assert entry is not None and entry.sender_id == "UTIANHAO" and entry.generated
+    assert entry.task_status == "waiting" and entry.thread_id == "99.000001"
+
+
+def test_dropped_mention_describes_rejected_events(payload):
+    payload["event"].update({"subtype": "message_changed", "text": "<@UOWNER> hi", "bot_id": "B1"})
+    assert normalize(payload) is None
+    description = dropped_mention(payload, "UOWNER")
+    assert description.startswith("event evt subtype=message_changed user=set bot_id=set")
+    assert "hi" not in description
+    assert dropped_mention(payload, "UOTHER") is None
+    assert dropped_mention("garbage", "UOWNER") is None
 
 
 def test_malformed_metadata_cannot_crash(payload):
