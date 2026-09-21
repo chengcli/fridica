@@ -278,7 +278,13 @@ def _describe_denials(denials: object) -> str:
             continue
         name = str(denial.get("tool_name", "?"))
         params = denial.get("tool_input") if isinstance(denial.get("tool_input"), dict) else {}
-        target = params.get("command") or params.get("file_path") or params.get("path") or params.get("pattern") or ""
+        command = params.get("command")
+        if isinstance(command, str):
+            target = command.split(maxsplit=1)[0]
+        else:
+            target = ""
+        if not target:
+            target = params.get("file_path") or params.get("path") or ""
         target = " ".join(str(target).split())[:120]
         parts.append(f"{name}({target})" if target else name)
     return ", ".join(parts) or "unknown tool"

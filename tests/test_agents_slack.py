@@ -274,7 +274,7 @@ def test_denied_tool_calls_are_logged_not_fatal(config, tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="fridica.agents"):
         assert ClaudeBackend(config).parse(json.dumps(envelope), tmp_path) == envelope["structured_output"]
     assert "denied 3 tool call(s)" in caplog.text
-    assert "Bash(git fetch --all --prune 2>&1 | tail -20)" in caplog.text
+    assert "Bash(git)" in caplog.text
     assert "Write(/tmp/claude/report.sh)" in caplog.text
     assert "SECRET CONTENT" not in caplog.text
 
