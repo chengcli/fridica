@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from .agents import check_authentication, check_backend, check_sandbox
+from .checks import check_authentication, check_backend, check_sandbox
 from .config import load_config
 from .contract import load_contract
 

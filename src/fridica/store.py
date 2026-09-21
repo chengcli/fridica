@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import fcntl
 import json
 import os
@@ -118,6 +118,11 @@ class Store:
                 (os.getpid(), started_at, time.time(), status, int(observe_only)),
             )
 
+    @staticmethod
+    def _key(message: Message) -> tuple[str, str, str]:
+        """The (workspace, channel, thread) tuple that identifies a task row."""
+        return message.workspace_id, message.channel_id, message.thread_id
+
     def close(self) -> None:
         self.connection.close()
         if self._lock is not None:
@@ -174,7 +179,7 @@ class Store:
         rows = self.connection.execute(
             "SELECT payload FROM events WHERE workspace=? AND channel=? AND thread=? "
             "AND timestamp<=? AND event_id!=? ORDER BY timestamp DESC LIMIT ?",
-            (message.workspace_id, message.channel_id, message.thread_id, float(message.timestamp), message.event_id, limit),
+            (*self._key(message), float(message.timestamp), message.event_id, limit),
         ).fetchall()
         if message.thread_id == message.timestamp:
             rows = self.connection.execute(
@@ -189,16 +194,44 @@ class Store:
         rows = self.connection.execute(
             "SELECT payload FROM events WHERE workspace=? AND channel=? AND thread=? "
             "AND json_extract(payload,'$.text')!='' ORDER BY timestamp DESC LIMIT ?",
-            (message.workspace_id, message.channel_id, message.thread_id, limit),
+            (*self._key(message), limit),
         ).fetchall()
         return [Message(**json.loads(row["payload"])) for row in reversed(rows)]
+
+    def waiting_threads(self, workspace: str) -> list[Message]:
+        """The latest message of every active thread whose last reply asked for information."""
+        rows = self.connection.execute(
+            "SELECT e.payload FROM tasks t JOIN events e ON e.event_id=("
+            "SELECT x.event_id FROM events x WHERE x.workspace=t.workspace AND x.channel=t.channel AND x.thread=t.thread "
+            "ORDER BY x.timestamp DESC LIMIT 1) WHERE t.workspace=? AND t.status='waiting' AND t.control_state='active'",
+            (workspace,)).fetchall()
+        return [Message(**json.loads(row["payload"])) for row in rows]
+
+    def clear_text(self, message: Message) -> None:
+        """Drop the text of an event that arrived for a thread whose contents were cleared."""
+        with self.connection:
+            self.connection.execute("UPDATE events SET payload=? WHERE event_id=?",
+                                    (json.dumps(asdict(replace(message, text=""))), message.event_id))
+
+    def pause_for_turn_limit(self, message: Message) -> None:
+        with self.connection:
+            self.connection.execute(
+                "UPDATE tasks SET control_state='paused',pause_reason='Thread turn limit reached.',"
+                "control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=? AND control_state='active'",
+                self._key(message))
+
+    def mark_debriefed_at_limit(self, message: Message) -> None:
+        """A thread debriefed at its turn limit needs no continuation summary."""
+        with self.connection:
+            self.connection.execute("UPDATE tasks SET continuation='debriefed' WHERE workspace=? AND channel=? AND thread=? "
+                                    "AND continuation IS NULL", self._key(message))
 
     def has_open_file_requests(self, message: Message) -> bool:
         """True while a scoped file operation in this thread still awaits the owner's decision or execution."""
         return self.connection.execute(
             "SELECT 1 FROM file_requests r JOIN events e ON r.event_id=e.event_id "
             "WHERE e.workspace=? AND e.channel=? AND e.thread=? AND r.status IN ('pending','approved','applying') LIMIT 1",
-            (message.workspace_id, message.channel_id, message.thread_id),
+            self._key(message),
         ).fetchone() is not None
 
     def claim_debrief(self, message: Message) -> bool:
@@ -206,7 +239,7 @@ class Store:
         with self.connection:
             cursor = self.connection.execute(
                 "UPDATE tasks SET debriefed_turn=turns WHERE workspace=? AND channel=? AND thread=? AND debriefed_turn<turns",
-                (message.workspace_id, message.channel_id, message.thread_id),
+                self._key(message),
             )
         return cursor.rowcount == 1
 
@@ -214,14 +247,14 @@ class Store:
         """Add the posted debrief to the activity feed."""
         with self.connection:
             self.connection.execute("INSERT INTO thread_decisions VALUES(?,?,?,?,?)",
-                                    (message.workspace_id, message.channel_id, message.thread_id, "debriefed", time.time()))
+                                    (*self._key(message), "debriefed", time.time()))
 
     def begin_continuation(self, message: Message) -> bool:
         """Claim the one-time wrap-up of a thread; False when it already happened or is under way."""
         with self.connection:
             cursor = self.connection.execute(
                 "UPDATE tasks SET continuation='pending' WHERE workspace=? AND channel=? AND thread=? AND continuation IS NULL",
-                (message.workspace_id, message.channel_id, message.thread_id),
+                self._key(message),
             )
         return cursor.rowcount == 1
 
@@ -238,7 +271,7 @@ class Store:
                 "UPDATE tasks SET continuation=?, pause_reason=?, "
                 "control_state=CASE WHEN control_state='active' THEN 'paused' ELSE control_state END, "
                 "control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=?",
-                (continuation, reason, message.workspace_id, message.channel_id, message.thread_id),
+                (continuation, reason, *self._key(message)),
             )
             if task_id is not None and continuation != "failed":
                 self.connection.execute(
@@ -247,12 +280,12 @@ class Store:
                     (message.workspace_id, message.channel_id, continuation, task_id, "complete", 0, time.time(), session),
                 )
                 self.connection.execute("INSERT INTO thread_decisions VALUES(?,?,?,?,?)",
-                                        (message.workspace_id, message.channel_id, message.thread_id, "continued", time.time()))
+                                        (*self._key(message), "continued", time.time()))
 
     def task(self, message: Message) -> sqlite3.Row | None:
         return self.connection.execute(
             "SELECT * FROM tasks WHERE workspace=? AND channel=? AND thread=?",
-            (message.workspace_id, message.channel_id, message.thread_id),
+            self._key(message),
         ).fetchone()
 
     def pause_loop(self, message: Message, max_turns: int, max_wait_replies: int) -> None:
@@ -270,7 +303,7 @@ class Store:
                 "AND NOT (json_extract(result,'$.status')='waiting' AND EXISTS ("
                 "SELECT 1 FROM file_requests r WHERE r.event_id=e.event_id)) "
                 "ORDER BY CAST(sent_ts AS REAL) DESC LIMIT ?",
-                (message.workspace_id, message.channel_id, message.thread_id, task['reset_at'], max_wait_replies),
+                (*self._key(message), task['reset_at'], max_wait_replies),
             ).fetchall()
             if len(rows) == max_wait_replies and all(r['status'] == 'waiting' for r in rows):
                 reason = f'{max_wait_replies} consecutive replies needed more information; possible conversation loop.'
@@ -278,12 +311,12 @@ class Store:
             with self.connection:
                 self.connection.execute("UPDATE tasks SET control_state='paused',pause_reason=?,control_revision=control_revision+1 "
                                         "WHERE workspace=? AND channel=? AND thread=? AND control_state='active'",
-                                        (reason, message.workspace_id, message.channel_id, message.thread_id))
+                                        (reason, *self._key(message)))
 
     def awaiting_delivery(self, message: Message) -> bool:
         return self.connection.execute(
             "SELECT 1 FROM events WHERE workspace=? AND channel=? AND thread=? AND state='ready' LIMIT 1",
-            (message.workspace_id, message.channel_id, message.thread_id),
+            self._key(message),
         ).fetchone() is not None
 
     def begin(self, message: Message, task_id: str, turn: int) -> None:
@@ -296,7 +329,7 @@ class Store:
                 "INSERT INTO tasks(workspace,channel,thread,task_id,status,turns,updated) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(workspace,channel,thread) "
                 "DO UPDATE SET task_id=excluded.task_id,status=excluded.status,turns=excluded.turns,updated=excluded.updated",
-                (message.workspace_id, message.channel_id, message.thread_id, task_id, "running", turn, time.time()),
+                (*self._key(message), task_id, "running", turn, time.time()),
             )
 
     def save_session(self, message: Message, session: str | None) -> None:
@@ -304,7 +337,7 @@ class Store:
         with self.connection:
             self.connection.execute(
                 "UPDATE tasks SET session=? WHERE workspace=? AND channel=? AND thread=?",
-                (session, message.workspace_id, message.channel_id, message.thread_id),
+                (session, *self._key(message)),
             )
 
     def save_result(self, message: Message, result: AgentResult) -> None:
@@ -318,7 +351,7 @@ class Store:
             )
             self.connection.execute(
                 "UPDATE tasks SET status=?,updated=? WHERE workspace=? AND channel=? AND thread=?",
-                ("delivery_pending", time.time(), message.workspace_id, message.channel_id, message.thread_id),
+                ("delivery_pending", time.time(), *self._key(message)),
             )
 
     def save_notice(self, message: Message, result: AgentResult, task_id: str, turn: int) -> None:
@@ -336,7 +369,7 @@ class Store:
             result = json.loads(self.get(message.event_id)["result"])
             self.connection.execute(
                 "UPDATE tasks SET status=?,updated=? WHERE workspace=? AND channel=? AND thread=?",
-                (result["status"], time.time(), message.workspace_id, message.channel_id, message.thread_id),
+                (result["status"], time.time(), *self._key(message)),
             )
             self.connection.execute(
                 "INSERT INTO cooldowns VALUES(?,?,?) ON CONFLICT(workspace,channel) DO UPDATE SET last_response=excluded.last_response",

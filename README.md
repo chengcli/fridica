@@ -729,7 +729,11 @@ transcripts from being written.
 
 `fridica.models` defines `Message`, `ConversationContext`, `Decision`,
 `AgentResult`, `AgentBackend`, and `Transport`. `fridica.replica.Replica` combines
-configuration, storage, a backend, and a transport. Alternative backends implement
+configuration, storage, a backend, and a transport and owns the rules of
+engagement. `fridica.agents` holds the Claude and Codex backends; they build on
+`fridica.runner` (bounded subprocess execution with a scrubbed environment),
+`fridica.prompts` (structured-output schemas and prompt composition), and
+`fridica.checks` (the local environment checks used by `doctor` and `start`). Alternative backends implement
 `async classify(message, context)` and `async respond(message, context)`;
 transports implement `async send(message, result, task_id, turn)` and return the
 confirmed message timestamp. Backend responses contain `text` and a status of

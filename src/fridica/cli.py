@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         if sys.platform not in {"darwin", "linux"}:
             raise ValueError("fridica supports macOS and Linux")
         config.tokens()
-        from .agents import check_backend, check_sandbox
+        from .checks import check_backend, check_sandbox
         if not args.observe_only:
             problems = check_backend(config) + check_sandbox(config)
             if problems:
