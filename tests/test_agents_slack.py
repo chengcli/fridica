@@ -222,6 +222,24 @@ def test_session_flags(config, tmp_path, backend_type):
             assert "--ignore-user-config" in command and command[-1] == "-"
 
 
+@pytest.mark.parametrize("item_type", ["error", "command_execution", "file_change", "mcp_tool_call", "web_search", "unknown"])
+def test_codex_classifier_distinguishes_diagnostics_from_tools(config, monkeypatch, item_type):
+    from fridica import agents
+
+    async def run(command, prompt, cwd, settings):
+        (cwd / "result.json").write_text(json.dumps({"decision": "respond"}))
+        return json.dumps({"type": "item.completed", "item": {"type": item_type, "message": "Code mode is disabled."}})
+
+    monkeypatch.setattr(agents, "_run", run)
+    backend = CodexBackend(replace(config, backend="codex"))
+    if item_type == "error":
+        result, session = asyncio.run(backend._invoke("x", True))
+        assert result == {"decision": "respond"} and session is None
+    else:
+        with pytest.raises(BackendError, match="attempted to use tools"):
+            asyncio.run(backend._invoke("x", True))
+
+
 def test_session_id_extraction(config):
     claude = ClaudeBackend(config)
     assert claude.session_id(json.dumps({"session_id": "abcd1234-0000-4000-8000-000000000000"})) == "abcd1234-0000-4000-8000-000000000000"

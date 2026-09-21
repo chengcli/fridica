@@ -253,7 +253,7 @@ class CLIBackend:
                 for line in output.splitlines():
                     event = json.loads(line)
                     item = event.get("item", {})
-                    if item.get("type") not in {None, "reasoning", "agent_message"}:
+                    if item.get("type") not in {None, "reasoning", "agent_message", "error"}:
                         raise BackendError("Classifier attempted to use tools.")
             result = self.parse(output, directory)
             return result, (self.session_id(output) if persist else None)
