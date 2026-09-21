@@ -53,6 +53,9 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         if name == "start":
             command.add_argument("--observe-only", action="store_true", help="Record events without invoking agents or posting")
+    dashboard = commands.add_parser("dashboard", help="Open a read-only local monitoring server")
+    dashboard.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    dashboard.add_argument("--port", type=int, default=8765)
     permissions = commands.add_parser("permissions", help="Inspect and authorize scoped file requests locally")
     actions = permissions.add_subparsers(dest="action", required=True)
     for name in ("status", "grant", "revoke", "approve", "reject"):
@@ -108,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             from .doctor import run_doctor
             return run_doctor(args.config)
         config = load_config(args.config)
+        if args.command == "dashboard":
+            from .dashboard import serve_dashboard
+            serve_dashboard(config, args.port)
+            return 0
         if args.command == "permissions":
             from .permissions import Permissions
             from .store import Store

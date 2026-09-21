@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fridica · Local monitor</title><link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+<header><div class="brand"><span class="logo">f</span><div><h1>Fridica <span>Local monitor</span></h1><p id="identity">Connecting to local state…</p></div></div><div class="live"><span id="connection" class="badge">Unknown</span><p id="refreshed">Waiting for first update</p></div></header>
+<main>
+  <div id="error" role="alert" hidden></div>
+  <section class="metrics" aria-label="Overview">
+    <article><p>LISTENER</p><h2 id="listener">Unknown</h2><small id="heartbeat">No heartbeat recorded</small></article>
+    <article><p>ACTIVE TASKS</p><h2 id="active">—</h2><small>Running or delivering · latest 100</small></article>
+    <article><p>NEEDS ATTENTION</p><h2 id="attention">—</h2><small>Approvals, errors or uncertain delivery</small></article>
+    <article><p>LAST MESSAGE</p><h2 id="last-message">—</h2><small id="messages">Recorded channel activity</small></article>
+  </section>
+  <div class="layout">
+    <section class="panel activity"><div class="panel-head"><div><h2>Activity</h2><p>Recorded events and results. Select a row to inspect its thread.</p></div><span class="quiet">LIVE · 2s</span></div>
+      <div class="filters"><input id="search" type="search" placeholder="Search message, sender or task…" aria-label="Search activity"><select id="filter" aria-label="Filter activity"><option value="all">All activity</option><option value="tasks">Tasks</option><option value="attention">Needs attention</option><option value="outgoing">Sent replies</option></select></div>
+      <div id="activity" class="rows" aria-label="Recent activity"></div><p class="footnote">Latest 200 recorded messages. Times are local. No model usage is measured here.</p>
+    </section>
+    <aside>
+      <section class="panel"><div class="panel-head"><h2>Permissions</h2><span class="badge">Read-only view</span></div><div id="permissions" class="panel-body"></div></section>
+      <section class="panel"><div class="panel-head"><h2>Directory boundaries</h2></div><div id="roots" class="panel-body"></div></section>
+      <section class="panel"><div class="panel-head"><h2>About this monitor</h2></div><div class="panel-body"><p>Runs on this Mac. Reads local state; does not call a model or send Slack messages.</p><p>Approvals and grants remain in the local <code>fridica permissions</code> commands.</p><p>A connected socket and recent activity are separate signals. Unknown or stale heartbeat means the listener needs checking.</p></div></section>
+    </aside>
+  </div>
+  <section id="details" class="panel" hidden><div class="panel-head"><div><h2>Thread timeline</h2><p id="thread-label"></p></div><button id="close" type="button">Close</button></div><div id="timeline" class="panel-body"></div></section>
+</main>
+<footer>FRIDICA <span>Local state · No cloud dashboard · No write controls</span></footer>
+</body>
+</html>

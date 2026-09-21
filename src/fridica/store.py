@@ -46,6 +46,11 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS events_context ON events(workspace,channel,thread,timestamp);
             CREATE UNIQUE INDEX IF NOT EXISTS events_message ON events(workspace,channel,json_extract(payload,'$.timestamp'));
+            CREATE TABLE IF NOT EXISTS runtime (
+                id INTEGER PRIMARY KEY CHECK(id=1), pid INTEGER NOT NULL,
+                started_at REAL NOT NULL, heartbeat_at REAL NOT NULL,
+                status TEXT NOT NULL, observe_only INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS identity (owner TEXT NOT NULL, workspace TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS tasks (
                 workspace TEXT NOT NULL,
@@ -98,6 +103,13 @@ class Store:
                 self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
                 self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
                 self.connection.execute("UPDATE file_requests SET status='interrupted' WHERE status='applying'")
+
+    def heartbeat(self, status: str, observe_only: bool, started_at: float) -> None:
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO runtime VALUES(1,?,?,?,?,?)",
+                (os.getpid(), started_at, time.time(), status, int(observe_only)),
+            )
 
     def close(self) -> None:
         self.connection.close()

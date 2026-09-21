@@ -490,6 +490,53 @@ controller remain trusted processes with their normal authentication/runtime
 access; this is not isolation from a compromised CLI or another process running
 as the same OS user. No additional model API or billing fallback is introduced.
 
+## Local dashboard
+
+Run the listener and dashboard in separate terminals, using the same configuration:
+
+```sh
+fridica start --config ~/.config/fridica/config.toml
+# In another terminal:
+fridica dashboard --config ~/.config/fridica/config.toml
+```
+
+Open http://127.0.0.1:8765. If the port is occupied, pass `--port 8877` and open
+http://127.0.0.1:8877 instead. Stop either process with Ctrl+C. The dashboard does
+not start the listener and does not require Slack tokens or a model login.
+
+The page refreshes every two seconds. It shows the socket heartbeat, current task
+states, the latest 200 recorded messages, thread timelines within that window,
+file requests, active grants, and configured directory boundaries. Search or
+filter the activity list, then select a message to inspect its thread. Task
+summaries cover the latest 100 tasks; attention counts cover all recorded events.
+Grant and file-request lists show at most 100 entries. Use `fridica permissions`
+for inspecting complete proposed changes and making approval decisions locally.
+
+The listener records its heartbeat every five seconds, including while an agent
+is working. A heartbeat older than 15 seconds is shown as offline; a listener
+without heartbeat support is unknown until restarted with this version. Socket
+health is separate from last-message time. This is stage-level monitoring, not
+model-token streaming or a completion percentage. A completed model result can
+still have an unconfirmed Slack delivery, which stays visible as needing attention.
+
+The monitor uses the existing aiohttp dependency and static HTML, CSS, and
+JavaScript. Requests open SQLite in read-only mode, without taking the listener
+lock or recovering interrupted tasks. The only listener change is a singleton
+`runtime` heartbeat row. No model, Slack, or telemetry requests are made by the
+monitor. Existing databases need no manual migration.
+
+It binds only to IPv4 loopback and rejects foreign Host/Origin headers and
+cross-site requests. The page renders messages as text, loads no third-party
+scripts, and masks recognizable Slack/OpenAI token formats. It exposes neither
+file contents from approval requests nor write/control endpoints. The page still
+contains local Slack history and paths: other users or processes on the same Mac
+can access it. Keep it local; do not put it behind a public tunnel or proxy.
+
+UI references: [Flower](https://flower.readthedocs.io/en/latest/) for worker and
+task health, [Bull Board](https://github.com/felixmosh/bull-board) for status
+filters, and [Langfuse sessions](https://langfuse.com/docs/observability/features/sessions)
+for conversation timelines. These are design references, not dependencies.
+
 ## Local state and recovery
 
 State defaults to `~/.local/state/fridica/state.sqlite3`; override `state_path`
