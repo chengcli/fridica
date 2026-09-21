@@ -411,6 +411,77 @@ conversations are not imported. The optional `model` setting
 is passed to the selected provider. No model name or paid API key is required by
 Fridica itself; each CLI uses its own authentication and billing.
 
+### Scoped file access
+
+Set `file_access = true` to replace native agent tools with checked file
+operations. This is opt-in; the default workspace mode above is unchanged.
+
+```toml
+file_access = true
+workspace = "/absolute/path/project/docs"
+additional_workspaces = []
+read_only_workspaces = ["/absolute/path/project/data"]
+```
+
+`workspace` and `additional_workspaces` are the maximum writable roots.
+All listed roots are readable, including their descendants; read-only roots
+always take precedence. Unlisted paths are refused. Keep the config, contract,
+state database, credentials, and Fridica's installed code outside these roots.
+Symlinks, hard links, special files, parent traversal, and `.git`, `.codex`,
+`.claude`, `.ssh`, and `.env` components are refused. Denials also cover case
+and Unicode normalization aliases, conservatively on case-sensitive systems.
+
+| Level | Operation | Authorization |
+| --- | --- | --- |
+| L0 | Read a listed text file | Automatic |
+| L1 | Create or replace a text file | Local approval, or a matching active sender/channel/path grant |
+| L2 | Delete a text file | New local approval for that exact request, every time |
+
+The model proposes operations with native tools disabled. The controller checks
+paths and permissions, saves the exact change in SQLite, then applies it. An
+existing file must match the content supplied to the model and the content
+reviewed locally. Writes use an atomic replacement; interrupted operations are
+never rerun automatically. Revocation affects operations not yet claimed for
+execution, and does not undo completed changes.
+
+Manage requests from a local terminal or ask your Desktop agent to run these
+commands after reviewing the request. No Slack message can approve or grant
+access. Commands work while the daemon is running and return JSON:
+
+```sh
+fridica permissions status
+fridica permissions status REQUEST_ID       # includes before and proposed contents
+fridica permissions approve REQUEST_ID
+fridica permissions reject REQUEST_ID
+fridica permissions grant --sender U123ABC --channel C123ABC --path /absolute/path/project/docs --ttl 3600
+fridica permissions revoke GRANT_ID
+```
+
+Each command accepts `--config PATH`. Omit `--ttl` for a grant that lasts until
+revoked. A grant permits L1 writes only; it cannot widen the configured roots or
+permit deletion. Approve an already pending request separately after reviewing it.
+Approved changes run when the daemon next processes its local
+queue, and results go back to the original Slack thread. Delivery retries reuse
+the saved result. Root changes require a daemon restart. Desktop remains a
+local control client; this does not attach a CLI session to a Desktop task.
+
+This first version supports UTF-8 text files up to 64 KiB, existing parent
+directories, and one write or deletion per request. It does not execute shell
+commands, tests, merges, deployments, arbitrary sends, or directory operations.
+The model gets up to eight planning calls per message, each stateless; this mode
+does not resume native workspace sessions. File contents passed to the model
+and before/after contents saved in SQLite may be private: only allow projects
+appropriate for the selected channel, and protect the database accordingly.
+
+Codex planning uses a named permissions profile that grants only minimal runtime
+reads and reads of its temporary invocation directory, with no command network
+access. It requires a CLI supporting named permissions and `--strict-config`;
+unsupported configuration fails instead of falling back to workspace mode.
+Claude planning uses its existing empty tool list. The provider CLI and local
+controller remain trusted processes with their normal authentication/runtime
+access; this is not isolation from a compromised CLI or another process running
+as the same OS user. No additional model API or billing fallback is introduced.
+
 ## Local state and recovery
 
 State defaults to `~/.local/state/fridica/state.sqlite3`; override `state_path`

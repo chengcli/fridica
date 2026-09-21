@@ -12,15 +12,17 @@ from .models import AgentResult, Message
 
 
 class Store:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, control: bool = False):
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._lock = path.with_suffix(".lock").open("a")
-        os.chmod(path.with_suffix(".lock"), 0o600)
-        try:
-            fcntl.flock(self._lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            self._lock.close()
-            raise ValueError("another fridica process is using this state database") from None
+        self._lock = None
+        if not control:
+            self._lock = path.with_suffix(".lock").open("a")
+            os.chmod(path.with_suffix(".lock"), 0o600)
+            try:
+                fcntl.flock(self._lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self._lock.close()
+                raise ValueError("another fridica process is using this state database") from None
         self.connection = sqlite3.connect(path)
         os.chmod(path, 0o600)
         self.connection.row_factory = sqlite3.Row
@@ -55,6 +57,29 @@ class Store:
                 updated REAL NOT NULL,
                 PRIMARY KEY(workspace,channel,thread)
             );
+            CREATE TABLE IF NOT EXISTS file_requests (
+                id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
+                sender TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content TEXT NOT NULL,
+                before_content TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created REAL NOT NULL,
+                error TEXT,
+                result TEXT,
+                notified INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS grants (
+                id TEXT PRIMARY KEY,
+                sender TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                path TEXT NOT NULL,
+                expires REAL,
+                revoked INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS cooldowns (
                 workspace TEXT NOT NULL,
                 channel TEXT NOT NULL,
@@ -68,13 +93,16 @@ class Store:
         columns = {row[1] for row in self.connection.execute("PRAGMA table_info(tasks)")}
         if "session" not in columns:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN session TEXT")
-        with self.connection:
-            self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
-            self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
+        if not control:
+            with self.connection:
+                self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
+                self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
+                self.connection.execute("UPDATE file_requests SET status='interrupted' WHERE status='applying'")
 
     def close(self) -> None:
         self.connection.close()
-        self._lock.close()
+        if self._lock is not None:
+            self._lock.close()
 
     def bind(self, owner: str, workspace: str) -> None:
         row = self.connection.execute("SELECT owner,workspace FROM identity").fetchone()
@@ -95,7 +123,13 @@ class Store:
 
     def pending(self) -> list[sqlite3.Row]:
         return self.connection.execute(
-            "SELECT * FROM events WHERE state IN ('pending','ready') AND retry_at<=? ORDER BY timestamp LIMIT 100",
+            "SELECT e.* FROM events e WHERE e.state IN ('pending','ready') AND e.retry_at<=? "
+            "AND (e.state='ready' OR (NOT EXISTS ("
+            "SELECT 1 FROM file_requests r JOIN events original ON r.event_id=original.event_id "
+            "WHERE r.notified=0 AND original.workspace=e.workspace AND original.channel=e.channel AND original.thread=e.thread) "
+            "AND NOT EXISTS (SELECT 1 FROM events earlier WHERE earlier.state='ready' "
+            "AND earlier.workspace=e.workspace AND earlier.channel=e.channel AND earlier.thread=e.thread))) "
+            "ORDER BY e.timestamp LIMIT 100",
             (time.time(),),
         ).fetchall()
 
@@ -157,6 +191,10 @@ class Store:
 
     def save_result(self, message: Message, result: AgentResult) -> None:
         with self.connection:
+            self.connection.execute(
+                "UPDATE file_requests SET notified=1 WHERE event_id=? "
+                "AND status IN ('complete','failed','declined','interrupted')", (message.event_id,)
+            )
             self.connection.execute(
                 "UPDATE events SET state='ready',result=? WHERE event_id=?", (json.dumps(asdict(result)), message.event_id)
             )
