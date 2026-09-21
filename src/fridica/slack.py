@@ -26,8 +26,11 @@ def normalize(payload: dict) -> Message | None:
     event = payload.get("event")
     if not isinstance(event, dict) or event.get("type") != "message":
         return None
-    if event.get("subtype") not in (None, "file_share") or event.get("bot_id"):
+    if event.get("subtype") not in (None, "file_share"):
         return None
+    # A message posted through a user token by an app that also has a bot user carries both
+    # ``user`` and ``bot_id`` (this is how other owners' Fridica replies arrive). Such messages
+    # belong to that user; only messages without a ``user`` are dropped as bot posts.
     fields = [payload.get("event_id"), payload.get("team_id"), event.get("channel"), event.get("user"), event.get("text"), event.get("ts")]
     if any(not isinstance(value, str) or not value for value in fields):
         return None
@@ -54,6 +57,25 @@ def normalize(payload: dict) -> Message | None:
         generated=generated, task_id=task_id if isinstance(task_id, str) and 0 < len(task_id) <= 128 else None, turn=min(turn, 10000),
         task_status=data.get("status") if data.get("status") in ("complete", "waiting", "blocked") else None,
     )
+
+
+def dropped_mention(payload: object, owner_id: str) -> str | None:
+    """Describe an event that ``normalize`` rejected although it @mentions the owner, else None.
+
+    Such drops are otherwise invisible: the event never reaches the database, so a
+    missing reply cannot be diagnosed from local state. The description names the
+    fields that commonly cause a rejection without quoting the message text.
+    """
+    if not isinstance(payload, dict):
+        return None
+    event = payload.get("event")
+    if not isinstance(event, dict) or event.get("type") != "message":
+        return None
+    text = event.get("text")
+    if not isinstance(text, str) or f"<@{owner_id}>" not in text:
+        return None
+    return (f"event {payload.get('event_id')} subtype={event.get('subtype')} user={'set' if event.get('user') else 'missing'} "
+            f"bot_id={'set' if event.get('bot_id') else 'none'} ts={event.get('ts')}")
 
 
 class SlackTransport:
@@ -114,6 +136,10 @@ async def serve(config: Config, store, agent, observe_only: bool = False) -> Non
                 message = normalize(request.payload)
                 if message is not None:
                     replica.receive(message)
+                else:
+                    reason = dropped_mention(request.payload, config.owner_id)
+                    if reason:
+                        logger.warning("Ignored a message that mentions you: %s", reason)
             await client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
         socket.socket_mode_request_listeners.append(receive)
