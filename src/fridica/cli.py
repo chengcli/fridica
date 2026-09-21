@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import json
 from importlib.resources import files
 import os
 from pathlib import Path
@@ -52,6 +53,18 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         if name == "start":
             command.add_argument("--observe-only", action="store_true", help="Record events without invoking agents or posting")
+    permissions = commands.add_parser("permissions", help="Inspect and authorize scoped file requests locally")
+    actions = permissions.add_subparsers(dest="action", required=True)
+    for name in ("status", "grant", "revoke", "approve", "reject"):
+        command = actions.add_parser(name)
+        command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+        if name == "grant":
+            command.add_argument("--sender", required=True)
+            command.add_argument("--channel")
+            command.add_argument("--path", required=True)
+            command.add_argument("--ttl", type=float, help="Expire after this many seconds; otherwise valid until revoked")
+        else:
+            command.add_argument("id", nargs="?" if name == "status" else None)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     logging.getLogger("slack_sdk").setLevel(logging.CRITICAL)
@@ -95,6 +108,39 @@ def main(argv: list[str] | None = None) -> int:
             from .doctor import run_doctor
             return run_doctor(args.config)
         config = load_config(args.config)
+        if args.command == "permissions":
+            from .permissions import Permissions
+            from .store import Store
+            if not config.file_access:
+                raise ValueError("Enable file_access before managing file permissions")
+            store = Store(config.state_path, control=True)
+            try:
+                store.bind(config.owner_id, config.workspace_id)
+                policy = Permissions(config, store)
+                result = {}
+                if args.action == "status":
+                    if args.id:
+                        row = store.connection.execute('SELECT * FROM file_requests WHERE id=?', (args.id,)).fetchone()
+                        if row is None:
+                            raise ValueError("Request not found")
+                        result = dict(row)
+                    else:
+                        result = {
+                            "requests": [dict(row) for row in store.connection.execute(
+                                'SELECT id,event_id,sender,channel,operation,path,status,error FROM file_requests ORDER BY created DESC LIMIT 100')],
+                            "grants": [dict(row) for row in store.connection.execute('SELECT * FROM grants')],
+                        }
+                elif args.action == "grant":
+                    channel = args.channel or (config.channels[0] if len(config.channels) == 1 else None)
+                    result = {"id": policy.grant(args.sender, channel, args.path, args.ttl)}
+                elif args.action == "revoke":
+                    policy.revoke(args.id)
+                else:
+                    policy.decide(args.id, "approved" if args.action == "approve" else "rejected")
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
+            finally:
+                store.close()
         if sys.platform not in {"darwin", "linux"}:
             raise ValueError("fridica supports macOS and Linux")
         config.tokens()

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import tomllib
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 
 import tomlkit
@@ -13,6 +14,12 @@ import tomlkit
 
 DEFAULT_CONFIG = Path.home() / ".config" / "fridica" / "config.toml"
 DEFAULT_STATE = Path.home() / ".local" / "state" / "fridica" / "state.sqlite3"
+
+
+def within_casefold(path: Path, root: Path) -> bool:
+    """Compare deny boundaries conservatively on case-insensitive filesystems."""
+    return Path(unicodedata.normalize('NFD', str(path)).casefold()).is_relative_to(
+        Path(unicodedata.normalize('NFD', str(root)).casefold()))
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,8 @@ class Config:
     resume_sessions: bool = True
     session_timeout: float = 14 * 86400
     contract: Path | None = None
+    file_access: bool = False
+    read_only_workspaces: tuple[Path, ...] = ()
 
     def __post_init__(self) -> None:
         for label, value, pattern in (
@@ -59,7 +68,7 @@ class Config:
                 raise ValueError(f"{name} must be a finite number >= {minimum}")
             if name in {"context_limit", "max_turns"} and not isinstance(value, int):
                 raise ValueError(f"{name} must be an integer")
-        for name in ("general_messages", "resume_sessions"):
+        for name in ("general_messages", "resume_sessions", "file_access"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
         if not isinstance(self.profile, str) or (self.model is not None and not isinstance(self.model, str)):
@@ -71,13 +80,20 @@ class Config:
             value = getattr(self, name)
             if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
                 raise ValueError(f"{name} must name an environment variable")
-        for directory in (self.workspace, *self.additional_workspaces):
+        if self.read_only_workspaces and not self.file_access:
+            raise ValueError("read_only_workspaces requires file_access")
+        for directory in (self.workspace, *self.additional_workspaces, *self.read_only_workspaces):
             if not directory.is_absolute() or not directory.is_dir():
                 raise ValueError("workspace roots must be existing absolute directories")
-            if directory.resolve() in {Path.home().resolve(), Path("/")}:
+            if directory.samefile(Path.home()) or directory.samefile(Path("/")):
                 raise ValueError("choose a project directory, not the home or filesystem root")
-        if self.state_path.resolve().is_relative_to(self.workspace.resolve()) or any(
-            self.state_path.resolve().is_relative_to(directory.resolve()) for directory in self.additional_workspaces
+        if self.file_access:
+            package = Path(__file__).resolve().parent
+            for directory in (self.workspace, *self.additional_workspaces):
+                if within_casefold(package, directory.resolve()) or within_casefold(directory.resolve(), package):
+                    raise ValueError("Fridica's installed code must be outside writable roots")
+        if within_casefold(self.state_path.resolve(), self.workspace.resolve()) or any(
+            within_casefold(self.state_path.resolve(), directory.resolve()) for directory in (*self.additional_workspaces, *self.read_only_workspaces)
         ):
             raise ValueError("state_path must be outside agent workspaces")
 
@@ -150,10 +166,11 @@ def load_config(path: Path) -> Config:
             if not isinstance(values[key], str) or not values[key]:
                 raise ValueError(f"{key} must be a nonempty path")
             values[key] = Path(values[key]).expanduser()
-    roots = values.get("additional_workspaces", [])
-    if not isinstance(roots, list) or any(not isinstance(root, str) for root in roots):
-        raise ValueError("additional_workspaces must be a list of paths")
-    values["additional_workspaces"] = tuple(Path(root).expanduser() for root in roots)
+    for key in ("additional_workspaces", "read_only_workspaces"):
+        roots = values.get(key, [])
+        if not isinstance(roots, list) or any(not isinstance(root, str) or not root for root in roots):
+            raise ValueError(f"{key} must be a list of paths")
+        values[key] = tuple(Path(root).expanduser() for root in roots)
     if "contract" in values:
         if not isinstance(values["contract"], str) or not values["contract"]:
             raise ValueError("contract must be a nonempty path")
@@ -161,7 +178,13 @@ def load_config(path: Path) -> Config:
         values["contract"] = contract if contract.is_absolute() else (path.expanduser().parent / contract).resolve()
     elif (path.expanduser().parent / "contract.md").is_file():
         values["contract"] = path.expanduser().parent / "contract.md"
-    return Config(**values)
+    config = Config(**values)
+    if config.file_access:
+        roots = (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)
+        for protected in (path.expanduser(), config.contract):
+            if protected and any(within_casefold(protected.resolve(), root.resolve()) for root in roots):
+                raise ValueError("configuration and contract must be outside file access roots")
+    return config
 
 
 TEMPLATE = '''# Create your own Slack app using slack/manifest.yaml.
@@ -170,6 +193,9 @@ workspace_id = "T_REPLACE"
 channels = ["C_REPLACE"]
 workspace = "~/projects/your-project"
 additional_workspaces = []
+# Use scoped file operations instead of the agent's native workspace tools.
+file_access = false
+read_only_workspaces = []
 backend = "claude"
 # model = "your-preferred-model"
 profile = "My projects and expertise: ..."

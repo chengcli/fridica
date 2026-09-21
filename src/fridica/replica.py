@@ -36,6 +36,10 @@ class Replica:
         self.observe_only = observe_only
         self._lock = asyncio.Lock()
         self.store.bind(config.owner_id, config.workspace_id)
+        self.permissions = None
+        if config.file_access:
+            from .permissions import Permissions
+            self.permissions = Permissions(config, store, agent)
 
     def receive(self, message: Message) -> bool:
         if message.workspace_id != self.config.workspace_id or message.channel_id not in self.config.channels:
@@ -58,6 +62,8 @@ class Replica:
                 return
             if row["state"] == "ready":
                 await self._deliver(message)
+                return
+            if self.permissions and self.permissions.awaiting(message):
                 return
             task = self.store.task(message)
             if self.store.awaiting_delivery(message):
@@ -110,7 +116,8 @@ class Replica:
                 return
             self.store.begin(message, task_id, turn)
             try:
-                result = await self.agent.respond(message, context)
+                responder = self.permissions or self.agent
+                result = await responder.respond(message, context)
                 if not isinstance(result, AgentResult) or result.status not in {"complete", "waiting", "blocked"}:
                     raise ValueError("invalid agent result")
                 if self.config.resume_sessions and result.session != context.session:
@@ -171,6 +178,9 @@ class Replica:
 
     async def run(self) -> None:
         while True:
+            if self.permissions and not self.observe_only:
+                async with self._lock:
+                    await self.permissions.process_approved(self)
             for row in self.store.pending():
                 await self.process(Message(**json.loads(row["payload"])))
             await asyncio.sleep(0.25)
