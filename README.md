@@ -490,6 +490,146 @@ controller remain trusted processes with their normal authentication/runtime
 access; this is not isolation from a compromised CLI or another process running
 as the same OS user. No additional model API or billing fallback is introduced.
 
+## Local dashboard
+
+The monitor is optional and runs separately from the Slack listener:
+
+```sh
+fridica start --config ~/.config/fridica/config.toml
+# In another terminal:
+fridica dashboard --config ~/.config/fridica/config.toml --port 8877
+```
+
+Open http://127.0.0.1:8877. It starts read-only. To enable local file approvals and configuration editing,
+start the monitor with `--allow-approvals`; the listener does not need to restart.
+The terminal prints the path to a private `.dashboard-key` file beside the state
+database. Enter its contents under **Settings → Local approvals**. The key is
+held in this tab's session storage, rotates on monitor restart, and is cleared by
+**Lock controls**. Do not share it or send it to Slack.
+
+The English interface has six views:
+
+- **Overview:** counts for attention, in progress, waiting, and finished requests,
+  with links to the matching lists, recent requests, and workspace information.
+- **Inbox:** approvals and failures, with a separate waiting-for-information tab.
+- **Requests:** searchable, paginated list or card layout. Each request opens its
+  conversation, current situation, file operations, and notification status.
+  Filter by requester using the person selector or an Overview requester shortcut.
+- **Projects & access:** editable managed directory boundaries, GitHub repository
+  labels, and per-person/channel/path write grants with expiry and revocation.
+  Labels do not clone repositories or grant access. Adding a directory permits
+  reads; automatic writes still require a separate grant. Up to 100 active grants
+  are displayed; `fridica permissions` can inspect or manage all grants.
+- **Activity:** paginated messages and local approval decisions, with Current and
+  Archived views. Choose a cutoff date, review the entry count, then archive older
+  entries; Restore returns them to Current. This stores a per-channel date boundary,
+  so late entries with older timestamps also appear in Archived. It does not alter
+  requests, delete history, or reclaim disk space. Messages show their arrival time
+  and current state; decisions have their own audit timestamp.
+- **Settings:** model, reasoning effort, waiting-reply and turn limits, refresh,
+  control locking, listener health, and monitor shutdown.
+
+Counts cover all stored tasks in configured channels. Lists load 50 items at a
+time; thread history can load earlier messages. Slack display names are cached
+when a configured user token permits the metadata lookup. Unresolved identities
+show as unknown, with raw IDs available under technical details.
+
+Approvals require `file_access` mode and apply to one exact stored proposal.
+File cards show the operation, permission level, and Slack delivery status.
+The review dialog shows a numbered diff with addition and deletion counts.
+Completed, delivered results collapse by default; pending approvals, errors, and
+unconfirmed deliveries stay expanded. Your expanded sections survive refreshes.
+
+Review the full diff and contents before deciding. The server checks the owner,
+channel, revision, configured directory boundary, and unchanged file before
+queuing an approval. Changed or already-decided proposals are rejected. The
+existing listener performs the operation and reports in the original Slack
+thread. Approval saved, file changed, and notification delivered are distinct
+states. Rejection leaves the file unchanged and queues a notification. This
+monitor does not authorize arbitrary commands, repository merges, or deployment.
+
+The page refreshes every five seconds while visible, pauses in background tabs,
+and can disable auto-refresh. It reads SQLite and never calls a model. Optional
+Slack name lookups are cached; no analytics or third-party scripts are loaded.
+The listener records a separate heartbeat every five seconds; after 15 seconds
+without one it appears offline. This is stage-level status, not token streaming,
+a success score, or percentage progress.
+
+Closing a tab leaves both processes running. Ctrl+C stops the corresponding
+process; unlocked **Stop monitor** stops only the monitor. Restart it from the
+terminal or Desktop. The monitor never starts automatically with the listener.
+
+**Conversation limits.** Three consecutive delivered replies with `waiting`
+status (excluding file-approval proposals) pause that thread by default. The
+existing `max_turns` ceiling also pauses further work. This is a conservative
+possible-loop guard, not a semantic proof that a conversation is stuck; useful
+multi-step clarification may require an owner to resume. Counts follow reply
+send order, not incoming event order. Configure `max_wait_replies` and
+`max_turns` in `config.toml`.
+
+A paused request appears in Inbox with its reason. It remains paused after a
+restart and makes no model calls or automatic replies. **Resume** resets its
+budget for future messages; earlier or delayed pre-resume messages are not
+replayed. Pending approved file operations can continue after resume.
+**Close request** stops further automatic processing of that thread. These
+controls require the owner key. Other threads continue normally.
+
+**Local cleanup.** Archive a completed or locally closed request from its detail
+panel. It moves to **Requests → Archived**, where **Restore** brings it back.
+**Preview cleanup** shows the message and proposal counts; confirmation clears
+stored message text, replies, proposed file contents, diffs, and paths for that
+request. Event identities and decision records remain for deduplication and
+auditing. Incoming messages for cleaned threads are recorded without their text.
+Cleanup does not delete project files or Slack messages and never retries an
+operation. Processing, undelivered replies, and unresolved file operations block
+closing or cleanup. Cleanup is irreversible and is not a secure erase of SQLite
+journals, filesystem snapshots, backups, or separately stored CLI transcripts;
+the database file may not shrink immediately.
+
+**Model configuration.** The Codex adapter ignores the user's global Codex
+configuration. Pin a model and effort in Fridica's configuration to avoid an
+implicit CLI default, for example:
+
+```toml
+backend = "codex"
+model = "gpt-5.6-luna"
+reasoning_effort = "low"
+max_wait_replies = 3
+max_turns = 6
+```
+
+Choose a model available to your account. `reasoning_effort` applies only to
+Codex; no automatic upgrade to a more expensive model is performed. Settings
+provides input fields and a before/after review for these values. Saves preserve
+TOML comments, reject stale forms, and replace the local file atomically. The
+listener reloads supported changes between requests; the current request finishes
+with its original settings. The page distinguishes saved settings from a matching
+revision applied by the connected listener. Configuration errors pause queued
+work until repaired. Existing paused threads remain paused.
+
+Directory editing requires managed file access. Paths must already exist and
+cannot expose the configuration, state, or protected paths; writable roots also
+exclude the installed agent code. Removing
+write access revokes grants outside the remaining writable boundaries. A grant
+permits text-file writes only; it never authorizes deletion, Git commands, or
+external actions. Directory and grant changes require a review before saving.
+Channel, identity, credential, and backend changes remain outside these forms and
+require a local configuration update and restart. Settings and grant decisions
+are audited in SQLite. Dashboard operations do not call a model.
+
+The server uses the existing aiohttp dependency, binds only to IPv4 loopback,
+and rejects foreign Host/Origin headers and cross-site requests. Control routes
+require the local key; writes also require same-origin JSON. File contents are
+available only after authentication. Read-only views still expose local Slack
+history and paths to other users or processes on this Mac. Keep the monitor
+local; do not expose it through a public tunnel or proxy. Recognizable tokens
+are masked in monitoring data, but this is not a general secret detector.
+
+UI references: [Flower](https://flower.readthedocs.io/en/latest/) for worker and
+task health, [Bull Board](https://github.com/felixmosh/bull-board) for status
+filters, and [Langfuse sessions](https://langfuse.com/docs/observability/features/sessions)
+for conversation timelines. These are design references, not dependencies.
+
 ## Local state and recovery
 
 State defaults to `~/.local/state/fridica/state.sqlite3`; override `state_path`
@@ -538,11 +678,13 @@ custom backends should send the matching section as their instruction.
 
 ```bash
 python -m pytest
+node --test tests/dashboard.test.cjs
 python -m build --no-isolation
 fridica --help
 python -m fridica --version
 ```
 
+Frontend regression tests use Node 22 or later and its built-in test runner, with no npm dependencies.
 Tests use fake Slack clients and fake agent processes and require no tokens or
 live model calls. For a live smoke test, select one test channel and an empty
 project directory, run `doctor`, then run `start --observe-only`. Have another

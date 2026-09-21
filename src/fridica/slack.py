@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 import re
 
 import aiohttp
@@ -122,13 +123,15 @@ class SlackTransport:
         return timestamp
 
 
-async def serve(config: Config, store, agent, observe_only: bool = False) -> None:
+async def serve(config: Config, store, agent, observe_only: bool = False, config_path=None) -> None:
+    started_at = time.time()
+    store.heartbeat('connecting', observe_only, started_at)
     app_token, user_token = config.tokens()
     async with aiohttp.ClientSession() as session:
         web = AsyncWebClient(token=user_token, session=session, retry_handlers=[])
         transport = SlackTransport(config, web)
         await transport.validate()
-        replica = Replica(config, store, agent, transport, observe_only)
+        replica = Replica(config, store, agent, transport, observe_only, config_path=config_path)
         socket = SocketModeClient(app_token=app_token, web_client=web)
 
         async def receive(client, request):
@@ -142,10 +145,19 @@ async def serve(config: Config, store, agent, observe_only: bool = False) -> Non
                         logger.warning("Ignored a message that mentions you: %s", reason)
             await client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
+        async def heartbeat():
+            while True:
+                connected = await socket.is_connected()
+                store.heartbeat('connected' if connected else 'reconnecting', observe_only, started_at)
+                await asyncio.sleep(5)
+
         socket.socket_mode_request_listeners.append(receive)
         try:
             await socket.connect()
             logger.info("Listening as %s in %d configured channels", config.owner_id, len(config.channels))
-            await replica.run()
+            async with asyncio.TaskGroup() as workers:
+                workers.create_task(heartbeat())
+                workers.create_task(replica.run())
         finally:
             await socket.close()
+            store.heartbeat('stopped', observe_only, started_at)

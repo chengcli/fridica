@@ -323,6 +323,8 @@ class CodexBackend(CLIBackend):
             if self.config.additional_workspaces:
                 roots = json.dumps([str(workspace) for workspace in self.config.additional_workspaces])
                 settings += [f"sandbox_workspace_write.writable_roots={roots}"]
+        if self.config.reasoning_effort:
+            settings += ["model_reasoning_effort=" + json.dumps(self.config.reasoning_effort)]
         for setting in settings:
             command += ["-c", setting]
         if self.config.model:

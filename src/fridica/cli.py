@@ -14,13 +14,13 @@ from . import __version__
 from .config import DEFAULT_CONFIG, TEMPLATE, load_config, set_slack_ids
 
 
-async def _start(config, observe_only: bool) -> None:
+async def _start(config, observe_only: bool, config_path=None) -> None:
     from .agents import create_backend
     from .slack import serve
     from .store import Store
 
     store = Store(config.state_path)
-    worker = asyncio.create_task(serve(config, store, None if observe_only else create_backend(config), observe_only))
+    worker = asyncio.create_task(serve(config, store, None if observe_only else create_backend(config), observe_only, config_path=config_path))
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(signum, worker.cancel)
@@ -53,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
         if name == "start":
             command.add_argument("--observe-only", action="store_true", help="Record events without invoking agents or posting")
+    dashboard = commands.add_parser("dashboard", help="Open a read-only local monitoring server")
+    dashboard.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    dashboard.add_argument("--port", type=int, default=8765)
+    dashboard.add_argument("--allow-approvals", action="store_true", help="Enable authenticated local decisions and configuration editing")
     permissions = commands.add_parser("permissions", help="Inspect and authorize scoped file requests locally")
     actions = permissions.add_subparsers(dest="action", required=True)
     for name in ("status", "grant", "revoke", "approve", "reject"):
@@ -108,6 +112,10 @@ def main(argv: list[str] | None = None) -> int:
             from .doctor import run_doctor
             return run_doctor(args.config)
         config = load_config(args.config)
+        if args.command == "dashboard":
+            from .dashboard import serve_dashboard
+            serve_dashboard(config, args.port, args.allow_approvals, config_path=args.config.expanduser())
+            return 0
         if args.command == "permissions":
             from .permissions import Permissions
             from .store import Store
@@ -151,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                 for problem in problems:
                     print(problem, file=sys.stderr)
                 return 1
-        asyncio.run(_start(config, args.observe_only))
+        asyncio.run(_start(config, args.observe_only, config_path=args.config.expanduser()))
         return 0
     except (ValueError, OSError) as error:
         if isinstance(error, ValueError):

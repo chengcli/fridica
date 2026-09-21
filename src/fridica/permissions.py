@@ -243,6 +243,9 @@ class Permissions:
             message = Message(**json.loads(self.store.get(request['event_id'])['payload']))
             if message.workspace_id != self.config.workspace_id or message.channel_id not in self.config.channels:
                 continue
+            task = self.store.task(message)
+            if task and task['control_state'] != 'active':
+                continue
             if request['status'] == 'rejected':
                 result = AgentResult('The file request was declined locally.', 'complete')
             elif request['status'] == 'approved':
