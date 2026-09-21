@@ -47,6 +47,7 @@ class Config:
     contract: Path | None = None
     file_access: bool = False
     read_only_workspaces: tuple[Path, ...] = ()
+    allowed_domains: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for label, value, pattern in (
@@ -86,6 +87,12 @@ class Config:
                 raise ValueError(f"{name} must name an environment variable")
         if self.read_only_workspaces and not self.file_access:
             raise ValueError("read_only_workspaces requires file_access")
+        if not isinstance(self.allowed_domains, (list, tuple)) or any(
+            not isinstance(domain, str)
+            or (domain != "*" and not re.fullmatch(r"(\*\.)?([a-z0-9-]{1,63}\.)+[a-z]{2,63}", domain.lower()))
+            for domain in self.allowed_domains
+        ):
+            raise ValueError('allowed_domains must list host names such as github.com or *.example.org, or "*" for every host')
         for directory in (self.workspace, *self.additional_workspaces, *self.read_only_workspaces):
             if not directory.is_absolute() or not directory.is_dir():
                 raise ValueError("workspace roots must be existing absolute directories")
@@ -174,6 +181,10 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
         if not isinstance(roots, list) or any(not isinstance(root, str) or not root for root in roots):
             raise ValueError(f"{key} must be a list of paths")
         values[key] = tuple(Path(root).expanduser() for root in roots)
+    domains = values.get("allowed_domains", [])
+    if not isinstance(domains, list):
+        raise ValueError("allowed_domains must be a list of host names")
+    values["allowed_domains"] = tuple(dict.fromkeys(str(domain).lower() for domain in domains))
     if "contract" in values:
         if not isinstance(values["contract"], str) or not values["contract"]:
             raise ValueError("contract must be a nonempty path")
@@ -199,6 +210,10 @@ additional_workspaces = []
 # Use scoped file operations instead of the agent's native workspace tools.
 file_access = false
 read_only_workspaces = []
+# Hosts that task commands may reach, e.g. ["github.com", "*.pypi.org"]; ["*"] allows
+# every host. Empty keeps task-command network access disabled. Codex cannot filter
+# by host: any entry enables full network access for Codex tasks.
+allowed_domains = []
 backend = "claude"
 # model = "your-preferred-model"
 # reasoning_effort = "low"  # Codex only

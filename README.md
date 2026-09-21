@@ -249,6 +249,7 @@ cooldown = 60
 max_turns = 6
 resume_sessions = true
 session_timeout = 1209600
+allowed_domains = []
 ```
 
 ### Agent contract
@@ -395,7 +396,8 @@ one ephemeral session per reply.
 
 The selected agent can read, edit, and run commands using its provider-supported
 sandbox in the configured workspace roots. Task-command network access is
-disabled. Provider API access is still needed to run the model. Claude requires
+disabled unless `allowed_domains` lists hosts (see
+[Network access](#network-access)). Provider API access is still needed to run the model. Claude requires
 its [sandbox dependencies](#sandbox-dependencies-on-linux). Fridica does
 not enable bypass-permission flags or automatically approve broader access.
 Claude enables native Edit and Write tools in `acceptEdits` mode for the workspace
@@ -405,6 +407,12 @@ use its `workspace-write` sandbox. No blanket permission-bypass flag is enabled.
 OS file permissions, managed policies, and provider-protected paths still apply;
 this does not grant administrator access or unrestricted writes outside the roots.
 Blocked actions require local intervention; there is no remote approval UI.
+Inside a run, Claude may attempt calls the policy forbids, such as network
+access or a write outside the roots; the CLI denies each one, tells the model,
+and the model continues. The reply is still delivered, the contract requires it
+to say what it could not do, and the local log lists every denied call with its
+tool and target (command or path, never file contents) so you can widen access
+deliberately. Codex enforces the same policy inside its own sandbox.
 
 Only grant access to project directories you intend Slack participants to use.
 The provider sandboxes may permit reads beyond writable project directories and
@@ -418,6 +426,32 @@ with `resume_sessions`, resumes only sessions it created; existing desktop
 conversations are not imported. The optional `model` setting
 is passed to the selected provider. No model name or paid API key is required by
 Fridica itself; each CLI uses its own authentication and billing.
+
+### Network access
+
+By default, commands the agent runs cannot reach the network: `git fetch`,
+`pip install`, and similar calls are denied inside the run, the model is told,
+and the reply says what it could not do. To allow specific hosts, list them:
+
+```toml
+allowed_domains = ["github.com", "*.pypi.org"]
+```
+
+Entries are host names, optionally with a leading `*.` wildcard, and are
+lower-cased. A single `"*"` entry allows every host, which is full internet
+access for task commands. They apply only to task runs; classification never has network
+access, and the model's own API traffic is unaffected. Restart the daemon after
+changing the list.
+
+| Backend | Effect of a non-empty list |
+| --- | --- |
+| Claude | The sandbox proxy admits outbound requests to the listed hosts only; anything else is denied inside the run. Traffic must pass through the proxy, so HTTPS remotes are the reliable choice; SSH remotes generally do not connect from inside the sandbox. |
+| Codex | Codex cannot filter by host, so any entry enables full network access for Codex task commands (`sandbox_workspace_write.network_access=true`). |
+
+Network access lets a Slack request send workspace contents to the listed hosts
+and fetch code from them. List only hosts you trust, keep credentials out of the
+workspace roots, and remember that anyone in an allowed channel can trigger a
+run. Leave the list empty to keep the previous behavior.
 
 ### Scoped file access
 

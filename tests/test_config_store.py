@@ -11,7 +11,9 @@ from fridica.store import Store
 @pytest.mark.parametrize("changes", [
     {"channels": ()}, {"channels": "CROOM"}, {"owner_id": "wrong"},
     {"timeout": float("nan")}, {"cooldown": -1}, {"max_turns": True},
-    {"context_limit": 1.5}, {"backend": "other"}, {"general_messages": "yes"}, {"resume_sessions": 1}, {"contract": Path("relative.md")}, {"session_timeout": -1}, {"session_timeout": "2w"},
+    {"context_limit": 1.5}, {"backend": "other"}, {"general_messages": "yes"}, {"resume_sessions": 1}, {"contract": Path("relative.md")}, {"session_timeout": -1}, {"session_timeout": "2w"}, {"allowed_domains": ["not a host"]},
+    {"allowed_domains": ["github.com/path"]}, {"allowed_domains": "github.com"}, {"allowed_domains": ["localhost"]},
+    {"allowed_domains": ["**"]}, {"allowed_domains": ["*github.com"]},
     {"app_token_env": "invalid-name"},
 ])
 def test_invalid_config(config, changes):
@@ -107,3 +109,11 @@ def test_tasks_table_gains_session_column(config):
         assert row["session"] is None and row["task_id"] == "task"
     finally:
         database.close()
+
+
+def test_allowed_domains_accepts_wildcards(config, tmp_path):
+    assert replace(config, allowed_domains=("*",)).allowed_domains == ("*",)
+    source = tmp_path / "config.toml"
+    source.write_text(f'owner_id="UOWNER"\nworkspace_id="TTEAM"\nchannels=["CROOM"]\nworkspace="{config.workspace}"\n'
+                      f'state_path="{config.state_path}"\nallowed_domains=["GitHub.com", "*.PyPI.org", "github.com", "*"]\n')
+    assert load_config(source).allowed_domains == ("github.com", "*.pypi.org", "*")
