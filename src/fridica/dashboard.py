@@ -28,6 +28,8 @@ def snapshot(config: Config, *, compact=False) -> dict:
         'config': {'owner': config.owner_id, 'workspace': config.workspace_id,
                    'channels': list(config.channels), 'backend': config.backend, 'model': config.model, 'reasoning_effort': config.reasoning_effort, 'max_wait_replies': config.max_wait_replies, 'max_turns': config.max_turns,
                    'file_access': config.file_access,
+                   'allowed_domains': list(config.allowed_domains), 'resume_sessions': config.resume_sessions,
+                   'session_timeout': config.session_timeout,
                    'write_roots': [str(p) for p in (config.workspace, *config.additional_workspaces)],
                    'read_roots': [str(p) for p in config.read_only_workspaces]},
     }
@@ -77,14 +79,18 @@ def snapshot(config: Config, *, compact=False) -> dict:
         data['grants'] = [dict(r) for r in db.execute(
             f'SELECT id,sender,channel,path,expires FROM grants WHERE channel IN ({placeholders}) '
             'AND revoked=0 AND (expires IS NULL OR expires>?) ORDER BY id LIMIT 100', (*config.channels, now))]
-        for row in ([] if compact else db.execute(f'SELECT channel,thread,task_id,status,turns,updated FROM tasks WHERE {scope} ORDER BY updated DESC LIMIT 100', params)):
+        for row in ([] if compact else db.execute(f'SELECT channel,thread,task_id,status,turns,updated,control_state,continuation,debriefed_turn FROM tasks WHERE {scope} ORDER BY updated DESC LIMIT 100', params)):
             task = dict(row)
+            if task['control_state'] == 'paused' and task['continuation'] not in (None, 'pending', 'failed'):
+                task['status'] = 'continued'
+            elif task['status'] == 'complete' and 0 < task['debriefed_turn'] and task['debriefed_turn'] >= task['turns']:
+                task['status'] = 'finished'
             # Delivery errors do not update the task row. Use the latest request's state.
             latest = db.execute("SELECT event_id,state FROM events WHERE workspace=? AND channel=? AND thread=? "
                                 "AND task_id=? AND reply_only=0 AND event_id NOT LIKE 'outgoing:%' ORDER BY timestamp DESC LIMIT 1",
                                 (config.workspace_id, task['channel'], task['thread'], task['task_id'])).fetchone()
             if latest:
-                if latest['state'] in {'failed', 'ambiguous', 'interrupted', 'running', 'sending', 'ready', 'blocked'}:
+                if latest['state'] in {'failed', 'ambiguous', 'interrupted', 'running', 'sending', 'ready', 'blocked'} and task['status'] != 'continued':
                     task['status'] = latest['state']
                 request = db.execute('SELECT status FROM file_requests WHERE event_id=?', (latest['event_id'],)).fetchone()
                 if request and request['status'] == 'pending':
@@ -105,9 +111,9 @@ def task_page(config, *, view='all', query='', offset=0, limit=50, channel=None,
     scope = f'workspace=? AND channel IN ({placeholders})'
     sql = f'''
     WITH threads AS (
-      SELECT channel,thread,task_id,status,updated,turns,control_state,pause_reason,control_revision FROM tasks WHERE {scope}
+      SELECT channel,thread,task_id,status,updated,turns,control_state,pause_reason,control_revision,continuation,debriefed_turn FROM tasks WHERE {scope}
       UNION ALL
-      SELECT channel,thread,'thread:'||thread,'pending',max(timestamp),0,'active',NULL,0 FROM events e
+      SELECT channel,thread,'thread:'||thread,'pending',max(timestamp),0,'active',NULL,0,NULL,0 FROM events e
       WHERE {scope} AND state IN ('pending','running','failed','interrupted','ambiguous','blocked')
       AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.workspace=e.workspace AND t.channel=e.channel AND t.thread=e.thread)
       GROUP BY channel,thread
@@ -127,11 +133,13 @@ def task_page(config, *, view='all', query='', offset=0, limit=50, channel=None,
         ORDER BY x.timestamp DESC LIMIT 1)
     ), states AS (
       SELECT *, CASE
+        WHEN control_state='paused' AND continuation IS NOT NULL AND continuation NOT IN ('pending','failed') THEN 'continued'
         WHEN control_state IN ('paused','closed','archived','cleaned') THEN control_state
         WHEN approvals>0 THEN 'awaiting_approval'
         WHEN operation_status IN ('approved','applying','rejected') THEN operation_status
         WHEN operation_status IN ('failed','interrupted') THEN operation_status
         WHEN delivery IN ('pending','running','ready','sending','failed','interrupted','ambiguous','blocked') THEN delivery
+        WHEN debriefed_turn>0 AND debriefed_turn>=turns AND coalesce(json_extract(result,'$.status'),status)='complete' THEN 'finished'
         ELSE coalesce(json_extract(result,'$.status'),status) END AS current_status
       FROM rows
     ), classified AS (

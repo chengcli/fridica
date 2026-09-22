@@ -25,7 +25,10 @@ def activity_page(config, *, view='current', offset=0, before=None):
             sql+=f" UNION ALL SELECT 'decision:'||d.request_id,e.channel,d.decided_at,'decision',d.owner,r.operation||' '||r.path,d.decision FROM dashboard_decisions d JOIN file_requests r ON r.id=d.request_id JOIN events e ON e.event_id=r.event_id WHERE e.workspace=? AND e.channel IN ({marks})"
             args+=(config.workspace_id,*config.channels)
         if 'thread_decisions' in tables:
-            sql+=f" UNION ALL SELECT 'control:'||rowid,channel,decided_at,'control',?,action||' request',action FROM thread_decisions WHERE workspace=? AND channel IN ({marks})"
+            sql+=(f" UNION ALL SELECT 'control:'||rowid,channel,decided_at,'control',?,"
+                  "CASE action WHEN 'continued' THEN 'Turn limit reached; summary posted as a new thread' "
+                  "WHEN 'debriefed' THEN 'Discussion finished; debrief posted to the channel' ELSE action||' request' END,"
+                  f"action FROM thread_decisions WHERE workspace=? AND channel IN ({marks})")
             args+=(config.owner_id,config.workspace_id,*config.channels)
         if 'activity_archives' in tables:
             sql='SELECT c.*,coalesce(a.before,0) archived_before FROM ('+sql+') c LEFT JOIN activity_archives a ON a.channel=c.channel AND a.workspace=?'

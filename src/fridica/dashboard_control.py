@@ -181,11 +181,13 @@ def thread_action(config, channel, thread, action, expected, cleanup_revision=No
         current = task['control_state']
         if action == 'resume' and current == 'paused':
             _idle(db, config, channel, thread, files=False)
-            db.execute("UPDATE tasks SET control_state='active',pause_reason=NULL,reset_at=?,turns=0,session=NULL WHERE workspace=? AND channel=? AND thread=?", (time.time(), *args))
+            # A resumed thread gets a fresh budget and may be wrapped up again when it reaches the limit.
+            db.execute("UPDATE tasks SET control_state='active',pause_reason=NULL,reset_at=?,turns=0,session=NULL,continuation=NULL WHERE workspace=? AND channel=? AND thread=?", (time.time(), *args))
         elif action == 'close' and current in ('active','paused'):
             _idle(db, config, channel, thread)
             db.execute("UPDATE tasks SET control_state='closed',status='closed',session=NULL WHERE workspace=? AND channel=? AND thread=?", args)
-        elif action == 'archive' and (current == 'closed' or current == 'active' and task['status'] == 'complete'):
+        elif action == 'archive' and (current == 'closed' or current == 'active' and task['status'] == 'complete'
+                                       or current == 'paused' and task.get('continuation') not in (None, 'pending', 'failed')):
             _idle(db, config, channel, thread)
             db.execute("UPDATE tasks SET control_state='archived' WHERE workspace=? AND channel=? AND thread=?", args)
         elif action == 'restore' and current == 'archived':

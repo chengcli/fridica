@@ -94,14 +94,20 @@ class SlackTransport:
                 raise ValueError("owner must belong to every configured Slack channel")
 
     async def send(self, message: Message, result: AgentResult, task_id: str, turn: int) -> str:
+        return await self._post(message.channel_id, result.text, task_id, turn, result.status, thread_ts=message.thread_id)
+
+    async def announce(self, message: Message, text: str, task_id: str) -> str:
+        """Post a new top-level message in the channel (the root of a continuation thread)."""
+        return await self._post(message.channel_id, text, task_id, 0, "complete", thread_ts=None)
+
+    async def _post(self, channel: str, text: str, task_id: str, turn: int, status: str, *, thread_ts: str | None) -> str:
         try:
-            response = await self.client.chat_postMessage(
-                channel=message.channel_id, thread_ts=message.thread_id, text=result.text,
-                unfurl_links=False, unfurl_media=False,
-                metadata={"event_type": "fridica_message", "event_payload": {
-                    "owner": self.config.owner_id, "task_id": task_id, "turn": turn, "status": result.status,
-                }},
-            )
+            arguments = {"channel": channel, "text": text, "unfurl_links": False, "unfurl_media": False,
+                         "metadata": {"event_type": "fridica_message", "event_payload": {
+                             "owner": self.config.owner_id, "task_id": task_id, "turn": turn, "status": status}}}
+            if thread_ts is not None:
+                arguments["thread_ts"] = thread_ts
+            response = await self.client.chat_postMessage(**arguments)
         except SlackApiError as error:
             if error.response.status_code == 429:
                 header = error.response.headers.get("Retry-After", error.response.headers.get("retry-after", "30"))

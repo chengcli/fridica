@@ -108,3 +108,27 @@ def test_init_copies_contract(tmp_path, capsys):
     target.unlink()
     assert main(["init", "--config", str(target)]) == 0
     assert contract.read_text().endswith("mine\n")
+
+
+def test_thread_summaries_section_is_optional_and_separate(tmp_path):
+    default = load_contract(None)
+    assert "Summarize the Slack thread" in default.summaries
+    assert "Summarize the Slack thread" not in default.replies and "## Thread summaries" not in default.replies
+    custom = tmp_path / "contract.md"
+    custom.write_text("## Participation\n\nnever\n\n## Replies\n\nbe brief\n")
+    contract = load_contract(custom)
+    assert contract.replies == "be brief" and contract.summaries == default.summaries
+    custom.write_text("## Participation\n\nnever\n\n## Replies\n\nbe brief\n\n## Summary\n\nMY SUMMARY RULES\n")
+    contract = load_contract(custom)
+    assert contract.summaries == "MY SUMMARY RULES" and "MY SUMMARY RULES" not in contract.replies
+
+
+def test_debriefs_section_is_optional_and_separate(tmp_path):
+    default = load_contract(None)
+    assert "closing debrief" in default.debriefs and "closing debrief" not in default.replies
+    assert "Set discussion to finished only when" in default.replies
+    custom = tmp_path / "contract.md"
+    custom.write_text("## Participation\n\nnever\n\n## Replies\n\nbe brief\n\n## Debrief\n\nMY DEBRIEF RULES\n")
+    contract = load_contract(custom)
+    assert contract.debriefs == "MY DEBRIEF RULES" and contract.summaries == default.summaries
+    assert "MY DEBRIEF RULES" not in contract.replies

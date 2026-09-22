@@ -125,3 +125,27 @@ def test_review_diff_keeps_unterminated_lines_separate(config, store, message):
     assert diff.splitlines() == ['--- Before', '+++ After', '@@ -1 +1 @@',
                                  '-old', '\\ No newline at end of file',
                                  '+new', '\\ No newline at end of file']
+
+
+def test_continued_thread_can_be_archived_and_resume_clears_continuation(config, store, message):
+    from fridica.dashboard_control import thread_action
+    from fridica.models import AgentResult
+    store.bind(config.owner_id, config.workspace_id)
+    msg = message()
+    store.add(msg)
+    store.begin(msg, 't1', 6)
+    store.save_result(msg, AgentResult('done'))
+    store.delivered(msg, '100.000002')
+    store.pause_loop(msg, 6, 3)
+    store.begin_continuation(msg)
+    store.finish_continuation(msg, '900.000001', 't2', None)
+    task = store.task(msg)
+    assert task['control_state'] == 'paused' and task['continuation'] == '900.000001'
+    thread_action(config, 'CROOM', msg.thread_id, 'resume', task['control_revision'])
+    resumed = store.task(msg)
+    assert resumed['control_state'] == 'active' and resumed['continuation'] is None and resumed['turns'] == 0
+    with store.connection:
+        store.connection.execute("UPDATE tasks SET control_state='paused',continuation='900.000001' WHERE thread=?", (msg.thread_id,))
+    task = store.task(msg)
+    thread_action(config, 'CROOM', msg.thread_id, 'archive', task['control_revision'])
+    assert store.task(msg)['control_state'] == 'archived'
