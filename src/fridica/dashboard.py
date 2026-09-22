@@ -155,6 +155,7 @@ def task_page(config, *, view='all', query='', offset=0, limit=50, channel=None,
     with database(config, require_identity=False) as db:
         result['senders'] = [r['sender'] for r in db.execute(
             sql+"SELECT DISTINCT sender FROM classified WHERE bucket!='cleaned' AND sender IS NOT NULL ORDER BY sender", parameters)]
+        has_notes = db.execute("SELECT 1 FROM sqlite_master WHERE name='collaboration'").fetchone()
         preferences = metadata(config)
         names = preferences['names']
         matching_names = json.dumps([identifier for identifier, name in names.items() if query.casefold() in name.casefold()])
@@ -172,6 +173,13 @@ def task_page(config, *, view='all', query='', offset=0, limit=50, channel=None,
             item['status'] = item.pop('current_status')
             response = json.loads(item.pop('result') or '{}')
             item['next_step'] = response.get('text', '')[:1200]
+            item['repo'] = None
+            if has_notes:
+                note = db.execute("SELECT json_extract(c.data,'$.repo') FROM collaboration c JOIN tasks t "
+                                  'ON c.workspace=t.workspace AND c.channel=t.channel AND c.root_thread=COALESCE(t.root_thread,t.thread) '
+                                  'WHERE t.workspace=? AND t.channel=? AND t.thread=?',
+                                  (config.workspace_id, item['channel'], item['thread'])).fetchone()
+                item['repo'] = note[0] if note else None
             result['items'].append(item)
     for item in result['items']:
         item['project_id'] = preferences['task_projects'].get(item['channel']+':'+item['thread'])
@@ -186,6 +194,13 @@ def thread_detail(config, channel, thread, offset=0):
         return result
     with database(config, require_identity=False) as db:
         args = (config.workspace_id, channel, thread)
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='collaboration'").fetchone() and db.execute('SELECT 1 FROM tasks WHERE workspace=? AND channel=? AND thread=?', args).fetchone():
+            from .collaboration import snapshot as task_notes
+            result['collaboration'] = task_notes(db, config, channel, thread)
+            result['collaboration'].pop('last_reply', None)
+            result['collaboration']['history'] = [dict(row) for row in db.execute(
+                'SELECT revision,actor,created FROM collaboration_history WHERE workspace=? AND channel=? AND root_thread=(SELECT COALESCE(root_thread,thread) FROM tasks WHERE workspace=? AND channel=? AND thread=?) ORDER BY revision DESC LIMIT 20',
+                (config.workspace_id, channel, *args))]
         scope = 'workspace=? AND channel=? AND thread=?'
         result['total'] = db.execute('SELECT count(*) FROM events WHERE '+scope, args).fetchone()[0]
         for row in db.execute('SELECT * FROM events WHERE '+scope+' ORDER BY timestamp DESC LIMIT 50 OFFSET ?', (*args, offset)):
@@ -291,6 +306,19 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
             return web.json_response(result)
         except (ValueError, TypeError, OSError, sqlite3.Error) as error:
             return web.json_response({'error': str(error) if isinstance(error, ValueError) else 'Cannot save project details.'}, status=409)
+
+    async def task_notes(request):
+        from .collaboration import owner_update
+        authorize(request, write=True)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError('Expected task notes and revision')
+            result = await asyncio.to_thread(owner_update, config, body.get('channel'), body.get('thread'),
+                                            body.get('revision'), body.get('changes'), body.get('correction'))
+            return web.json_response(result)
+        except (ValueError, TypeError, OSError, sqlite3.Error) as error:
+            return web.json_response({'error': str(error) if isinstance(error, ValueError) else 'Cannot save task notes.'}, status=409)
 
     async def lifecycle(request):
         from .dashboard_control import cleanup_preview, thread_action
@@ -418,6 +446,8 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
             data['summary'] = overview['counts']
             data['names'] = value['names']
             data['projects'] = list(value['projects'].values())
+            from .repos import load_repos
+            data['repositories'] = [repo.payload() for repo in load_repos(config.repos)]
             data['approvals_enabled'] = bool(approval_key)
             data['settings_enabled'] = config_path is not None
             if config_path is not None:
@@ -451,6 +481,7 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
     app.router.add_post('/api/requests/{id}/decision', decision)
     app.router.add_post('/api/projects', project)
     app.router.add_post('/api/task-project', project)
+    app.router.add_post('/api/task-notes', task_notes)
     app.router.add_post('/api/stop', stop)
     app.router.add_post('/api/activity/archive', archive_activity)
     app.router.add_get('/api/settings', settings)

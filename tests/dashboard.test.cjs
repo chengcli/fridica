@@ -10,6 +10,7 @@ function dashboard() {
   const nodes = new Map();
   const context = vm.createContext({
     URLSearchParams, AbortSignal, console,
+    Option: function(text, value) {return {textContent:text,value};},
     location: {hash: ''},
     sessionStorage: {getItem: () => null},
     document: {
@@ -17,7 +18,7 @@ function dashboard() {
         if (!nodes.has(id)) nodes.set(id, {value: '', replaceChildren() {}, setAttribute() {}, classList: {toggle() {}}});
         return nodes.get(id);
       },
-      querySelectorAll: () => [], addEventListener() {}, createElement: () => ({dataset: {}, children: [], append(...nodes) {this.children.push(...nodes);}, get firstChild() {return this.children[0];}}),
+      querySelectorAll: () => [], addEventListener() {}, createElement: tag => ({tag, classList:{add(){},toggle(){}}, setAttribute(){}, dataset: {}, children: [], append(...nodes) {this.children.push(...nodes);}, get firstChild() {return this.children[0];}}),
     },
     fetch: () => new Promise(() => {}),
     setTimeout() {}, clearTimeout() {},
@@ -130,4 +131,39 @@ test('resolved names update an open detail without reloading its conversation', 
   `,context);
   await vm.runInContext('refresh()',context);
   assert.equal(context.shownName,'Xi Zhang');
+});
+
+test('task corrections submit only edited fields with the displayed revision', async () => {
+  const context=dashboard();
+  vm.runInContext(`
+    unlocked=true;
+    state={config:{owner:'UOWNER'},names:{UOWNER:'Alex',UALICE:'Taylor'},repositories:[{name:'snapy-cli',owner:'Cheng Li'}]};
+    detail={events:[{sender:'UALICE'}]};
+    selected={channel:'CROOM',thread:'A',control_state:'active'};
+    globalThis.notes={revision:4,no_progress:1,data:{repo:'snapy-cli',assignee:'UALICE',next_step:'Wait for review',claims:[]}};
+    globalThis.panel=taskNotes(selected,notes);
+    api=async(path,body)=>{globalThis.saved={path,body};return {saved:true};};
+    loadDetail=async()=>{};
+  `,context);
+  function find(node,predicate) {if(predicate(node))return node;for(const child of node.children||[]){const found=find(child,predicate);if(found)return found;}}
+  const form=find(context.panel,node=>node.tag==='form');
+  assert.ok(form);
+  const next=find(form,node=>node.name==='next_step');
+  next.value='Review is complete';
+  await form.onsubmit({preventDefault(){}});
+  assert.equal(context.saved.path,'/api/task-notes');
+  assert.equal(context.saved.body.revision,4);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.saved.body.changes)),{next_step:'Review is complete'});
+  assert.equal(context.saved.body.correction,undefined);
+});
+
+test('read-only task notes do not render correction controls', () => {
+  const context=dashboard();
+  vm.runInContext(`
+    unlocked=false;
+    state={config:{owner:'UOWNER'},names:{},repositories:[]};
+    globalThis.panel=taskNotes({thread:'A'}, {revision:1,no_progress:0,data:{claims:[{text:'Peer says approved',basis:'reported',state:'current'}]}});
+  `,context);
+  function tags(node){return [node.tag,...(node.children||[]).flatMap(tags)];}
+  assert.ok(!tags(context.panel).includes('form'));
 });

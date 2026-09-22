@@ -100,13 +100,17 @@ class Store:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN session TEXT")
         for name, definition in {"control_state": "TEXT NOT NULL DEFAULT 'active'", "pause_reason": "TEXT",
                                  "reset_at": "REAL NOT NULL DEFAULT 0", "control_revision": "INTEGER NOT NULL DEFAULT 0",
-                                 "continuation": "TEXT", "debriefed_turn": "INTEGER NOT NULL DEFAULT 0"}.items():
+                                 "root_thread": "TEXT", "continuation": "TEXT", "digest_pending": "INTEGER NOT NULL DEFAULT 0", "debriefed_turn": "INTEGER NOT NULL DEFAULT 0"}.items():
             if name not in columns:
                 self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
         self.connection.execute("CREATE TABLE IF NOT EXISTS thread_decisions (workspace TEXT, channel TEXT, thread TEXT, action TEXT, decided_at REAL)")
+        from .collaboration import initialize
+        initialize(self.connection)
         self.connection.commit()
         if not control:
             with self.connection:
+                self.connection.execute("UPDATE tasks SET digest_pending=0")
+                self.connection.execute("UPDATE tasks SET continuation='failed' WHERE continuation='pending'")
                 self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
                 self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
                 self.connection.execute("UPDATE file_requests SET status='interrupted' WHERE status='applying'")
@@ -238,7 +242,7 @@ class Store:
         """Claim the debrief for the thread's current turn; False when this turn was already debriefed."""
         with self.connection:
             cursor = self.connection.execute(
-                "UPDATE tasks SET debriefed_turn=turns WHERE workspace=? AND channel=? AND thread=? AND debriefed_turn<turns",
+                "UPDATE tasks SET debriefed_turn=turns,digest_pending=1 WHERE workspace=? AND channel=? AND thread=? AND debriefed_turn<turns",
                 self._key(message),
             )
         return cursor.rowcount == 1
@@ -279,6 +283,8 @@ class Store:
                     "ON CONFLICT(workspace,channel,thread) DO NOTHING",
                     (message.workspace_id, message.channel_id, continuation, task_id, "complete", 0, time.time(), session),
                 )
+                self.connection.execute("UPDATE tasks SET root_thread=? WHERE workspace=? AND channel=? AND thread=?",
+                                        (self.task(message)["root_thread"] or message.thread_id, message.workspace_id, message.channel_id, continuation))
                 self.connection.execute("INSERT INTO thread_decisions VALUES(?,?,?,?,?)",
                                         (*self._key(message), "continued", time.time()))
 

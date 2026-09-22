@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import math
 import os
@@ -165,20 +165,24 @@ class Permissions:
         try:
             for _ in range(8):
                 plan = await self.agent.plan(message, context, files, roots)
-                if not isinstance(plan, dict) or set(plan) != {'operation', 'path', 'content', 'text'}:
+                if not isinstance(plan, dict) or set(plan) - {'operation', 'path', 'content', 'text', 'update'} or not {'operation', 'path', 'content', 'text'} <= set(plan):
                     raise ValueError('Invalid file plan')
-                if any(not isinstance(value, str) for value in plan.values()):
+                if any(not isinstance(plan[field], str) for field in ('operation', 'path', 'content', 'text')):
                     raise ValueError('Invalid file plan')
+                from .collaboration import validate
+                update = validate(plan['update']) if 'update' in plan else None
                 operation = plan['operation']
+                if operation == 'observe':
+                    return AgentResult('', send=False, update=update)
                 if operation in {'reply', 'clarify'}:
                     if not plan['text'].strip() or len(plan['text']) > 3500:
                         raise ValueError('Invalid reply')
-                    return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete')
+                    return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete', update=update)
                 if operation == 'read':
                     files[plan['path']] = self.files.read(plan['path'])
                     continue
                 if operation not in {'write', 'delete'}:
-                    return AgentResult('This operation requires local handling; file access mode cannot run it.', 'blocked')
+                    return AgentResult('This operation requires local handling; file access mode cannot run it.', 'blocked', update=update)
                 if len(plan['content'].encode('utf-8')) > FILE_LIMIT or '\0' in plan['content']:
                     raise ValueError('File content exceeds the text limit')
                 before = self.files.snapshot(plan['path'])
@@ -195,8 +199,8 @@ class Permissions:
                          plan['path'], plan['content'], before, time.time()),
                     )
                 if operation == 'write' and self.allowed(message, plan['path']):
-                    return self.apply(identifier, automatic=True)
-                return AgentResult(f'File request {identifier} is waiting for local approval.', 'waiting')
+                    return replace(self.apply(identifier, automatic=True), update=update)
+                return AgentResult(f'File request {identifier} is waiting for local approval.', 'waiting', update=update)
             return AgentResult('The file request needs more local context before I can continue.', 'blocked')
         except (ValueError, OSError):
             return AgentResult('The file request could not pass the local access checks. No change was applied.', 'blocked')

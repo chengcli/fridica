@@ -29,6 +29,7 @@ async function api(path, body) {
   return value;
 }
 function projectFor(task) { return state.projects.find(p=>p.id===task.project_id); }
+function repositoryLabel(task) { return task.repo || projectFor(task)?.name || 'No repository linked'; }
 function title(task) { const value=text((task.title || 'Request to review').replace(/^(?:<@[A-Z0-9]+(?:\|[^>]+)?>\s*)+[—–,:-]?\s*/, '')).trim(); return value.split(/(?<=[?。？!！])\s+/)[0].slice(0,180); }
 function setView(next, nextFilter, nextSender = '') {
   senderFilter=nextSender;
@@ -109,8 +110,7 @@ function renderTasks() {
     const main=el('div',undefined,'task-main');
     main.append(el('div',title(task),'task-title'));
     const meta=el('div',undefined,'task-meta');
-    const project=projectFor(task);
-    meta.append(el('span',name(task.sender)),el('span','·'),el('span',project?project.name:'No repository linked'));
+    meta.append(el('span',name(task.sender)),el('span','·'),el('span',repositoryLabel(task)));
     if (task.approvals) meta.append(el('span',`· ${task.approvals} approvals pending`));
     main.append(meta);
     const side=el('div',undefined,'task-side'); side.append(status(task.status),el('time',ago(task.updated)));
@@ -205,6 +205,62 @@ function fileDiff(proposal) {
   }
   return panel;
 }
+function taskNotes(task, notes) {
+  const panel=section('Task & handoff');panel.classList.add('task-notes');
+  const data=notes.data, facts=el('dl',undefined,'facts');
+  const repo=(state.repositories||[]).find(repo=>repo.name===data.repo);
+  for(const [label,value] of [['Repository',data.repo||'Not selected'],['Repository owner',repo?.owner||'—'],['Task owner',data.assignee?name(data.assignee):'Unassigned'],['Next step',data.next_step||'Not recorded'],['Blocked by',data.blocker||'None recorded'],['Continue when',data.unblock_when||'Not recorded'],['Turns without progress',notes.no_progress]]) facts.append(el('dt',label),el('dd',String(value)));
+  panel.append(facts);
+  const claims=data.claims||[];
+  for(const claim of claims.filter(item=>item.state!=='superseded')) {
+    const item=el('div',undefined,'claim');
+    item.append(el('strong',claim.state==='disputed'?'Disputed · needs review':claim.basis==='owner_confirmed'?'Confirmed locally':'Reported · not independently verified'),el('p',text(claim.text)));
+    if(claim.evidence) item.append(el('p',text(claim.evidence),'muted'));
+    if(claim.source_ts) {
+      const link=el('a','Source message ↗');
+      link.href=`https://slack.com/archives/${encodeURIComponent(task.channel)}/p${claim.source_ts.replace('.','')}`;
+      link.target='_blank';link.rel='noopener noreferrer';item.append(link);
+    }
+    panel.append(item);
+  }
+  if(unlocked && !['cleaned','archived'].includes(task.control_state)) {
+    const edit=disclosure('task-edit:'+task.thread,'Correct task or conclusion');
+    const form=el('form'), inputs={};
+    for(const [field,label] of [['repo','Repository'],['assignee','Task owner'],['next_step','Next step'],['blocker','Blocker'],['unblock_when','Continue when']]) {
+      const input=el(field==='repo'||field==='assignee'?'select':'input');input.name=field;
+      if(field==='repo') {input.append(new Option('Not selected',''));for(const repo of state.repositories||[])input.append(new Option(repo.name,repo.name));}
+      if(field==='assignee') {
+        input.append(new Option('Unassigned',''));
+        const ids=new Set([state.config.owner,data.assignee,...detail.events.map(e=>e.sender)].filter(Boolean));
+        for(const id of ids)input.append(new Option(name(id),id));
+      }
+      input.value=data[field]||'';input.maxLength=1000;inputs[field]=input;
+      const row=el('label',label);row.append(input);form.append(row);
+    }
+    const target=el('select');target.append(new Option('No conclusion correction',''));
+    for(const claim of claims.filter(item=>item.state!=='superseded'))target.append(new Option(text(claim.text).slice(0,100),claim.id));
+    const correction=el('textarea'), evidence=el('input');correction.maxLength=evidence.maxLength=1000;
+    for(const [label,input] of [['Conclusion to correct',target],['Corrected conclusion',correction],['Evidence / version / source',evidence]]) {const row=el('label',label);row.append(input);form.append(row);}
+    form.append(el('p','Saves local task context only. It does not grant access, approve an action, send a message, or resume the task.','muted'));
+    const submit=el('button','Save correction','primary');submit.type='submit';form.append(submit);
+    form.onsubmit=async event=>{
+      event.preventDefault();submit.disabled=true;
+      const changes=Object.fromEntries(Object.entries(inputs).filter(([field,input])=>input.value!==(data[field]||'')).map(([field,input])=>[field,input.value]));
+      const body={channel:task.channel,thread:task.thread,revision:notes.revision,changes};
+      if(target.value)body.correction={id:target.value,text:correction.value,evidence:evidence.value};
+      try {await api('/api/task-notes',body);notify('Task context saved. Resume separately when ready.');if(selected===task)await loadDetail(task);}
+      catch(error){notify(error.message,true);}finally{submit.disabled=false;}
+    };
+    edit.append(form);panel.append(edit);
+  }
+  if(notes.history?.length) {
+    const history=disclosure('task-history:'+task.thread,'Correction history');
+    for(const item of notes.history) history.append(el('p',`Revision ${item.revision} · ${item.actor==='agent'?'Agent report':name(item.actor)} · ${when(item.created)}`));
+    panel.append(history);
+  }
+  return panel;
+}
+
 function renderDetail() {
   if (!selected || !detail) return;
   const expanded=new Map([...$('detail-body').querySelectorAll('details[data-key]')].map(panel=>[panel.dataset.key,panel.open]));
@@ -221,12 +277,13 @@ function renderDetail() {
   }
   if (unlocked && task.control_state) {
     const controls=el('div',undefined,'request-controls');
-    if(task.control_state==='paused') controls.append(button('Resume',()=>controlTask('resume',task),'primary'));
+    if(task.control_state==='paused' || task.control_state==='active' && task.status==='blocked') controls.append(button('Resume',()=>controlTask('resume',task),'primary'));
     if(['active','paused'].includes(task.control_state) && !detail.requests.some(r=>!r.notified || ['pending','approved','applying','rejected'].includes(r.status))) controls.append(button('Close request',()=>controlTask('close',task)));
     if(task.control_state==='closed' || task.control_state==='active' && ['complete','finished'].includes(task.status) || task.status==='continued') controls.append(button('Archive',()=>controlTask('archive',task)));
     if(task.control_state==='archived') controls.append(button('Restore',()=>controlTask('restore',task)),button('Preview cleanup',()=>previewCleanup(task),'danger'));
     if(controls.childElementCount) content.push(controls);
   } else if(!unlocked && ['paused','closed','archived'].includes(task.control_state)) content.push(button('Unlock local controls',()=>setView('settings')));
+  if(detail.collaboration) content.push(taskNotes(task,detail.collaboration));
   if(detail.requests.length) {
     const operations=section('File changes');
     operations.append(...detail.requests.map(operationCard));
@@ -247,6 +304,7 @@ function renderDetail() {
     item.firstChild.append(el('span',failed?'!':'·','activity-dot'),description,el('time',ago(event.timestamp)));
     const body=el('div',undefined,'activity-body');
     body.append(el('pre',text(event.text)));
+    if(event.decision==='silent') body.append(el('p','No reply sent · no new information to add.','muted'));
     if (event.result) {
       const result=disclosure('result:'+event.id,delivered?'Reply delivered':'Reply delivery unconfirmed',failed || !delivered,'result-card');
       result.append(el('pre',text(event.result)));
@@ -259,7 +317,7 @@ function renderDetail() {
   content.push(timeline);
   const metadata=disclosure('metadata:'+task.channel+':'+task.thread,'Request details');
   const facts=el('dl',undefined,'facts');
-  for (const [k,v] of [['Requested by',name(task.sender)],['Source',name(task.channel)],['Updated',when(task.updated)],['Project',projectFor(task)?.name || 'No repository linked']]) facts.append(el('dt',k),el('dd',v));
+  for (const [k,v] of [['Requested by',name(task.sender)],['Source',name(task.channel)],['Updated',when(task.updated)],['Project',repositoryLabel(task)]]) facts.append(el('dt',k),el('dd',v));
   metadata.append(facts);
   const link=el('a','Open Slack channel ↗');link.href=`https://slack.com/app_redirect?team=${encodeURIComponent(state.config.workspace)}&channel=${encodeURIComponent(task.channel)}`;link.target='_blank';link.rel='noopener noreferrer';metadata.append(link);
   if (unlocked && state.projects.length) {
@@ -460,9 +518,11 @@ async function refresh() {
         if (!latest) latest=(await api(`/api/tasks?channel=${encodeURIComponent(task.channel)}&thread=${encodeURIComponent(task.thread)}`)).items[0];
         if (request!==refreshRequest || selected!==task) return;
         const changed=latest && JSON.stringify(latest)!==JSON.stringify(task);
-        if (changed) selected=latest;
-        if (!detail || changed) await loadDetail(selected);
-        else if (namesChanged) renderDetail();
+        if (!document.activeElement?.closest('.task-notes form')) {
+          if (changed) selected=latest;
+          if (!detail || changed) await loadDetail(selected);
+          else if (namesChanged) renderDetail();
+        }
       }
     } else if (view==='projects' && (!filledRevision || !document.activeElement?.closest('#projects-view form'))) renderProjects();
     else if (view==='settings') renderSettings();

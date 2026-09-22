@@ -21,7 +21,8 @@ def test_three_waits_pause_without_fourth_model_call_and_survive_restart(config,
     for i in range(3):
         process(replica, message(str(i), timestamp=f'{100+i*2}.000001'))
     assert db.task(message())['control_state'] == 'paused'
-    assert len(agent.responded) == len(transport.sent) == 3
+    assert len(agent.responded) == 3
+    assert len(transport.sent) == 1
     assert task_page(config)['counts']['attention'] == 1
     db.close()
     db = Store(config.state_path)

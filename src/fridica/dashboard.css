@@ -100,3 +100,10 @@
 .config-facts{display:grid;grid-template-columns:max-content 1fr;gap:.35rem 1rem;margin:.75rem 0 0}
 .config-facts dt{font-weight:600;color:var(--muted,#6b7280)}
 .config-facts dd{margin:0}
+
+.task-notes form { display: grid; gap: 12px; margin-top: 14px; }
+.task-notes label { display: grid; gap: 6px; font-size: 13px; }
+.task-notes input, .task-notes select, .task-notes textarea { width: 100%; box-sizing: border-box; }
+.task-notes textarea { min-height: 72px; resize: vertical; }
+.task-notes .claim { padding: 12px 0; border-top: 1px solid var(--line, #dce1e4); }
+.task-notes .claim p { white-space: pre-wrap; overflow-wrap: anywhere; }

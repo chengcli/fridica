@@ -34,6 +34,7 @@ class ConversationContext:
     task_id: str
     turn: int
     session: str | None = None
+    task: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,8 @@ class AgentResult:
     session: str | None = None
     finished: bool = False
     """The agent judged the whole discussion finished: request resolved, every action item done or handed off."""
+    send: bool = True
+    update: dict | None = None
 
 
 class AgentBackend(Protocol):

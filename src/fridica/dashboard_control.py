@@ -147,6 +147,8 @@ def _thread(config, db, channel, thread):
 
 def _idle(db, config, channel, thread, *, files=True):
     args = (config.workspace_id, channel, thread)
+    if db.execute("SELECT 1 FROM tasks WHERE workspace=? AND channel=? AND thread=? AND (continuation='pending' OR digest_pending=1)", args).fetchone():
+        raise ValueError('This request is still processing its summary. Wait for it to settle.')
     if db.execute("SELECT 1 FROM events WHERE workspace=? AND channel=? AND thread=? AND state IN ('pending','running','ready','sending')", args).fetchone():
         raise ValueError('This request is still processing or delivering a reply. Wait for it to settle.')
     if files and db.execute("SELECT 1 FROM file_requests r JOIN events e ON r.event_id=e.event_id WHERE e.workspace=? AND e.channel=? AND e.thread=? AND (r.status IN ('pending','approved','applying','rejected') OR r.notified=0)", args).fetchone():
@@ -159,9 +161,16 @@ def _cleanup_preview(config, db, channel, thread):
         raise ValueError('Archive this request before clearing its contents')
     _idle(db, config, channel, thread)
     args = (config.workspace_id, channel, thread)
+    notes = None
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='collaboration'").fetchone():
+        from .collaboration import key, snapshot
+        lineage = key(db, config, channel, thread)
+        if db.execute("SELECT 1 FROM tasks WHERE workspace=? AND channel=? AND COALESCE(root_thread,thread)=? AND thread!=? AND control_state NOT IN ('closed','archived','cleaned')", (*lineage, thread)).fetchone():
+            raise ValueError('Close or archive the continuation before clearing shared task notes')
+        notes = snapshot(db, config, channel, thread)
     events = [dict(r) for r in db.execute('SELECT * FROM events WHERE workspace=? AND channel=? AND thread=? ORDER BY event_id', args)]
     requests = [dict(r) for r in db.execute('SELECT r.* FROM file_requests r JOIN events e ON e.event_id=r.event_id WHERE e.workspace=? AND e.channel=? AND e.thread=? ORDER BY r.id', args)]
-    raw = json.dumps([task, events, requests], sort_keys=True).encode()
+    raw = json.dumps([task, events, requests, notes], sort_keys=True).encode()
     return {'messages': len(events), 'file_requests': len(requests),
             'revision': hashlib.sha256(raw).hexdigest(), 'control_revision': task['control_revision'],
             'description': 'Permanently clear locally stored message text, replies, file proposals, paths, and diffs for this request. Keep minimal event IDs for deduplication and decision records. Project files and Slack messages are not deleted. This cannot be undone; it is not a secure erase of backups or SQLite journal files.'}
@@ -179,10 +188,13 @@ def thread_action(config, channel, thread, action, expected, cleanup_revision=No
             raise ValueError('Request controls changed. Refresh before deciding.')
         args = (config.workspace_id, channel, thread)
         current = task['control_state']
-        if action == 'resume' and current == 'paused':
+        if action == 'resume' and (current == 'paused' or current == 'active' and task['status'] == 'blocked'):
             _idle(db, config, channel, thread, files=False)
             # A resumed thread gets a fresh budget and may be wrapped up again when it reaches the limit.
-            db.execute("UPDATE tasks SET control_state='active',pause_reason=NULL,reset_at=?,turns=0,session=NULL,continuation=NULL WHERE workspace=? AND channel=? AND thread=?", (time.time(), *args))
+            db.execute("UPDATE tasks SET control_state='active',status='complete',pause_reason=NULL,reset_at=?,turns=0,session=NULL,continuation=NULL WHERE workspace=? AND channel=? AND thread=?", (time.time(), *args))
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='collaboration'").fetchone():
+                from .collaboration import key
+                db.execute("UPDATE collaboration SET no_progress=0,last_reply='' WHERE workspace=? AND channel=? AND root_thread=?", key(db, config, channel, thread))
         elif action == 'close' and current in ('active','paused'):
             _idle(db, config, channel, thread)
             db.execute("UPDATE tasks SET control_state='closed',status='closed',session=NULL WHERE workspace=? AND channel=? AND thread=?", args)
@@ -196,6 +208,12 @@ def thread_action(config, channel, thread, action, expected, cleanup_revision=No
             preview = _cleanup_preview(config, db, channel, thread)
             if preview['revision'] != cleanup_revision:
                 raise ValueError('Request contents changed. Preview again before clearing them.')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='collaboration'").fetchone():
+                from .collaboration import key
+                lineage = key(db, config, channel, thread)
+                db.execute('DELETE FROM collaboration_history WHERE workspace=? AND channel=? AND root_thread=?', lineage)
+                db.execute('DELETE FROM collaboration WHERE workspace=? AND channel=? AND root_thread=?', lineage)
+                db.execute('UPDATE tasks SET session=NULL WHERE workspace=? AND channel=? AND COALESCE(root_thread,thread)=?', lineage)
             db.execute("UPDATE file_requests SET content='',before_content=NULL,path='',error=NULL,result=NULL WHERE event_id IN (SELECT event_id FROM events WHERE workspace=? AND channel=? AND thread=?)", args)
             db.execute("UPDATE events SET payload=json_set(payload,'$.text',''),result=NULL,decision='cleaned',reply_only=1 WHERE workspace=? AND channel=? AND thread=?", args)
             db.execute("UPDATE tasks SET control_state='cleaned',pause_reason=NULL,session=NULL WHERE workspace=? AND channel=? AND thread=?", args)

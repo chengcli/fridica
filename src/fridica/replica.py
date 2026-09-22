@@ -9,6 +9,7 @@ gate, budget, decide, respond, deliver, follow up.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import re
 import time
 import uuid
 
+from . import collaboration
 from .config import Config
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message, Transport
 from .replies import format_reply
@@ -129,20 +131,38 @@ class Replica:
             context = ConversationContext(
                 self.store.context(message, self.config.context_limit), self.config.owner_id, self.config.profile,
                 task_id, turn, session=self._session(message, task),
+                task=collaboration.snapshot(self.store.connection, self.config, message.channel_id, message.thread_id)["data"] if task else {},
             )
             mentioned = self._mentions_owner(message)
-            mandatory = mentioned and not message.generated and message.sender_id != self.config.owner_id
-            if mandatory and (turn > self.config.max_turns or (task and task["status"] not in OPEN_STATUSES)):
-                notice = LIMIT_NOTICE if turn > self.config.max_turns else INSPECTION_NOTICE
-                self.store.save_notice(message, AgentResult(notice, "blocked"), task_id, task["turns"] if task else 0)
-                await self._deliver(message)
+            if mentioned and not message.generated and task and task['status'] not in OPEN_STATUSES:
+                noticed = self.store.connection.execute("SELECT 1 FROM events WHERE workspace=? AND channel=? AND thread=? AND reply_only=1 AND state IN ('sent','ready','sending','ambiguous') LIMIT 1", self.store._key(message)).fetchone()
+                if not noticed:
+                    self.store.save_notice(message, AgentResult(INSPECTION_NOTICE, 'blocked'), task_id, task['turns'])
+                    await self._deliver(message)
+                else:
+                    self.store.mark(message.event_id, 'observed', 'blocked')
                 return
             decision = await self._decide(message, task, turn, mentioned, context)
             if decision != Decision.RESPOND:
                 self.store.mark(message.event_id, "observed", decision.value)
                 return
             self.store.begin(message, task_id, turn)
-            self.store.save_result(message, await self._respond(message, context))
+            result = await self._respond(message, context)
+            try:
+                file_operation = self.store.connection.execute('SELECT 1 FROM file_requests WHERE event_id=?', (message.event_id,)).fetchone() is not None
+                result = collaboration.prepare(self.store.connection, self.config, message, result, file_operation=file_operation)
+            except ValueError:
+                result = AgentResult('The task update could not be validated. Please inspect it locally; partial changes may exist.', 'blocked')
+            if not result.send:
+                status = 'blocked' if result.status == 'blocked' else task['status'] if task else 'complete'
+                with self.store.connection:
+                    self.store.connection.execute("UPDATE events SET state='observed',decision='silent',result=? WHERE event_id=?",
+                                                  (json.dumps({'text': '', 'status': status, 'send': False}), message.event_id))
+                    self.store.connection.execute('UPDATE tasks SET status=? WHERE workspace=? AND channel=? AND thread=?',
+                                                  (status, *self.store._key(message)))
+                collaboration.pause_stalled(self.store.connection, self.config, message)
+                return
+            self.store.save_result(message, result)
             await self._deliver(message)
 
     async def _gate(self, message: Message, row) -> bool:
@@ -167,6 +187,9 @@ class Replica:
             return False
         if row["state"] == "ready":
             await self._deliver(message)
+            return False
+        if task and task["status"] == "blocked":
+            self.store.mark(message.event_id, "observed", "blocked")
             return False
         if self.permissions and self.permissions.awaiting(message):
             return False
@@ -205,7 +228,7 @@ class Replica:
         active = task is not None and task["status"] == "waiting"
         if message.sender_id == self.config.owner_id:
             return Decision.IGNORE if message.generated else Decision.OBSERVE
-        if message.generated and message.task_status in {"complete", "blocked"}:
+        if message.generated and message.task_status in {"complete", "blocked"} and not (mentioned or active):
             return Decision.IGNORE
         if turn > self.config.max_turns:
             return Decision.IGNORE
@@ -245,6 +268,12 @@ class Replica:
     def _format(result: AgentResult, message: Message, context: ConversationContext) -> AgentResult:
         """Bound the text, address the sender when waiting, and render known IDs as mentions."""
         text = result.text
+        if type(result.send) is not bool:
+            raise ValueError("invalid send decision")
+        if not result.send:
+            if not isinstance(text, str) or len(text) > REPLY_LIMIT:
+                raise ValueError("invalid silent response")
+            return replace(result, text="", session=None, finished=False)
         if not isinstance(text, str) or not text.strip() or len(text) > REPLY_LIMIT:
             raise ValueError("agent response must contain 1 to 3500 characters")
         if result.status == "waiting" and f"<@{message.sender_id}>" not in text:
@@ -252,7 +281,7 @@ class Replica:
         text = format_reply(text, message, context)
         if not text.strip() or len(text) > REPLY_LIMIT:
             raise ValueError("formatted response must contain 1 to 3500 characters")
-        return AgentResult(text, result.status, finished=bool(result.finished) and result.status == "complete")
+        return replace(result, text=text, session=None, finished=bool(result.finished) and result.status == "complete")
 
     # ----- delivery and follow-through -----
 
@@ -287,12 +316,15 @@ class Replica:
         if result.status == 'waiting':
             self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
         if not row["reply_only"]:
+            collaboration.pause_stalled(self.store.connection, self.config, message)
             await self._follow_up(message, result)
 
     async def _follow_up(self, message: Message, result: AgentResult) -> None:
         """After a delivered reply: debrief a finished discussion, or wrap up a thread at its turn limit."""
         task = self.store.task(message)
         if task is None or result.status == "blocked":
+            return
+        if collaboration.snapshot(self.store.connection, self.config, message.channel_id, message.thread_id)["no_progress"] >= collaboration.LIMIT:
             return
         if result.finished and result.status == "complete":
             await self._debrief(message)
@@ -318,7 +350,7 @@ class Replica:
         """The whole thread, for summaries and debriefs."""
         history = self.store.thread_messages(message, self.config.context_limit)
         return ConversationContext(history, self.config.owner_id, self.config.profile, task["task_id"], task["turns"],
-                                   session=task["session"])
+                                   session=task["session"], task=collaboration.snapshot(self.store.connection, self.config, message.channel_id, message.thread_id)["data"])
 
     async def _digest(self, produce, context: ConversationContext, label: str, thread: str) -> str | None:
         """Ask the agent for a summary or debrief; None (logged) when it fails or is unusable."""
@@ -349,22 +381,27 @@ class Replica:
         task = self.store.task(message)
         if task is None or self.agent is None or not self.store.claim_debrief(message):
             return
-        context = self._thread_context(message, task)
-        debrief = await self._digest(self.agent.debrief, context, "debrief", message.thread_id)
-        if debrief is None:
-            return
+        task = self.store.task(message)
         try:
-            root_ts = await self._post_root(message, DEBRIEF_HEADER + format_reply(debrief, message, context),
-                                            task["task_id"], task["turns"])
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            logger.error("Debrief for thread %s could not be posted (%s)", message.thread_id, type(error).__name__)
-            return
-        if task["turns"] >= self.config.max_turns:
-            self.store.mark_debriefed_at_limit(message)
-        self.store.record_debrief(message)
-        logger.info("Thread %s finished; debrief posted as %s", message.thread_id, root_ts)
+            context = self._thread_context(message, task)
+            debrief = await self._digest(self.agent.debrief, context, "debrief", message.thread_id)
+            if debrief is None:
+                return
+            try:
+                root_ts = await self._post_root(message, DEBRIEF_HEADER + format_reply(debrief, message, context),
+                                                task["task_id"], task["turns"])
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error("Debrief for thread %s could not be posted (%s)", message.thread_id, type(error).__name__)
+                return
+            if task["turns"] >= self.config.max_turns:
+                self.store.mark_debriefed_at_limit(message)
+            self.store.record_debrief(message)
+            logger.info("Thread %s finished; debrief posted as %s", message.thread_id, root_ts)
+        finally:
+            with self.store.connection:
+                self.store.connection.execute('UPDATE tasks SET digest_pending=0 WHERE workspace=? AND channel=? AND thread=?', self.store._key(message))
 
     async def _wrap_up(self, message: Message) -> None:
         """Close out a thread that reached ``max_turns``.
@@ -379,6 +416,7 @@ class Replica:
         task = self.store.task(message)
         if task is None or self.agent is None or not self.store.begin_continuation(message):
             return
+        task = self.store.task(message)
         context = self._thread_context(message, task)
         try:
             summary = await self._digest(self.agent.summarize, context, "summary", message.thread_id)
