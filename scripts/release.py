@@ -48,8 +48,9 @@ def verify_artifacts(directory: Path, tag: str) -> None:
     with zipfile.ZipFile(wheels[0]) as archive:
         names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
         contents = archive.namelist()
-        if len(names) != 1 or "fridica/manifest.yaml" not in contents or "fridica/contract.md" not in contents:
-            raise ValueError("wheel metadata, Slack manifest, or agent contract is missing")
+        bundled = {"fridica/manifest.yaml", "fridica/contract.md", "fridica/repos.toml"}
+        if len(names) != 1 or not bundled <= set(contents):
+            raise ValueError("wheel metadata, Slack manifest, agent contract, or repository template is missing")
         wheel_metadata = archive.read(names[0])
     with tarfile.open(sources[0]) as archive:
         names = [member for member in archive.getmembers() if member.name.count("/") == 1 and member.name.endswith("/PKG-INFO")]

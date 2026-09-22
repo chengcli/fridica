@@ -22,6 +22,7 @@ import uuid
 from .config import Config
 from .contract import Contract, load_contract
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message
+from .repos import Repo, load_repos
 from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, FILE_PLAN_SCHEMA, REPLY_LIMIT, RESPONSE_SCHEMA,
                       SUMMARY_SCHEMA, conversation_prompt, digest_prompt, plan_prompt, truncate)
 from .runner import OUTPUT_LIMIT, BackendError, SessionUnavailable
@@ -63,26 +64,32 @@ class CLIBackend:
         """Reload the owner's contract so edits apply to the next run."""
         return load_contract(self.config.contract)
 
+    def repositories(self) -> tuple[Repo, ...]:
+        """Reload the owner's repository list so edits apply to the next run."""
+        return load_repos(self.config.repos)
+
     # ----- the four calls the replica makes -----
 
     async def classify(self, message: Message, context: ConversationContext) -> Decision:
         try:
-            result, _session = await self._invoke(conversation_prompt(message, context, True, self.contract()), True)
+            prompt = conversation_prompt(message, context, True, self.contract(), self.repositories())
+            result, _session = await self._invoke(prompt, True)
             return Decision(result["decision"])
         except FAILURES:
             return Decision.OBSERVE
 
     async def respond(self, message: Message, context: ConversationContext) -> AgentResult:
         try:
-            contract = self.contract()
+            contract, repositories = self.contract(), self.repositories()
             session = context.session if self.config.resume_sessions else None
             try:
-                result, session = await self._invoke(conversation_prompt(message, context, False, contract), False, session)
+                prompt = conversation_prompt(message, context, False, contract, repositories)
+                result, session = await self._invoke(prompt, False, session)
             except SessionUnavailable:
                 if session is None:
                     raise
                 logger.info("Session for task %s is no longer available; starting a new one", context.task_id)
-                fresh = conversation_prompt(message, replace(context, session=None), False, contract)
+                fresh = conversation_prompt(message, replace(context, session=None), False, contract, repositories)
                 result, session = await self._invoke(fresh, False, None)
             return self._result(result, session)
         except FAILURES as error:
@@ -99,8 +106,8 @@ class CLIBackend:
 
     async def plan(self, message, context, files, roots) -> dict:
         """Propose one scoped file operation (file-access mode); tool-less and stateless."""
-        result, _session = await self._invoke(plan_prompt(message, context, self.contract(), files, roots), True,
-                                              schema=FILE_PLAN_SCHEMA)
+        prompt = plan_prompt(message, context, self.contract(), files, roots, self.repositories())
+        result, _session = await self._invoke(prompt, True, schema=FILE_PLAN_SCHEMA)
         return result
 
     # ----- shared mechanics -----

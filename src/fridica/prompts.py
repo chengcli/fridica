@@ -12,6 +12,7 @@ import json
 
 from .contract import Contract, load_contract
 from .models import ConversationContext, Message
+from .repos import Repo
 
 CLASSIFICATION_SCHEMA = {
     "type": "object",
@@ -80,8 +81,12 @@ FILE_ACCESS_NOTE = (
 
 
 def conversation_prompt(message: Message, context: ConversationContext, classify: bool,
-                        contract: Contract | None = None) -> str:
-    """The contract section for a classification or reply call, followed by the conversation data."""
+                        contract: Contract | None = None, repositories: tuple[Repo, ...] = ()) -> str:
+    """The contract section for a classification or reply call, followed by the conversation data.
+
+    ``repositories`` is the owner's list from ``repos.toml``; it travels inside the data
+    payload so the model treats it as facts to match against, not as instructions.
+    """
     contract = contract or load_contract(None)
     instruction = contract.participation if classify else contract.replies
     if not classify and context.session:
@@ -89,6 +94,7 @@ def conversation_prompt(message: Message, context: ConversationContext, classify
     payload = {
         "owner_id": context.owner_id, "profile": context.profile,
         "task_id": context.task_id, "turn": context.turn,
+        "repositories": [repo.payload() for repo in repositories],
         "history": [{"sender": item.sender_id, "text": item.text} for item in context.messages],
         "message": {"sender": message.sender_id, "text": message.text},
     }
@@ -105,9 +111,10 @@ def digest_prompt(context: ConversationContext, instruction: str) -> str:
     return instruction + "\n\nThread data:\n" + json.dumps(payload)
 
 
-def plan_prompt(message: Message, context: ConversationContext, contract: Contract, files, roots) -> str:
+def plan_prompt(message: Message, context: ConversationContext, contract: Contract, files, roots,
+                repositories: tuple[Repo, ...] = ()) -> str:
     """The reply contract plus the file-access framing and the candidate files, for scoped file mode."""
-    prompt = conversation_prompt(message, replace(context, session=None), False, contract)
+    prompt = conversation_prompt(message, replace(context, session=None), False, contract, repositories)
     return prompt + FILE_ACCESS_NOTE + json.dumps({"roots": roots, "files": files})
 
 

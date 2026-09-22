@@ -65,11 +65,12 @@ def test_doctor_all_pass(config, monkeypatch, capsys):
     mock_doctor(config, monkeypatch)
     assert main(["doctor"]) == 0
     output = capsys.readouterr().out
-    assert output.count("PASS ") == 9
+    assert output.count("PASS ") == 10
     assert "PASS Agent contract (packaged default)" in output
+    assert "PASS Repository list (none configured)" in output
     assert "PASS AI sandbox" in output
     assert "PASS AI sign-in" in output
-    assert "9 passed, 0 failed, 0 skipped" in output
+    assert "10 passed, 0 failed, 0 skipped" in output
     assert "secret" not in output
 
 
@@ -87,7 +88,7 @@ def test_doctor_reports_all_independent_failures(config, monkeypatch, capsys):
                   "AI sandbox", "AI sign-in"):
         assert f"FAIL {label}" in output
     assert "FAIL AI sandbox: Install socat" in output
-    assert "4 passed, 5 failed, 0 skipped" in output
+    assert "5 passed, 5 failed, 0 skipped" in output
 
 
 def test_doctor_missing_executable_skips_dependent_checks(config, monkeypatch, capsys):
@@ -99,14 +100,14 @@ def test_doctor_missing_executable_skips_dependent_checks(config, monkeypatch, c
     assert "FAIL AI executable" in output
     assert "SKIP AI sandbox" in output
     assert "SKIP AI sign-in" in output
-    assert "5 passed, 1 failed, 3 skipped" in output
+    assert "6 passed, 1 failed, 3 skipped" in output
 
 
 def test_doctor_invalid_configuration(tmp_path, capsys):
     assert main(["doctor", "--config", str(tmp_path / "missing.toml")]) == 1
     output = capsys.readouterr().out
     assert "FAIL Configuration" in output
-    assert output.count("SKIP ") == 7
+    assert output.count("SKIP ") == 8
 
 
 def test_doctor_reports_broken_contract(config, monkeypatch, capsys, tmp_path):
@@ -117,7 +118,20 @@ def test_doctor_reports_broken_contract(config, monkeypatch, capsys, tmp_path):
     assert main(["doctor"]) == 1
     output = capsys.readouterr().out
     assert "FAIL Agent contract:" in output and "## Participation" in output
-    assert "8 passed, 1 failed, 0 skipped" in output
+    assert "9 passed, 1 failed, 0 skipped" in output
+
+
+def test_doctor_reports_broken_repository_list(config, monkeypatch, capsys, tmp_path):
+    path = tmp_path / "repos.toml"
+    path.write_text("[[repos]]\nname = 'snapy'\n")
+    config = replace(config, repos=path)
+    mock_doctor(config, monkeypatch)
+    assert main(["doctor"]) == 1
+    output = capsys.readouterr().out
+    assert "FAIL Repository list:" in output and "https URL" in output
+    path.write_text("[[repos]]\nname = 'snapy'\nurl = 'https://github.com/chengcli/snapy'\n")
+    assert main(["doctor"]) == 0
+    assert f"PASS Repository list (1 in {path})" in capsys.readouterr().out
 
 
 def mock_bwrap(monkeypatch, config, code=0, stderr=""):

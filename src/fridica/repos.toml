@@ -1,0 +1,22 @@
+# Repositories your agent may be asked to work on.
+#
+# Fridica reads this file for every run and hands the entries to the agent as
+# data. The agent uses them to work out which repository a request refers to,
+# who is involved, and where the local checkout is. When a request could match
+# more than one entry, or none, the contract tells it to ask rather than guess.
+# Edits apply to the next reply; no restart needed.
+#
+# Fields per [[repos]] entry:
+#   name          full name people use in conversation (required)
+#   url           GitHub URL of the repository (required)
+#   collaborators Slack member IDs (U…) or plain names of the people who work on it
+#   path          absolute or ~ path of the local checkout the agent may inspect;
+#                 writes still require the path to be inside the workspace roots
+#   notes         anything else that helps disambiguate, one line
+
+[[repos]]
+name = "example-project"
+url = "https://github.com/your-org/example-project"
+collaborators = ["U_REPLACE"]
+path = "~/projects/example-project"
+notes = "Replace this entry with your repositories."

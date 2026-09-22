@@ -85,9 +85,10 @@ command. The local log records the agent's exit status and a bounded tail of its
 stderr; that diagnostic text is never sent to Slack.
 
 `init` creates `~/.config/fridica/config.toml`, without overwriting existing
-configuration, and copies two editable files beside it: `manifest.yaml` for the
-Slack app and `contract.md`, the rulebook every agent run reads (see
-[Agent contract](#agent-contract)). For a different location, use
+configuration, and copies three editable files beside it: `manifest.yaml` for
+the Slack app, `contract.md`, the rulebook every agent run reads (see
+[Agent contract](#agent-contract)), and `repos.toml`, the list of repositories
+the agent may be asked about (see [Repository list](#repository-list)). For a different location, use
 `fridica init --config /path/config.toml`.
 
 ### Install via pypi
@@ -282,6 +283,40 @@ that setting Fridica uses `contract.md` beside `config.toml` when it exists,
 otherwise the packaged default. The default's text is the previous built-in rule
 set, so upgrading without editing changes nothing.
 
+### Repository list
+
+`~/.config/fridica/repos.toml` tells the agent which repositories exist, who
+works on them, and where the local checkout is. `init`
+copies a one-entry template; replace it with your own entries:
+
+```toml
+[[repos]]
+name = "snapy"
+url = "https://github.com/chengcli/snapy"
+collaborators = ["UJ4L4998Q", "Tianhao"]   # Slack member IDs or plain names
+path = "~/scix/repos/snapy"                # optional local checkout
+notes = "climate model orchestration"      # optional
+```
+
+`name` and an `https` `url` are required; `collaborators`, `path`, and
+`notes` are optional. Names must be unique. The
+file is reloaded for every run, so edits apply to the next reply.
+
+The list is sent to the agent as data inside every classification and reply
+call, never as instructions. The contract's `## Replies` rule tells the agent
+to resolve which repository a request means by matching names, URLs, paths, and the requester against the collaborators, to name the chosen
+repository in its reply, and, when more than one entry could match or none
+does, to ask with status `waiting` listing the candidates instead of guessing.
+Listing a repository does not grant access to it: reads and writes still follow
+the workspace roots in `config.toml`, and the default `## Repo rules` still
+limit contributions to the repositories in this list.
+
+To keep the list elsewhere, set `repos = "path/to/list.toml"` in `config.toml`;
+relative paths resolve from the config file's directory. Without that setting
+Fridica uses `repos.toml` beside `config.toml` when it exists, otherwise no
+list. An invalid file fails `fridica doctor` and blocks replies with the
+generic notice until fixed.
+
 ### 4. Verify reception, then replies
 
 1. Run `fridica doctor`. It checks token **format** and local AI setup, not granted
@@ -313,8 +348,9 @@ fridica start
 ```
 
 `doctor` prints a PASS or FAIL for each local check: operating system,
-configuration, the agent contract, each Slack token's format, AI executable
-availability, required CLI flags, sandbox dependencies, and AI sign-in. It runs `claude auth status` or
+configuration, the agent contract, the repository list, each Slack token's
+format, AI executable availability, required CLI flags, sandbox dependencies,
+and AI sign-in. It runs `claude auth status` or
 `codex login status` for the configured backend without invoking a model or
 printing account details. The sandbox check confirms that the
 [sandbox dependencies](#sandbox-dependencies-on-linux) are on `PATH` and that
