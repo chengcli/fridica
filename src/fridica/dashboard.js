@@ -15,7 +15,7 @@ function el(tag, text, cls) { const n = document.createElement(tag); if (text !=
 function button(text, fn, cls) { const b = el('button',text,cls); b.type='button'; b.onclick=fn; return b; }
 function status(s) { return el('span', labels[s] || s, `status ${bucket(s)} ${s}`); }
 function name(id) { return state?.names[id] || (id === state?.config.owner ? 'My account' : id?.startsWith('C') || id?.startsWith('G') ? 'Configured channel' : 'Unknown member'); }
-function text(value='') { return value.replace(/<@([A-Z0-9]+)>/g,(_,id)=>'@'+name(id)).replace(/<#([A-Z0-9]+)(?:\|[^>]+)?>/g,(_,id)=>name(id)).replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>'); }
+function text(value='') { return value.replace(/<@([A-Z0-9]+)(?:\|([^>]+))?>/g,(_,id,label)=>'@'+(state?.names[id] || label || name(id))).replace(/<#([A-Z0-9]+)(?:\|[^>]+)?>/g,(_,id)=>name(id)).replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>'); }
 function ago(t) { const s=Math.max(0,Math.floor(Date.now()/1000-t)); return s<60?'Just now':s<3600?Math.floor(s/60)+'m ago':s<86400?Math.floor(s/3600)+'h ago':Math.floor(s/86400)+'d ago'; }
 function when(t) { return t ? new Date(t*1000).toLocaleString() : 'No records yet'; }
 function notify(message, error=false) { const target=$(error?'error':'notice'); target.textContent=message; target.hidden=false; if (!error) setTimeout(()=>target.hidden=true,7000); }
@@ -29,7 +29,7 @@ async function api(path, body) {
   return value;
 }
 function projectFor(task) { return state.projects.find(p=>p.id===task.project_id); }
-function title(task) { const value=text(task.title || 'Request to review').replace(/^@[^\s]+\s*/, '').trim(); return value.split(/(?<=[?。？!！])\s+/)[0].slice(0,180); }
+function title(task) { const value=text((task.title || 'Request to review').replace(/^(?:<@[A-Z0-9]+(?:\|[^>]+)?>\s*)+[—–,:-]?\s*/, '')).trim(); return value.split(/(?<=[?。？!！])\s+/)[0].slice(0,180); }
 function setView(next, nextFilter, nextSender = '') {
   senderFilter=nextSender;
   view=next; offset=0; selected=null; detail=null;
@@ -435,6 +435,7 @@ async function refresh() {
   try {
     const next=await api('/api/state');
     if (request!==refreshRequest) return;
+    const namesChanged=JSON.stringify(state?.names)!==JSON.stringify(next.names);
     state=next;
     renderShell();
     if(unlocked && state.settings_enabled && ['projects','settings'].includes(view) && (!editor || editorView!==view)){
@@ -461,6 +462,7 @@ async function refresh() {
         const changed=latest && JSON.stringify(latest)!==JSON.stringify(task);
         if (changed) selected=latest;
         if (!detail || changed) await loadDetail(selected);
+        else if (namesChanged) renderDetail();
       }
     } else if (view==='projects' && (!filledRevision || !document.activeElement?.closest('#projects-view form'))) renderProjects();
     else if (view==='settings') renderSettings();

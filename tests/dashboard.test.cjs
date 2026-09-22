@@ -113,3 +113,21 @@ test('file cards stay expanded until Slack delivery is confirmed', () => {
   assert.equal(card('sent').open,false);
   assert.notEqual(card('ready').dataset.key,card('failed').dataset.key);
 });
+
+test('mention labels render and leading mentions do not leave partial names in titles', () => {
+  const context=dashboard();
+  vm.runInContext("state={names:{UOWNER:'Demo Owner',UXI:'Xi Zhang'},config:{owner:'UOWNER'}}",context);
+  assert.equal(vm.runInContext("text('Ask <@UXI|Old label> and <@UNEW|New Member>')",context),'Ask @Xi Zhang and @New Member');
+  assert.equal(vm.runInContext("title({title:'<@UOWNER> <@UXI> — Review the changes'})",context),'Review the changes');
+});
+
+test('resolved names update an open detail without reloading its conversation', async () => {
+  const context=dashboard();
+  vm.runInContext(`
+    state={names:{}}; detail={thread:'A'};
+    api=async path=>path==='/api/state'?{names:{UXI:'Xi Zhang'}}:{items:[selected]};
+    renderDetail=()=>{globalThis.shownName=name('UXI');};
+  `,context);
+  await vm.runInContext('refresh()',context);
+  assert.equal(context.shownName,'Xi Zhang');
+});

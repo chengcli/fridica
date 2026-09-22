@@ -261,3 +261,35 @@ def test_continued_and_finished_threads_are_finished_not_attention(config, store
     feed = activity_page(config)
     texts = [item['text'] for item in feed['items'] if item['kind'] == 'control']
     assert any('summary posted as a new thread' in t for t in texts) and any('debrief posted' in t for t in texts)
+
+
+def test_names_include_mentions_in_lists_threads_and_activity(config, store, message, monkeypatch):
+    from slack_sdk.web.async_client import AsyncWebClient
+    calls = set()
+    async def user_info(self, *, user):
+        calls.add(user)
+        return {'user': {'profile': {'display_name': 'Member ' + user}}}
+    async def channel_info(self, *, channel):
+        return {'channel': {'name': 'demo'}}
+    monkeypatch.setenv(config.user_token_env, 'test-only')
+    monkeypatch.setattr(AsyncWebClient, 'users_info', user_info)
+    monkeypatch.setattr(AsyncWebClient, 'conversations_info', channel_info)
+    store.bind(config.owner_id, config.workspace_id)
+    first = message(text='<@UXI> review this')
+    store.add(first); store.begin(first, 'task', 1)
+    older = message('older', timestamp='99.000001', text='<@UOLDER|Older Member> mentioned earlier')
+    store.add(older)
+    store.add(message('other', channel_id='COTHER', text='<@UOUTSIDE> private'))
+    async def run():
+        async with TestClient(TestServer(create_app(config))) as client:
+            await client.get('/api/state')
+            await client.get('/api/thread', params={'channel':'CROOM', 'thread':first.thread_id})
+            await client.get('/api/activity')
+            for _ in range(50):
+                response = await client.get('/api/state')
+                names = (await response.json())['names']
+                if {'UXI', 'UOLDER'} <= names.keys(): break
+                await asyncio.sleep(0)
+            assert {'UXI', 'UOLDER'} <= names.keys()
+            assert 'UOUTSIDE' not in calls
+    asyncio.run(run())

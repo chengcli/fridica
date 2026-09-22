@@ -318,9 +318,10 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
         return web.json_response({'stopping': True})
 
     names_task = None
-    names_checked = 0
+    names_checked = {}
+    pending_names = set()
 
-    async def resolve_names(ids):
+    async def resolve_names():
         from .dashboard_control import metadata, save_metadata
         from slack_sdk.web.async_client import AsyncWebClient
         import aiohttp
@@ -329,7 +330,9 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
             return
         async with aiohttp.ClientSession() as session:
             client = AsyncWebClient(token=token, session=session, timeout=5, retry_handlers=[])
-            for identifier in ids[:30]:
+            while pending_names:
+                identifier = pending_names.pop()
+                names_checked[identifier] = time.time()
                 try:
                     if identifier in config.channels:
                         response = await client.conversations_info(channel=identifier)
@@ -345,6 +348,24 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
                 except Exception:
                     continue
 
+    def queue_names(rows, senders=()):
+        nonlocal names_task
+        from .dashboard_control import metadata
+        if not os.environ.get(config.user_token_env):
+            return
+        ids = [config.owner_id, *config.channels, *senders]
+        for row in rows:
+            if row.get('sender'):
+                ids.append(row['sender'])
+            ids.extend(re.findall(r'<@([UW][A-Z0-9]+)(?:\|[^>]+)?>', json.dumps(row)))
+        known = metadata(config)['names']
+        for identifier in ids:
+            if identifier not in known and time.time() - names_checked.get(identifier, 0) > 300:
+                if len(pending_names) < 30:
+                    pending_names.add(identifier)
+        if pending_names and (names_task is None or names_task.done()):
+            names_task = asyncio.create_task(resolve_names())
+
     async def cleanup(app):
         if names_task:
             names_task.cancel()
@@ -355,6 +376,7 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
         try:
             before=float(request.query['before']) if 'before' in request.query else None
             result=await asyncio.to_thread(activity_page,config,view=request.query.get('view','current'),offset=max(0,int(request.query.get('offset',0))),before=before)
+            queue_names(result['items'])
             return web.json_response(json.loads(SECRET.sub('[redacted]',json.dumps(result))))
         except (ValueError,OSError,sqlite3.Error):
             return web.json_response({'error':'Cannot load activity. Check the selected date and view.'},status=400)
@@ -372,19 +394,22 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
     async def tasks(request):
         try:
             offset = max(0, int(request.query.get('offset', 0)))
-            return web.json_response(await asyncio.to_thread(task_page, config, view=request.query.get('view','all'), query=request.query.get('q','')[:200], offset=offset, channel=request.query.get('channel'), thread=request.query.get('thread'), sender=request.query.get('sender') or None))
+            result = await asyncio.to_thread(task_page, config, view=request.query.get('view','all'), query=request.query.get('q','')[:200], offset=offset, channel=request.query.get('channel'), thread=request.query.get('thread'), sender=request.query.get('sender') or None)
+            queue_names(result['items'], result['senders'])
+            return web.json_response(result)
         except (ValueError, OSError, sqlite3.Error):
             return web.json_response({'error':'Cannot load tasks.'}, status=503)
 
     async def thread(request):
         try:
             offset = max(0, int(request.query.get('offset', 0)))
-            return web.json_response(await asyncio.to_thread(thread_detail, config, request.query.get('channel'), request.query.get('thread'), offset))
+            result = await asyncio.to_thread(thread_detail, config, request.query.get('channel'), request.query.get('thread'), offset)
+            queue_names(result['events'])
+            return web.json_response(result)
         except (ValueError, OSError, sqlite3.Error):
             return web.json_response({'error':'Cannot load this thread.'}, status=503)
 
     async def state(request):
-        nonlocal names_task, names_checked
         from .dashboard_control import metadata
         try:
             data = await asyncio.to_thread(snapshot, config, compact=True)
@@ -401,12 +426,7 @@ def create_app(config: Config, *, approval_key: str | None = None, config_path=N
                 data['settings_revision']=settings_state['revision']
                 data['settings_applied']=data['health']['status']=='connected' and settings_state['applied_revision']==settings_state['revision'] and settings_state['applied_pid']==data['health'].get('pid')
             data['tasks'] = []
-            if time.time() - names_checked > 300 and (names_task is None or names_task.done()):
-                ids = list(dict.fromkeys([config.owner_id, *config.channels, *(t['sender'] for t in overview['items'] if t['sender'])]))
-                ids = [i for i in ids if i not in value['names']]
-                names_checked = time.time()
-                if ids:
-                    names_task = asyncio.create_task(resolve_names(ids))
+            queue_names(overview['items'], overview['senders'])
         except (ValueError, sqlite3.Error, OSError):
             return web.json_response({'error': 'Cannot read state. Check the configured database and identity.'}, status=503)
         return web.json_response(data)
