@@ -370,6 +370,29 @@ any check fails or is skipped. Sign-in status does not guarantee that a later
 model request will succeed or that credits are available. `start` verifies the Slack user
 and workspace identity and channel membership. `--observe-only` records messages
 without invoking either model or posting replies. Stop with Ctrl-C or SIGTERM.
+
+### When to restart
+
+The daemon loads its code and configuration once at startup and re-reads only a
+few files for each agent run, so what changed decides whether a restart is
+needed:
+
+| Change | Restart needed? |
+| --- | --- |
+| `contract.md` (agent rules) | No; re-read for every run, applies to the next reply |
+| `repos.toml` (shared repository list, including an upgrade that delivers a new one) | No; re-read for every run |
+| Settings the dashboard can edit (`model`, `reasoning_effort`, `max_turns`, `max_wait_replies`, directory access) | No; the listener reloads them between requests |
+| Any other `config.toml` key: channels, identity, tokens, backend, `allowed_domains`, `resume_sessions`, `session_timeout` | Yes |
+| Fridica's own code: a `pip install --upgrade`, a `git pull` on an editable install, or any edited `.py`, `.js`, or `.html` file | Yes |
+| Sandbox packages or the AppArmor profile | No; the sandbox is set up for each run. If `start` had refused to launch because of them, simply start it again |
+
+A merged and pulled branch therefore needs a restart even when the daemon is
+already running the same feature from your working tree: the process still holds
+the old modules in memory. Restart with Ctrl-C in the daemon's terminal or tmux
+pane followed by `fridica start`; no message is lost, because incoming events are
+acknowledged and stored before processing, and undelivered replies resume. The
+startup log lists earlier events that ended blocked or uncertain so you can inspect
+them; it never replays them.
 All subcommands accept `--config PATH`; `python -m fridica` is also supported.
 
 Fridica responds to mentions of the owner and follow-ups while a task is waiting
