@@ -85,10 +85,10 @@ command. The local log records the agent's exit status and a bounded tail of its
 stderr; that diagnostic text is never sent to Slack.
 
 `init` creates `~/.config/fridica/config.toml`, without overwriting existing
-configuration, and copies three editable files beside it: `manifest.yaml` for
-the Slack app, `contract.md`, the rulebook every agent run reads (see
-[Agent contract](#agent-contract)), and `repos.toml`, the list of repositories
-the agent may be asked about (see [Repository list](#repository-list)). For a different location, use
+configuration, and copies two editable files beside it: `manifest.yaml` for the
+Slack app and `contract.md`, the rulebook every agent run reads (see
+[Agent contract](#agent-contract)). The repository list is shared and ships with
+the package (see [Repository list](#repository-list)). For a different location, use
 `fridica init --config /path/config.toml`.
 
 ### Install via pypi
@@ -285,37 +285,45 @@ set, so upgrading without editing changes nothing.
 
 ### Repository list
 
-`~/.config/fridica/repos.toml` tells the agent which repositories exist, who
-works on them, and where the local checkout is. `init`
-copies a one-entry template; replace it with your own entries:
+Fridica ships one repository list for the whole team: `src/fridica/repos.toml`
+in this repository, installed as `fridica/repos.toml` and read by every agent
+run. It is the same for everyone, so **changes go through a pull request to
+`main`**; the test suite validates the file on every pull request and refuses
+unknown fields, missing names or URLs, non-https URLs, and duplicate names.
+Upgrading Fridica delivers the new list; `init` does not copy it.
 
 ```toml
 [[repos]]
-name = "snapy"
+name = "snapy-cli"
 url = "https://github.com/chengcli/snapy"
-collaborators = ["UJ4L4998Q", "Tianhao"]   # Slack member IDs or plain names
-path = "~/scix/repos/snapy"                # optional local checkout
-notes = "climate model orchestration"      # optional
+collaborators = ["Cheng Li", "Tianhao Le", "Xi Zhang"]   # first entry is the owner
+notes = "Hydrodynamic core"
 ```
 
-`name` and an `https` `url` are required; `collaborators`, `path`, and
-`notes` are optional. Names must be unique. The
-file is reloaded for every run, so edits apply to the next reply.
+`name`, an `https` `url`, and at least one collaborator are required; `notes`
+is optional, and names must be unique. **The first collaborator is the
+repository owner.** The agent treats the owner's word as final for that
+repository: requests from other people get the analysis or preparation they
+ask for, but merging, releasing, or changing conventions is stated as the
+owner's decision, and when a thread carries conflicting instructions the
+owner's are followed. The owner is spelled out as an `owner` field in the data
+the agent receives. Entries deliberately carry no local path:
+each person keeps checkouts wherever they like, and the agent finds the checkout
+for a chosen repository under its workspace roots by matching the git remote
+URL. Listing a repository grants no access; reads and writes still follow the
+workspace roots in `config.toml`.
 
 The list is sent to the agent as data inside every classification and reply
 call, never as instructions. The contract's `## Replies` rule tells the agent
-to resolve which repository a request means by matching names, URLs, paths, and the requester against the collaborators, to name the chosen
-repository in its reply, and, when more than one entry could match or none
-does, to ask with status `waiting` listing the candidates instead of guessing.
-Listing a repository does not grant access to it: reads and writes still follow
-the workspace roots in `config.toml`, and the default `## Repo rules` still
-limit contributions to the repositories in this list.
+to resolve which repository a request means by matching names and URLs and the
+requester against the collaborators, to name the chosen repository in its
+reply, and, when more than one entry could match or none does, to ask with
+status `waiting` listing the candidates instead of guessing.
 
-To keep the list elsewhere, set `repos = "path/to/list.toml"` in `config.toml`;
-relative paths resolve from the config file's directory. Without that setting
-Fridica uses `repos.toml` beside `config.toml` when it exists, otherwise no
-list. An invalid file fails `fridica doctor` and blocks replies with the
-generic notice until fixed.
+To try a change before opening the pull request, set `repos = "path/to/list.toml"`
+in `config.toml` (relative paths resolve from the config file's directory).
+`doctor` then reports the list as a local override. An invalid file fails
+`doctor` and blocks replies with the generic notice until fixed.
 
 ### 4. Verify reception, then replies
 

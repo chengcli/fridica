@@ -60,7 +60,7 @@ def make_artifacts(directory, wheel_name="fridica", source_name="fridica",
         if contract:
             archive.writestr("fridica/contract.md", "## Participation\n\n## Replies\n")
         if repos:
-            archive.writestr("fridica/repos.toml", "[[repos]]\nname='x'\nurl='https://github.com/a/x'\n")
+            archive.writestr("fridica/repos.toml", "[[repos]]\nname='x'\nurl='https://github.com/a/x'\ncollaborators=['o']\n")
     with tarfile.open(source, "w:gz") as archive:
         if source_metadata:
             metadata = f"Name: {source_name}\nVersion: {source_version}\n".encode()

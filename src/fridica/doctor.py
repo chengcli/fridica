@@ -39,7 +39,8 @@ def run_doctor(path: Path) -> int:
         except ValueError as error:
             record("Repository list", [str(error)])
         else:
-            record("Repository list" + (f" ({len(repos)} in {config.repos})" if config.repos else " (none configured)"), [])
+            record("Repository list" + (f" ({len(repos)}, local override at {config.repos})" if config.repos
+                                        else f" ({len(repos)} shared with the package)"), [])
         for label, variable, prefix in (
             ("Slack app token format", config.app_token_env, "xapp-"),
             ("Slack user token format", config.user_token_env, "xoxp-"),

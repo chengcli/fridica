@@ -201,8 +201,6 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
             raise ValueError("repos must be a nonempty path")
         repos = Path(values["repos"]).expanduser()
         values["repos"] = repos if repos.is_absolute() else (path.expanduser().parent / repos).resolve()
-    elif (path.expanduser().parent / "repos.toml").is_file():
-        values["repos"] = path.expanduser().parent / "repos.toml"
     config = Config(**values)
     if config.file_access:
         roots = (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)
@@ -240,9 +238,10 @@ max_wait_replies = 3
 resume_sessions = true
 # Seconds of thread inactivity after which a stored session is not resumed (2 weeks).
 session_timeout = 1209600
-# Agent rules live in contract.md and the repository list in repos.toml beside this
-# file (both created by fridica init). Uncomment to use different files; relative
-# paths resolve from this directory.
+# Agent rules live in contract.md beside this file (created by fridica init).
+# Uncomment to use a different file; relative paths resolve from this directory.
 # contract = "contract.md"
+# The repository list is shared and ships with Fridica; change it with a pull
+# request to main. Uncomment only to test a local copy before opening that PR.
 # repos = "repos.toml"
 '''

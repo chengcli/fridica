@@ -1,22 +1,91 @@
-# Repositories your agent may be asked to work on.
+# Shared repository list, distributed with Fridica.
 #
-# Fridica reads this file for every run and hands the entries to the agent as
-# data. The agent uses them to work out which repository a request refers to,
-# who is involved, and where the local checkout is. When a request could match
-# more than one entry, or none, the contract tells it to ask rather than guess.
-# Edits apply to the next reply; no restart needed.
+# This file is the same for everyone running Fridica: it ships inside the package
+# and every agent run reads it. To add, remove, or change an entry, open a pull
+# request against main that edits this file; the test suite validates it on every
+# pull request. Do not keep a private copy beside config.toml: entries added
+# there would be invisible to the rest of the team.
+#
+# Entries never name a local checkout location. Each person keeps their clones
+# wherever they like; the agent finds the checkout for a chosen repository under
+# its configured workspace roots by matching the git remote URL.
 #
 # Fields per [[repos]] entry:
-#   name          full name people use in conversation (required)
+#   name          the name people use in conversation (required, unique)
 #   url           GitHub URL of the repository (required)
-#   collaborators Slack member IDs (U…) or plain names of the people who work on it
-#   path          absolute or ~ path of the local checkout the agent may inspect;
-#                 writes still require the path to be inside the workspace roots
-#   notes         anything else that helps disambiguate, one line
+#   collaborators the people who work on it, as plain names or Slack member IDs (U…);
+#                 the FIRST entry is the repository owner, whose decisions about the
+#                 repository are final (required, at least the owner)
+#   notes         one line that helps tell similar entries apart (optional)
 
 [[repos]]
-name = "example-project"
-url = "https://github.com/your-org/example-project"
-collaborators = ["U_REPLACE"]
-path = "~/projects/example-project"
-notes = "Replace this entry with your repositories."
+name = "snapy-cli"
+url = "https://github.com/chengcli/snapy"
+collaborators = ["Cheng Li", "Tianhao Le", "Xi Zhang"]
+notes = "Hydrodynamic core"
+
+[[repos]]
+name = "snapy-xiz"
+url = "https://github.com/UCzhangxi/snapy"
+collaborators = ["Xi Zhang"]
+notes = "Forked from repo snapy-cli"
+
+[[repos]]
+name = "snapy-thl"
+url = "https://github.com/happysky19/snapy"
+collaborators = ["Tianhao Le"]
+notes = "Forked from repo snapy-cli"
+
+[[repos]]
+name = "kintera-cli"
+url = "https://github.com/chengcli/kintera"
+collaborators = ["Cheng Li", "Xi Zhang", "Sihe Chen"]
+notes = "Thermodynamics and chemistry solver"
+
+[[repos]]
+name = "kintera-xiz"
+url = "https://github.com/UCzhangxi/kintera"
+collaborators = ["Xi Zhang"]
+notes = "Forked from repo kintera-cli"
+
+[[repos]]
+name = "pyminichem-cli"
+url = "https://github.com/chengcli/pyminichem"
+collaborators = ["Cheng Li", "Xi Zhang"]
+notes = "Python wrapper of minichem chemistry solver"
+
+[[repos]]
+name = "pyminichem-xiz"
+url = "https://github.com/UCzhangxi/pyminichem"
+collaborators = ["Xi Zhang"]
+notes = "Forked from pyminichem-cli"
+
+[[repos]]
+name = "pyharp-cli"
+url = "https://github.com/chengcli/pyharp"
+collaborators = ["Cheng Li", "Xi Zhang", "Tianhao Le"]
+notes = "Radiation and opacity management"
+
+[[repos]]
+name = "pyharp-xiz"
+url = "https://github.com/UCzhangxi/pyharp"
+collaborators = ["Xi Zhang"]
+notes = "Forked from repo pyharp-cli"
+
+[[repos]]
+name = "pydisort-zyh"
+url = "https://github.com/zoeyzyhu/pydisort"
+collaborators = ["Zoey Hu", "Cheng Li", "Tianhao Le"]
+notes = "DISORT radiative transfer solver"
+
+[[repos]]
+name = "pydisort-thl"
+url = "https://github.com/happysky19/pydisort"
+collaborators = ["Tianhao Le"]
+notes = "Forked from pydisort-zyh"
+
+[[repos]]
+name = "py2ess"
+url = "https://github.com/happysky19/py2sess"
+collaborators = ["Tianhao Le"]
+notes = "Python two-stream exact single scattering solver"

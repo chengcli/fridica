@@ -67,7 +67,7 @@ def test_doctor_all_pass(config, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert output.count("PASS ") == 10
     assert "PASS Agent contract (packaged default)" in output
-    assert "PASS Repository list (none configured)" in output
+    assert "PASS Repository list (" in output and "shared with the package)" in output
     assert "PASS AI sandbox" in output
     assert "PASS AI sign-in" in output
     assert "10 passed, 0 failed, 0 skipped" in output
@@ -129,9 +129,9 @@ def test_doctor_reports_broken_repository_list(config, monkeypatch, capsys, tmp_
     assert main(["doctor"]) == 1
     output = capsys.readouterr().out
     assert "FAIL Repository list:" in output and "https URL" in output
-    path.write_text("[[repos]]\nname = 'snapy'\nurl = 'https://github.com/chengcli/snapy'\n")
+    path.write_text("[[repos]]\nname = 'snapy'\nurl = 'https://github.com/chengcli/snapy'\ncollaborators = ['Cheng Li']\n")
     assert main(["doctor"]) == 0
-    assert f"PASS Repository list (1 in {path})" in capsys.readouterr().out
+    assert f"PASS Repository list (1, local override at {path})" in capsys.readouterr().out
 
 
 def mock_bwrap(monkeypatch, config, code=0, stderr=""):

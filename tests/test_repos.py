@@ -15,11 +15,11 @@ VALID = '''
 name = "snapy"
 url = "https://github.com/chengcli/snapy"
 collaborators = ["UJ4L4998Q", "Tianhao"]
-path = "~/scix/repos/snapy"
 
 [[repos]]
 name = "pydisort"
 url = "https://github.com/zoeyzyhu/pydisort.git"
+collaborators = ["Zoey Hu"]
 notes = "radiative transfer solver"
 '''
 
@@ -27,39 +27,39 @@ notes = "radiative transfer solver"
 def test_parse_repos_and_payload():
     repos = parse_repos(VALID)
     assert [r.name for r in repos] == ["snapy", "pydisort"]
-    assert repos[0].collaborators == ("UJ4L4998Q", "Tianhao") and repos[0].path == "~/scix/repos/snapy"
+    assert repos[0].collaborators == ("UJ4L4998Q", "Tianhao") and repos[0].owner == "UJ4L4998Q"
     assert repos[0].payload() == {"name": "snapy", "url": "https://github.com/chengcli/snapy",
-                                  "collaborators": ["UJ4L4998Q", "Tianhao"], "path": "~/scix/repos/snapy"}
-    assert repos[1].payload() == {"name": "pydisort",
-                                  "url": "https://github.com/zoeyzyhu/pydisort.git", "notes": "radiative transfer solver"}
-    assert parse_repos("") == () and load_repos(None) == ()
-    default = parse_repos(default_repos_text())
-    assert len(default) == 1 and default[0].name == "example-project" and default[0].path == "~/projects/example-project"
+                                  "collaborators": ["UJ4L4998Q", "Tianhao"], "owner": "UJ4L4998Q"}
+    assert repos[1].payload() == {"name": "pydisort", "url": "https://github.com/zoeyzyhu/pydisort.git",
+                                  "collaborators": ["Zoey Hu"], "owner": "Zoey Hu", "notes": "radiative transfer solver"}
+    assert parse_repos("") == ()
+    assert load_repos(None) == parse_repos(default_repos_text())
 
 
 @pytest.mark.parametrize("text,error", [
     ("[[repos]]\nname = 'snapy'\n", "https URL"),
     ("[[repos]]\nurl = 'https://github.com/a/b'\n", "needs a name"),
     ("[[repos]]\nname = 'a'\nurl = 'http://github.com/a/b'\n", "https URL"),
-    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\nowner = 'x'\n", "unknown fields"),
-    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = 'bob'\n", "collaborators must be a list"),
-    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\n[[repos]]\nname = 'A'\nurl = 'https://github.com/a/c'\n", "listed twice"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = ['o']\nowner = 'x'\n", "unknown fields"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = ['o']\npath = '~/a'\n", "local paths"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = 'bob'\n", "at least the owner"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = []\n", "at least the owner"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\n", "at least the owner"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = ['o']\n[[repos]]\nname = 'A'\nurl = 'https://github.com/a/c'\ncollaborators = ['o']\n", "listed twice"),
     ("other = 1\n", "must contain only"),
     ("this is not toml = = =\n", "not valid TOML"),
-    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\nnotes = '" + "x" * REPOS_LIMIT + "'\n", "KiB"),
+    ("[[repos]]\nname = 'a'\nurl = 'https://github.com/a/b'\ncollaborators = ['o']\nnotes = '" + "x" * REPOS_LIMIT + "'\n", "KiB"),
 ])
 def test_parse_repos_rejects_bad_entries(text, error):
     with pytest.raises(ValueError, match=error):
         parse_repos(text)
 
 
-def test_config_discovers_repos_beside_config(config, tmp_path):
+def test_shared_list_is_the_default_and_local_copies_need_an_explicit_override(config, tmp_path):
     source = tmp_path / "config.toml"
     source.write_text(f'owner_id="UOWNER"\nworkspace_id="TTEAM"\nchannels=["CROOM"]\nworkspace="{config.workspace}"\nstate_path="{config.state_path}"\n')
-    assert load_config(source).repos is None
-    beside = tmp_path / "repos.toml"
-    beside.write_text(VALID)
-    assert load_config(source).repos == beside
+    (tmp_path / "repos.toml").write_text(VALID)
+    assert load_config(source).repos is None, "a file beside config.toml must not silently replace the shared list"
     custom = tmp_path / "lists" / "mine.toml"
     custom.parent.mkdir()
     custom.write_text(VALID)
@@ -71,6 +71,17 @@ def test_config_discovers_repos_beside_config(config, tmp_path):
         load_config(source)
 
 
+def test_shared_list_is_valid_and_complete():
+    """The packaged list is what every teammate's agent reads; a pull request must keep it well-formed."""
+    repos = parse_repos(default_repos_text())
+    assert len(repos) >= 1
+    for repo in repos:
+        assert repo.name and repo.url.startswith("https://github.com/"), repo
+        assert repo.owner, f"{repo.name} has no owner (first collaborator)"
+        assert not any(c.startswith("~") or c.startswith("/") for c in repo.collaborators), repo
+    assert "pull request" in default_repos_text()
+
+
 def test_prompt_carries_repositories_as_data(config, message, tmp_path):
     repos = parse_repos(VALID)
     context = ConversationContext([], config.owner_id, "profile", "task", 1)
@@ -78,25 +89,19 @@ def test_prompt_carries_repositories_as_data(config, message, tmp_path):
     data = prompt.split("Conversation data:\n", 1)[1]
     assert '"repositories": [{"name": "snapy"' in data and '"notes": "radiative transfer solver"' in data
     assert "Resolve which repository a request means" in prompt.split("Conversation data:")[0]
+    assert '"owner": "UJ4L4998Q"' in data and "The owner has the authoritative say" in prompt
     assert "do not guess: ask with status waiting" in prompt
-    assert '"repositories": []' in _prompt(message(), context, True, load_contract(None))
+    assert '"repositories": []' in _prompt(message(), context, True, load_contract(None), ())
     path = tmp_path / "repos.toml"
     path.write_text(VALID)
     backend = ClaudeBackend(replace(config, repos=path))
     assert [r.name for r in backend.repositories()] == ["snapy", "pydisort"]
-    path.write_text(VALID + "\n[[repos]]\nname = 'kintera'\nurl = 'https://github.com/chengcli/kintera'\n")
+    path.write_text(VALID + "\n[[repos]]\nname = 'kintera'\nurl = 'https://github.com/chengcli/kintera'\ncollaborators = ['Cheng Li']\n")
     assert [r.name for r in backend.repositories()][-1] == "kintera"
 
 
-def test_init_copies_repos_template(tmp_path, capsys):
+def test_init_does_not_copy_the_shared_list(tmp_path, capsys):
     target = tmp_path / "cfg" / "config.toml"
     assert main(["init", "--config", str(target)]) == 0
-    repos = target.parent / "repos.toml"
-    assert repos.read_text() == default_repos_text()
-    assert "repos.toml" in capsys.readouterr().out
-    repos.write_text(VALID)
-    target.unlink()
-    (target.parent / "contract.md").unlink(missing_ok=True)
-    (target.parent / "manifest.yaml").unlink(missing_ok=True)
-    assert main(["init", "--config", str(target)]) == 0
-    assert repos.read_text() == VALID
+    assert not (target.parent / "repos.toml").exists()
+    assert "pull request" in capsys.readouterr().out
