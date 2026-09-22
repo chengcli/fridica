@@ -19,7 +19,8 @@ def test_default_contract_parses_and_holds_the_rules():
                    "Only use Slack <@USER_ID> mentions when status is waiting", "Do not claim actions you did not perform."):
         assert phrase in contract.replies
     assert "Every agent run that Fridica starts reads this document" not in contract.replies
-    assert "## Repo rules" in contract.replies and "snapy, kintera, pyharp, and pydisort" in contract.replies
+    assert "## Repo rules" in contract.replies and "the ones in the repositories field" in contract.replies
+    assert "The owner has the authoritative say" in contract.replies
     assert "Repo rules" not in contract.participation
 
 

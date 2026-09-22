@@ -49,7 +49,7 @@ def test_parse_tag_valid():
 
 def make_artifacts(directory, wheel_name="fridica", source_name="fridica",
                    wheel_version="1.2.3", source_version="1.2.3",
-                   manifest=True, contract=True, wheel_metadata=True, source_metadata=True):
+                   manifest=True, contract=True, repos=True, wheel_metadata=True, source_metadata=True):
     wheel = directory / "fridica-1.2.3-py3-none-any.whl"
     source = directory / "fridica-1.2.3.tar.gz"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -59,6 +59,8 @@ def make_artifacts(directory, wheel_name="fridica", source_name="fridica",
             archive.writestr("fridica/manifest.yaml", "display_information: {}\n")
         if contract:
             archive.writestr("fridica/contract.md", "## Participation\n\n## Replies\n")
+        if repos:
+            archive.writestr("fridica/repos.toml", "[[repos]]\nname='x'\nurl='https://github.com/a/x'\ncollaborators=['o']\n")
     with tarfile.open(source, "w:gz") as archive:
         if source_metadata:
             metadata = f"Name: {source_name}\nVersion: {source_version}\n".encode()
@@ -76,6 +78,7 @@ def test_verify_artifacts(tmp_path):
 @pytest.mark.parametrize("changes, error", [
     ({"manifest": False}, "Slack manifest"),
     ({"contract": False}, "agent contract"),
+    ({"repos": False}, "repository template"),
     ({"wheel_metadata": False}, "wheel metadata"),
     ({"source_metadata": False}, "source distribution metadata"),
     ({"wheel_name": "other"}, "name/version"),

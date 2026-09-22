@@ -45,6 +45,7 @@ class Config:
     resume_sessions: bool = True
     session_timeout: float = 14 * 86400
     contract: Path | None = None
+    repos: Path | None = None
     file_access: bool = False
     read_only_workspaces: tuple[Path, ...] = ()
     allowed_domains: tuple[str, ...] = ()
@@ -81,6 +82,9 @@ class Config:
         if self.contract is not None and (not isinstance(self.contract, Path) or not self.contract.is_absolute()
                                           or not self.contract.is_file()):
             raise ValueError("contract must be an existing Markdown file")
+        if self.repos is not None and (not isinstance(self.repos, Path) or not self.repos.is_absolute()
+                                       or not self.repos.is_file()):
+            raise ValueError("repos must be an existing TOML file")
         for name in ("app_token_env", "user_token_env"):
             value = getattr(self, name)
             if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
@@ -192,12 +196,17 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
         values["contract"] = contract if contract.is_absolute() else (path.expanduser().parent / contract).resolve()
     elif (path.expanduser().parent / "contract.md").is_file():
         values["contract"] = path.expanduser().parent / "contract.md"
+    if "repos" in values:
+        if not isinstance(values["repos"], str) or not values["repos"]:
+            raise ValueError("repos must be a nonempty path")
+        repos = Path(values["repos"]).expanduser()
+        values["repos"] = repos if repos.is_absolute() else (path.expanduser().parent / repos).resolve()
     config = Config(**values)
     if config.file_access:
         roots = (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)
-        for protected in (path.expanduser(), config.contract):
+        for protected in (path.expanduser(), config.contract, config.repos):
             if protected and any(within_casefold(protected.resolve(), root.resolve()) for root in roots):
-                raise ValueError("configuration and contract must be outside file access roots")
+                raise ValueError("configuration, contract, and repository list must be outside file access roots")
     return config
 
 
@@ -232,4 +241,7 @@ session_timeout = 1209600
 # Agent rules live in contract.md beside this file (created by fridica init).
 # Uncomment to use a different file; relative paths resolve from this directory.
 # contract = "contract.md"
+# The repository list is shared and ships with Fridica; change it with a pull
+# request to main. Uncomment only to test a local copy before opening that PR.
+# repos = "repos.toml"
 '''

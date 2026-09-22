@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
                             stream.write(resource.read_text())
             print(f"Created {path}. Set your identity, channels, workspace, and token environment variables.")
             print(f"Agent rules are in {path.parent / 'contract.md'}; edit them to change how your persona behaves.")
+            print("The repository list is shared and ships with Fridica; add repositories with a pull request to main.")
             return 0
         if args.command == "doctor":
             from .doctor import run_doctor

@@ -8,6 +8,7 @@ import sys
 from .checks import check_authentication, check_backend, check_sandbox
 from .config import load_config
 from .contract import load_contract
+from .repos import load_repos
 
 
 def run_doctor(path: Path) -> int:
@@ -22,8 +23,8 @@ def run_doctor(path: Path) -> int:
     except (ValueError, OSError, TypeError) as error:
         detail = str(error) if isinstance(error, ValueError) else type(error).__name__
         record("Configuration", [detail])
-        for name in ("Agent contract", "Slack app token format", "Slack user token format", "AI executable",
-                     "AI CLI capabilities", "AI sandbox", "AI sign-in"):
+        for name in ("Agent contract", "Repository list", "Slack app token format", "Slack user token format",
+                     "AI executable", "AI CLI capabilities", "AI sandbox", "AI sign-in"):
             checks.append(("SKIP", f"{name}: fix the configuration first."))
     else:
         record("Configuration (identity, channels, workspace roots, and settings)", [])
@@ -33,6 +34,13 @@ def run_doctor(path: Path) -> int:
             record("Agent contract", [str(error)])
         else:
             record(f"Agent contract ({config.contract or 'packaged default'})", [])
+        try:
+            repos = load_repos(config.repos)
+        except ValueError as error:
+            record("Repository list", [str(error)])
+        else:
+            record("Repository list" + (f" ({len(repos)}, local override at {config.repos})" if config.repos
+                                        else f" ({len(repos)} shared with the package)"), [])
         for label, variable, prefix in (
             ("Slack app token format", config.app_token_env, "xapp-"),
             ("Slack user token format", config.user_token_env, "xoxp-"),
