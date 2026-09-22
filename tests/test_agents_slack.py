@@ -491,3 +491,19 @@ def test_subprocess_timeout_and_cancellation(config, tmp_path):
         with pytest.raises(ProcessLookupError):
             os.kill(int(pidfile.read_text()), 0)
     asyncio.run(cancel())
+
+
+def test_codex_host_enabled_only_for_native_tasks(config, tmp_path):
+    native = CodexBackend(replace(config, backend='codex'))
+    managed = CodexBackend(replace(config, backend='codex', file_access=True))
+    schema = tmp_path / 'schema.json'
+    schema.write_text('{}')
+    for resume in (False, True):
+        command = native.command(tmp_path, schema, False, 'session-1234', resume)
+        assert 'features.code_mode_host=false' not in command
+        assert 'features.code_mode_host=true' in command
+    for backend in (native, managed):
+        command = backend.command(tmp_path, schema, True)
+        assert 'features.code_mode_host=false' in command
+        assert 'features.shell_tool=false' in command
+        assert 'features.unified_exec=false' in command

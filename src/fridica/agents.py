@@ -180,7 +180,7 @@ class CodexBackend(CLIBackend):
         "features.image_generation=false", "features.shell_snapshot=false",
         "features.memories=false", "features.skill_search=false",
         "features.skip_host_skill_discovery=true", "features.code_mode=false",
-        "features.code_mode_host=false", "features.request_permissions_tool=false",
+        "features.request_permissions_tool=false",
     ]
     TOOLS_OFF = ["features.shell_tool=false", "features.unified_exec=false",
                  "features.view_image=false", "project_doc_max_bytes=0"]
@@ -205,6 +205,7 @@ class CodexBackend(CLIBackend):
             ]
         planner = classify and self.config.file_access
         settings = list(self.FEATURES_OFF)
+        settings.append("features.code_mode_host=" + ("false" if classify else "true"))
         if not planner:
             network = "true" if not classify and self.config.allowed_domains else "false"
             settings.append(f"sandbox_workspace_write.network_access={network}")
