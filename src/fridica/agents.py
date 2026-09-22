@@ -116,12 +116,17 @@ class CLIBackend:
     def _result(result: dict, session: str | None) -> AgentResult:
         """Validate a structured reply and turn it into an ``AgentResult``."""
         text = result.get("text")
-        if not isinstance(text, str) or not text.strip() or len(text) > REPLY_LIMIT:
-            raise BackendError("Agent returned an empty response.")
+        send = result.get("send", True)
+        if type(send) is not bool or not isinstance(text, str) or (send and not text.strip()) or len(text) > REPLY_LIMIT:
+            raise BackendError("Agent returned an invalid response.")
+        from .collaboration import validate
+        update = result.get("update")
+        if update is not None:
+            update = validate(update)
         if result.get("status") not in {"complete", "waiting", "blocked"}:
             raise BackendError("Agent returned an invalid status.")
         finished = result.get("discussion") == "finished" and result["status"] == "complete"
-        return AgentResult(text=text, status=result["status"], session=session, finished=finished)
+        return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send, update=update)
 
     async def _digest(self, context: ConversationContext, instruction: str, schema: dict, key: str) -> str:
         result, _session = await self._invoke(digest_prompt(context, instruction), True, schema=schema)
@@ -180,7 +185,7 @@ class CodexBackend(CLIBackend):
         "features.image_generation=false", "features.shell_snapshot=false",
         "features.memories=false", "features.skill_search=false",
         "features.skip_host_skill_discovery=true", "features.code_mode=false",
-        "features.code_mode_host=false", "features.request_permissions_tool=false",
+        "features.request_permissions_tool=false",
     ]
     TOOLS_OFF = ["features.shell_tool=false", "features.unified_exec=false",
                  "features.view_image=false", "project_doc_max_bytes=0"]
@@ -205,6 +210,7 @@ class CodexBackend(CLIBackend):
             ]
         planner = classify and self.config.file_access
         settings = list(self.FEATURES_OFF)
+        settings.append("features.code_mode_host=" + ("false" if classify else "true"))
         if not planner:
             network = "true" if not classify and self.config.allowed_domains else "false"
             settings.append(f"sandbox_workspace_write.network_access={network}")

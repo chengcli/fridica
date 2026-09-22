@@ -93,8 +93,8 @@ def test_mentions_override_unsolicited_settings(config, store, message):
     process(replica, message())
     process(replica, message("second", timestamp="101.000001"))
     assert agent.calls == 2
-    assert transport.sent == [AgentResult("Hello <@UALICE>")] * 2
-    assert "<@UALICE>" in store.get("second")["result"]
+    assert transport.sent == [AgentResult("Hello <@UALICE>")]
+    assert store.get("second")["decision"] == "silent"
 
 
 @pytest.mark.parametrize("status", ["blocked", "running", "delivery_pending"])
@@ -111,12 +111,13 @@ def test_blocker_notice_preserves_task(config, store, message, status):
     followup = message("followup", timestamp="102.000001")
     process(replica, followup)
     assert agent.calls == 0
-    assert len(transport.sent) == 1
-    assert "local inspection" in transport.sent[0].text
-    assert "<@" not in transport.sent[0].text
+    assert len(transport.sent) == (0 if status == "blocked" else 1)
+    if transport.sent:
+        assert "local inspection" in transport.sent[0].text
+        assert "<@" not in transport.sent[0].text
     assert dict(store.task(entry)) == before
     process(replica, followup)
-    assert len(transport.sent) == 1
+    assert len(transport.sent) == (0 if status == "blocked" else 1)
 
 
 def test_rate_limited_notice_defers_next_mention(config, store, message):
@@ -136,7 +137,8 @@ def test_rate_limited_notice_defers_next_mention(config, store, message):
     transport.error = None
     process(replica, first)
     process(replica, second)
-    assert len(transport.sent) == 2
+    assert len(transport.sent) == 1
+    assert store.get("second")["decision"] == "blocked"
     assert not agent.calls
     assert store.task(entry)["turns"] == config.max_turns - 1
 

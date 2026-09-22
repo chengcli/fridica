@@ -10,6 +10,7 @@ function dashboard() {
   const nodes = new Map();
   const context = vm.createContext({
     URLSearchParams, AbortSignal, console,
+    Option: function(text, value) {return {textContent:text,value};},
     location: {hash: ''},
     sessionStorage: {getItem: () => null},
     document: {
@@ -17,7 +18,7 @@ function dashboard() {
         if (!nodes.has(id)) nodes.set(id, {value: '', replaceChildren() {}, setAttribute() {}, classList: {toggle() {}}});
         return nodes.get(id);
       },
-      querySelectorAll: () => [], addEventListener() {}, createElement: () => ({dataset: {}, children: [], append(...nodes) {this.children.push(...nodes);}, get firstChild() {return this.children[0];}}),
+      querySelectorAll: () => [], addEventListener() {}, createElement: tag => ({tag, classList:{add(){},toggle(){}}, setAttribute(){}, dataset: {}, children: [], append(...nodes) {this.children.push(...nodes);}, get firstChild() {return this.children[0];}}),
     },
     fetch: () => new Promise(() => {}),
     setTimeout() {}, clearTimeout() {},
@@ -112,4 +113,57 @@ test('file cards stay expanded until Slack delivery is confirmed', () => {
   for(const delivery of ['ready','sending','failed','ambiguous']) assert.equal(card(delivery).open,true,delivery);
   assert.equal(card('sent').open,false);
   assert.notEqual(card('ready').dataset.key,card('failed').dataset.key);
+});
+
+test('mention labels render and leading mentions do not leave partial names in titles', () => {
+  const context=dashboard();
+  vm.runInContext("state={names:{UOWNER:'Demo Owner',UXI:'Xi Zhang'},config:{owner:'UOWNER'}}",context);
+  assert.equal(vm.runInContext("text('Ask <@UXI|Old label> and <@UNEW|New Member>')",context),'Ask @Xi Zhang and @New Member');
+  assert.equal(vm.runInContext("title({title:'<@UOWNER> <@UXI> — Review the changes'})",context),'Review the changes');
+});
+
+test('resolved names update an open detail without reloading its conversation', async () => {
+  const context=dashboard();
+  vm.runInContext(`
+    state={names:{}}; detail={thread:'A'};
+    api=async path=>path==='/api/state'?{names:{UXI:'Xi Zhang'}}:{items:[selected]};
+    renderDetail=()=>{globalThis.shownName=name('UXI');};
+  `,context);
+  await vm.runInContext('refresh()',context);
+  assert.equal(context.shownName,'Xi Zhang');
+});
+
+test('task corrections submit only edited fields with the displayed revision', async () => {
+  const context=dashboard();
+  vm.runInContext(`
+    unlocked=true;
+    state={config:{owner:'UOWNER'},names:{UOWNER:'Alex',UALICE:'Taylor'},repositories:[{name:'snapy-cli',owner:'Cheng Li'}]};
+    detail={events:[{sender:'UALICE'}]};
+    selected={channel:'CROOM',thread:'A',control_state:'active'};
+    globalThis.notes={revision:4,no_progress:1,data:{repo:'snapy-cli',assignee:'UALICE',next_step:'Wait for review',claims:[]}};
+    globalThis.panel=taskNotes(selected,notes);
+    api=async(path,body)=>{globalThis.saved={path,body};return {saved:true};};
+    loadDetail=async()=>{};
+  `,context);
+  function find(node,predicate) {if(predicate(node))return node;for(const child of node.children||[]){const found=find(child,predicate);if(found)return found;}}
+  const form=find(context.panel,node=>node.tag==='form');
+  assert.ok(form);
+  const next=find(form,node=>node.name==='next_step');
+  next.value='Review is complete';
+  await form.onsubmit({preventDefault(){}});
+  assert.equal(context.saved.path,'/api/task-notes');
+  assert.equal(context.saved.body.revision,4);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.saved.body.changes)),{next_step:'Review is complete'});
+  assert.equal(context.saved.body.correction,undefined);
+});
+
+test('read-only task notes do not render correction controls', () => {
+  const context=dashboard();
+  vm.runInContext(`
+    unlocked=false;
+    state={config:{owner:'UOWNER'},names:{},repositories:[]};
+    globalThis.panel=taskNotes({thread:'A'}, {revision:1,no_progress:0,data:{claims:[{text:'Peer says approved',basis:'reported',state:'current'}]}});
+  `,context);
+  function tags(node){return [node.tag,...(node.children||[]).flatMap(tags)];}
+  assert.ok(!tags(context.panel).includes('form'));
 });

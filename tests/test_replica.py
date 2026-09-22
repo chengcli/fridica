@@ -66,7 +66,7 @@ def process(replica, message):
     ({"sender_id": "UOWNER", "generated": True}, "ignore"),
     ({"generated": True, "text": "general question"}, "ignore"),
     ({"turn": 6, "generated": True}, "ignore"),
-    ({"generated": True, "task_status": "complete"}, "ignore"),
+    ({"generated": True, "task_status": "complete", "text": "Unsolicited completed response"}, "ignore"),
 ])
 def test_filters(config, store, message, changes, expected):
     agent = Agent()
