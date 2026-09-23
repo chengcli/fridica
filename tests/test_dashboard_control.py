@@ -201,3 +201,37 @@ def test_resume_does_not_replay_answered_or_paused_threads(config, store, messag
         store.connection.execute("UPDATE tasks SET control_state='paused',pause_reason='loop' WHERE thread=?", (first.thread_id,))
     result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
     assert result['replayed'] is False and store.pending() == []
+
+
+@pytest.mark.parametrize('changes', [
+    {'generated': True, 'task_status': 'complete', 'text': 'Report: all checks passed.'},
+    {'text': 'any update on this?'},
+])
+def test_resume_reports_when_latest_message_cannot_get_a_reply(config, store, message, changes):
+    """A message without a mention (such as a peer's completed report) would be ignored or only observed after Resume."""
+    from fridica.dashboard_control import REPLAY_UNMENTIONED, thread_action
+    first = blocked_thread(config, store, message)
+    store.add(message('event2', timestamp='200.000001', **changes))
+    store.mark('event2', 'observed', 'blocked')
+    result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
+    assert result['replayed'] is False and result['note'] == REPLAY_UNMENTIONED
+    assert store.pending() == [] and store.task(first)['reset_at'] > 200
+
+
+def test_replayed_mention_gets_exactly_one_reply(config, store, message):
+    from fridica.dashboard_control import thread_action
+    from fridica.models import AgentResult
+    from test_replica import Agent, Transport
+    from fridica.replica import Replica
+    first = blocked_thread(config, store, message)
+    later = message('event2', timestamp='200.000001', generated=True, task_status='complete',
+                    text='<@UOWNER> the report is in; can you confirm the paths?')
+    store.add(later)
+    store.mark('event2', 'observed', 'blocked')
+    assert thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])['replayed'] is True
+    replica = Replica(config, store, Agent(results=[AgentResult('Paths confirmed.')]), Transport())
+    assert [row['event_id'] for row in store.pending()] == ['event2']
+    asyncio.run(replica.process(later))
+    assert [m.event_id for m, _ in replica.agent.responded] == ['event2']
+    assert len(replica.transport.sent) == 1 and store.get('event2')['state'] == 'sent'
+    assert store.pending() == []
