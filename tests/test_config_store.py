@@ -224,7 +224,7 @@ gpus = [0, 1]
     ("[resources.dart9]\ntpus = 2\n", "accepts cpus"),
     ("[resources]\ncpus = 2\n[resources.dart9]\ncpus = 4\n", "not both"),
     ("[resources.dart9]\ncpus = 0\n", "positive integer"),
-    ('additional_workspaces=["dart9:/mnt/a"]\nfile_access=true\n', "local machine"),
+    ('additional_workspaces=[]\nfile_access=true\nheavy_tasks=true\n', "needs a remote host"),
     ('resources = 3\n', "resources must be"),
 ])
 def test_multi_host_rejections(tmp_path, config, body, match):
@@ -244,3 +244,29 @@ def test_remote_workspace_with_further_hosts(tmp_path):
     assert [host.name for host in loaded.remote_hosts] == ["snowy"] and loaded.primary.roots == (PurePosixPath("/mnt/xxx"), PurePosixPath("/mnt/data"))
     with pytest.raises(ValueError, match="same host as workspace"):
         load_config(write_remote_config(tmp_path, "dart9:/mnt/xxx", read_only_workspaces='["snowy:/data"]', file_access="true"))
+
+
+def test_file_access_and_network_default_on_for_local_roots(tmp_path):
+    (tmp_path / "work").mkdir()
+    loaded = load_config(write_remote_config(tmp_path, tmp_path / "work"))
+    assert loaded.file_access is True and loaded.allowed_domains == ("*",)
+
+
+def test_file_access_defaults_follow_the_workspace_host(tmp_path):
+    from pathlib import PurePosixPath
+    (tmp_path / "work").mkdir()
+    assert load_config(write_remote_config(tmp_path, "dart9:/mnt/xxx")).file_access is False
+    # Remote roots only host heavy tasks; the local roots stay under scoped file access.
+    remote_extra = write_remote_config(tmp_path, tmp_path / "work", additional_workspaces='["dart9:/mnt/a"]', heavy_tasks="true")
+    loaded = load_config(remote_extra)
+    assert loaded.file_access is True and [host.name for host in loaded.heavy_hosts] == ["dart9"]
+    assert loaded.heavy_hosts[0].roots == (PurePosixPath("/mnt/a"),) and [host.name for host in loaded.hosts] == ["local", "dart9"]
+    # Heavy tasks with nowhere else to run fall back to the agent's native tools.
+    heavy = load_config(write_remote_config(tmp_path, tmp_path / "work", heavy_tasks="true"))
+    assert heavy.file_access is False and [host.name for host in heavy.heavy_hosts] == ["local"]
+    explicit = write_remote_config(tmp_path, tmp_path / "work", heavy_tasks="true", file_access="true")
+    with pytest.raises(ValueError, match="needs a remote host"):
+        load_config(explicit)
+    # Explicit file_access next to a remote heavy-task host is fine.
+    assert load_config(write_remote_config(tmp_path, tmp_path / "work", additional_workspaces='["dart9:/mnt/a"]',
+                                           file_access="true")).file_access is True

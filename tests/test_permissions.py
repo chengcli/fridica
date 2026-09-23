@@ -452,3 +452,51 @@ def test_automatic_result_recovers_before_initial_outbox_save(managed, message):
         assert replica.transport.sent[0][1].status == 'complete'
     finally:
         database.close()
+
+
+def test_escalate_hands_brief_to_remote_host(managed, store, message, caplog):
+    import logging
+    from pathlib import PurePosixPath
+    from fridica.config import Host
+    dart9 = Host("dart9", (PurePosixPath("/mnt/a"),))
+    heavy = replace(managed, heavy_tasks=True, remote_hosts=(dart9,))
+    manager = policy(heavy, store, [action("escalate", "dart9", "Run the full suite.", "Started; the result lands here.")])
+    result = respond(manager, message())
+    assert result.status == "complete" and result.text == "Started; the result lands here."
+    assert result.escalate == "Run the full suite." and result.escalate_host == "" and not requests(manager)
+    # The local roots are never a worker host: an unknown or local name goes to the first remote host.
+    for index, named in enumerate(("local", "snowy")):
+        manager = policy(heavy, store, [action("escalate", named, "job", "Started.")])
+        with caplog.at_level(logging.WARNING, logger="fridica.permissions"):
+            result = respond(manager, message(f"event-{named}", timestamp=f"200.00000{index + 1}"))
+        assert result.escalate == "job" and result.escalate_host == "" and "unknown host" in caplog.text
+    # Without heavy tasks the brief is dropped and the text still goes out.
+    manager = policy(managed, store, [action("escalate", "", "job", "Started.")])
+    result = respond(manager, message("event-off", timestamp="300.000001"))
+    assert result.status == "complete" and result.escalate == "" and result.text == "Started."
+    # An empty brief or reply is invalid, and blocks like any other malformed plan.
+    manager = policy(heavy, store, [action("escalate", "dart9", "", "Started.")])
+    assert respond(manager, message("event-bad", timestamp="400.000001")).status == "blocked"
+
+
+def test_planner_prompt_lists_only_remote_hosts_for_heavy_work(managed, message):
+    from pathlib import PurePosixPath
+    from fridica.agents import ClaudeBackend
+    from fridica.config import Host
+    from fridica.prompts import FILE_ESCALATE_NOTE, HEAVY_NOTE
+    heavy = replace(managed, heavy_tasks=True, remote_hosts=(Host("dart9", (PurePosixPath("/mnt/a"),)),))
+    context = ConversationContext([], managed.owner_id, "profile", "task", 1)
+    seen = {}
+
+    async def fake_invoke(self, prompt, classify, session=None, *, schema=None):
+        seen["prompt"] = prompt
+        return {"operation": "observe", "path": "", "content": "", "text": "", "update": None}, None
+
+    for config, expected in ((heavy, True), (managed, False)):
+        backend = ClaudeBackend(config)
+        backend._invoke = fake_invoke.__get__(backend)
+        asyncio.run(backend.plan(message(), context, {}, {"writable": [], "read_only": []}))
+        prompt = seen["prompt"]
+        assert (FILE_ESCALATE_NOTE in prompt) is expected and (HEAVY_NOTE in prompt) is expected
+        if expected:
+            assert '"hosts": [{"name": "dart9"' in prompt and '"name": "local"' not in prompt

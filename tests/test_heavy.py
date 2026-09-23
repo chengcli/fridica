@@ -311,6 +311,13 @@ def test_heavy_capability_check(config, monkeypatch):
     (problem,) = agents.check_backend(replace(config, backend="codex", heavy_tasks=True))
     assert "app-server" in problem
     assert agents.check_backend(replace(config, backend="codex")) == []
+    # With file_access the local roots never run a worker, so the primary host skips the worker check.
+    from pathlib import PurePosixPath
+    from fridica.config import Host
+    scoped = replace(config, backend="codex", heavy_tasks=True, file_access=True,
+                     remote_hosts=(Host("dart9", (PurePosixPath("/mnt/a"),)),))
+    outputs["exec --help"] += " --strict-config"
+    assert agents.check_backend(scoped) == []
 
 
 def test_escalation_routes_to_named_host(config, store, message, tmp_path):
@@ -360,3 +367,19 @@ def test_backend_validates_escalation_host(config, monkeypatch, message, caplog)
             assert result.escalate == "job" and result.escalate_host == "" and "unknown host" in caplog.text
         else:
             assert result.escalate == "job" and result.escalate_host == current[1]
+
+
+def test_scoped_file_access_escalates_only_to_remote_hosts(config, store, message):
+    from pathlib import PurePosixPath
+    from fridica.config import Host, Resources
+    dart9 = Host("dart9", (PurePosixPath("/mnt/data1/projects"),), Resources(gpus=(0,)))
+    scoped = replace(config, heavy_tasks=True, heavy_task_timeout=5, file_access=True, remote_hosts=(dart9,))
+    assert [host.name for host in scoped.heavy_hosts] == ["dart9"]
+    agent = HeavyAgent([AgentResult("Training on the GPU box.", escalate="train")], reports=["trained"])
+    transport = Transport()
+    replica = Replica(scoped, store, agent, transport)
+    replica.permissions = None  # drive the replica with the fake agent's escalating replies directly
+    first = message()
+    run(replica, first)
+    assert agent.worked[0][3] == "dart9" and store.task(first)["worker_host"] == "dart9"
+    assert [sent[1].text for sent in transport.sent] == ["Training on the GPU box.", "trained"]
