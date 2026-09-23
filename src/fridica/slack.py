@@ -19,6 +19,7 @@ from .replica import DeliveryRejected, RateLimited, Replica
 
 logger = logging.getLogger(__name__)
 MARKER = "\n\n[via fridica]"
+LINKED_REPLY_LIMIT = 50
 
 
 def normalize(payload: dict) -> Message | None:
@@ -99,6 +100,19 @@ class SlackTransport:
     async def announce(self, message: Message, text: str, task_id: str) -> str:
         """Post a new top-level message in the channel (the root of a continuation thread)."""
         return await self._post(message.channel_id, text, task_id, 0, "complete", thread_ts=None)
+
+    async def fetch(self, channel: str, timestamp: str, thread: str | None) -> list[dict]:
+        # conversations.replies accepts a thread root or any reply and returns the thread from its root,
+        # so one call covers top-level messages, thread roots and replies.
+        response = await self.client.conversations_replies(channel=channel, ts=thread or timestamp, limit=LINKED_REPLY_LIMIT + 1)
+        messages = [item for item in response.get("messages") or [] if isinstance(item, dict) and isinstance(item.get("text"), str)]
+        for index, item in enumerate(messages):
+            if item.get("ts") == timestamp:
+                root = item.get("thread_ts") in (None, timestamp)
+                chosen = messages[index:] if root else [item]
+                return [{"sender": entry.get("user") or entry.get("bot_id") or "", "text": entry["text"][:40000],
+                         "timestamp": entry.get("ts", "")} for entry in chosen]
+        return []
 
     async def _post(self, channel: str, text: str, task_id: str, turn: int, status: str, *, thread_ts: str | None) -> str:
         try:

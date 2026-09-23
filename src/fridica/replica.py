@@ -20,11 +20,12 @@ import uuid
 from . import collaboration
 from .config import Config
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message, Transport
-from .replies import format_reply
+from .replies import format_reply, permalinks
 from .store import Store
 
 logger = logging.getLogger(__name__)
 REPLY_LIMIT = 3500
+LINKED_TEXT_LIMIT = 20000
 OPEN_STATUSES = {"complete", "waiting"}
 
 # Texts Fridica posts on its own, outside the agent's replies.
@@ -153,11 +154,12 @@ class Replica:
             task_id, turn = self._budget(message, task)
             if task and message.sender_id != self.config.owner_id and await self._enforce_turn_limit(message, task, turn):
                 return
+            history = self.store.context(message, self.config.context_limit)
             context = ConversationContext(
-                self.store.context(message, self.config.context_limit), self.config.owner_id, self.config.profile,
+                history, self.config.owner_id, self.config.profile,
                 task_id, turn, session=self._session(message, task),
                 task=collaboration.snapshot(self.store.connection, self.config, message.channel_id, message.thread_id)["data"] if task else {},
-                worker=self.store.worker(message),
+                worker=self.store.worker(message), linked=await self._linked(message, history),
             )
             mentioned = self._mentions_owner(message)
             if mentioned and not message.generated and task and task['status'] not in OPEN_STATUSES:
@@ -249,6 +251,41 @@ class Replica:
             logger.info("Session for thread %s is idle beyond session_timeout; a new one will start", message.thread_id)
             return None
         return task["session"]
+
+    async def _linked(self, message: Message, history: list[Message]) -> tuple[dict, ...]:
+        """Fetch the Slack messages this thread links to, so a request that points at another thread can be read.
+
+        Links in ``message`` come first, then links in ``history``, so later turns still see a linked spec.
+        Only links into configured channels are followed: anyone in those channels can trigger
+        the agent, so following links elsewhere would expose channels they cannot read.
+        Links into the current thread are skipped because history already carries them.
+        """
+        fetch = getattr(self.transport, "fetch", None)
+        linked, budget = [], LINKED_TEXT_LIMIT
+        links = permalinks("\n".join(entry.text for entry in [message, *reversed(history)])) if fetch else []
+        for link, channel, timestamp, root in links:
+            if budget <= 0:
+                break
+            if channel not in self.config.channels:
+                linked.append({"link": link, "error": "not in a channel I watch"})
+                continue
+            if channel == message.channel_id and (root or timestamp) == message.thread_id:
+                continue
+            try:
+                entries = await fetch(channel, timestamp, root)
+            except Exception as error:
+                logger.warning("Linked message %s in %s could not be fetched (%s)", timestamp, channel, type(error).__name__)
+                linked.append({"link": link, "error": "could not be fetched"})
+                continue
+            if not entries:
+                linked.append({"link": link, "error": "not found"})
+            for entry in entries:
+                text = entry["text"][:budget]
+                budget -= len(text)
+                linked.append({"link": link, "sender": entry["sender"], "text": text})
+                if budget <= 0:
+                    break
+        return tuple(linked)
 
     async def _decide(self, message: Message, task, turn: int, mentioned: bool, context: ConversationContext) -> Decision:
         """Whether to reply: owner messages and closed generated exchanges never trigger, mentions always do."""

@@ -512,3 +512,30 @@ def test_codex_host_enabled_only_for_native_tasks(config, tmp_path):
         assert 'features.code_mode_host=false' in command
         assert 'features.shell_tool=false' in command
         assert 'features.unified_exec=false' in command
+
+
+def test_slack_fetch_returns_linked_message_and_thread_replies(config):
+    class Replies(Client):
+        async def conversations_replies(self, **kwargs):
+            self.replies = kwargs
+            return {"messages": [{"ts": "90.000001", "thread_ts": "90.000001", "user": "UBOB", "text": "root"},
+                                 {"ts": "90.000002", "thread_ts": "90.000001", "user": "UCAROL", "text": "reply"},
+                                 {"ts": "90.000003", "thread_ts": "90.000001", "bot_id": "B1", "text": "bot"}]}
+    client = Replies()
+    transport = SlackTransport(config, client)
+    assert [m["text"] for m in asyncio.run(transport.fetch("CROOM", "90.000001", None))] == ["root", "reply", "bot"]
+    assert client.replies["ts"] == "90.000001"
+    assert asyncio.run(transport.fetch("CROOM", "90.000002", "90.000001")) == [{"sender": "UCAROL", "text": "reply", "timestamp": "90.000002"}]
+    assert client.replies["ts"] == "90.000001"
+    assert asyncio.run(transport.fetch("CROOM", "91.000000", None)) == []
+
+
+def test_permalinks_parse_slack_message_links():
+    from fridica.replies import permalinks
+    text = ("<https://athena-snap.slack.com/archives/C0C3WJ6KUF4/p1790176447536319|the spec> and "
+            "https://x.slack.com/archives/C1/p1790176447536319 again "
+            "https://x.slack.com/archives/C2ABC/p1790176447536400?thread_ts=1790176447.000100&cid=C2ABC")
+    assert permalinks(text) == [
+        ("https://athena-snap.slack.com/archives/C0C3WJ6KUF4/p1790176447536319", "C0C3WJ6KUF4", "1790176447.536319", None),
+        ("https://x.slack.com/archives/C2ABC/p1790176447536400", "C2ABC", "1790176447.536400", "1790176447.000100"),
+    ]
