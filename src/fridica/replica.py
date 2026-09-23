@@ -409,7 +409,8 @@ class Replica:
     async def _heavy(self, message: Message, brief: str, host: str) -> None:
         """Run one escalated job outside the pipeline lock, then post its report in the thread."""
         task = self.store.task(message)
-        context = replace(self._thread_context(message, task), worker=self.store.worker(message))
+        context = self._thread_context(message, task)
+        context = replace(context, worker=self.store.worker(message), linked=await self._linked(message, context.messages))
         thread = task["worker_thread"]
         try:
             try:

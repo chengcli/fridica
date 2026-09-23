@@ -477,6 +477,13 @@ def test_escalate_hands_brief_to_remote_host(managed, store, message, caplog):
     # An empty brief or reply is invalid, and blocks like any other malformed plan.
     manager = policy(heavy, store, [action("escalate", "dart9", "", "Started.")])
     assert respond(manager, message("event-bad", timestamp="400.000001")).status == "blocked"
+    # A brief that carries a long pasted specification fits; one past the limit blocks and logs why.
+    manager = policy(heavy, store, [action("escalate", "dart9", "x" * 40000, "Started.")])
+    assert respond(manager, message("event-long", timestamp="500.000001")).escalate == "x" * 40000
+    manager = policy(heavy, store, [action("escalate", "dart9", "x" * 40001, "Started.")])
+    with caplog.at_level(logging.WARNING, logger="fridica.permissions"):
+        assert respond(manager, message("event-huge", timestamp="600.000001")).status == "blocked"
+    assert "File plan for event event-huge was rejected (ValueError): Invalid heavy-task brief" in caplog.text
 
 
 def test_planner_prompt_lists_only_remote_hosts_for_heavy_work(managed, message):
@@ -498,5 +505,6 @@ def test_planner_prompt_lists_only_remote_hosts_for_heavy_work(managed, message)
         asyncio.run(backend.plan(message(), context, {}, {"writable": [], "read_only": []}))
         prompt = seen["prompt"]
         assert (FILE_ESCALATE_NOTE in prompt) is expected and (HEAVY_NOTE in prompt) is expected
+        assert ("under 40000 characters" in prompt) is expected
         if expected:
             assert '"hosts": [{"name": "dart9"' in prompt and '"name": "local"' not in prompt

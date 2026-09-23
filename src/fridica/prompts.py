@@ -44,6 +44,7 @@ In update, empty strings leave fields unchanged; kind describes the reply, not p
 Claims must be exact message excerpts with source_event; set corrects to the disputed claim's id.
 Keep credentials, file contents and private diagnostics out of dashboard notes.
 """
+ESCALATE_LIMIT = 40000
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -57,7 +58,7 @@ RESPONSE_SCHEMA = {
         },
         "escalate": {
             "type": "string",
-            "description": "Normally empty. When heavy_tasks is enabled and the request needs long-running or hardware-heavy work, a complete self-contained brief for the persistent worker that will do it.",
+            "description": f"Normally empty. When heavy_tasks is enabled and the request needs long-running or hardware-heavy work, a complete self-contained brief for the persistent worker that will do it, at most {ESCALATE_LIMIT} characters.",
         },
         "escalate_host": {
             "type": "string",
@@ -67,7 +68,6 @@ RESPONSE_SCHEMA = {
     "required": ["text", "status", "discussion", "send", "update", "escalate", "escalate_host"],
     "additionalProperties": False,
 }
-ESCALATE_LIMIT = 4000
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {"summary": {"type": "string", "description": "A plain-text summary of the thread for people continuing it."}},
@@ -96,6 +96,9 @@ REPLY_LIMIT = 3500
 DIGEST_LIMIT = 2500
 SUMMARY_LIMIT = DIGEST_LIMIT
 
+BRIEF_NOTE = f"""Keep the brief under {ESCALATE_LIMIT} characters. The worker also receives this Slack thread and the linked
+messages, so refer to a long specification there (for example "the Level 0 spec in the thread") instead of copying it.
+"""
 HEAVY_NOTE = """
 Heavy tasks are enabled. Answer conversational and quick requests yourself. When the request needs long-running or
 hardware-heavy work (full builds, long test suites, GPU or multi-core jobs, large data processing), do not run it in
@@ -105,7 +108,7 @@ job needs (empty for the workspace's own host), tell the requester in text that 
 result will be posted in this thread, and use status complete. Each host in hosts lists its writable roots and its
 resources; a worker can only write inside its own host's roots. Never escalate while worker.state is running; report
 that the job is still in progress instead. Leave escalate empty in every other case.
-"""
+""" + BRIEF_NOTE
 GPU_NOTE = """
 GPU work (CUDA, training, inference, benchmarks, nvidia-smi) can only run in a heavy task on a host whose resources
 list gpus with gpu_access true: this turn's sandbox has no access to GPU devices, so escalate such requests there.
@@ -148,7 +151,7 @@ FILE_ESCALATE_NOTE = (
     "the host from hosts whose roots and hardware the job needs (the local roots are not a candidate), and text tells "
     "the requester that the job has started and that the result will be posted in this thread. "
     "Ignore the escalate and escalate_host field names above; they do not exist in this mode.\n"
-)
+) + BRIEF_NOTE
 
 
 def conversation_prompt(message: Message, context: ConversationContext, classify: bool,
@@ -196,9 +199,11 @@ def worker_prompt(brief: str, context: ConversationContext, contract: Contract |
         "repositories": [repo.payload() for repo in repositories],
         "current_task": context.task or {}, "resources": resources or {}, "host": host or {},
         "thread": [{"sender": item.sender_id, "generated": item.generated, "text": item.text} for item in context.messages],
+        "linked": list(context.linked),
         "brief": brief,
     }
     note = WORKER_NOTE + (GPU_WORKER_NOTE if (resources or {}).get("gpu_access") else "")
+    note += LINKED_NOTE if context.linked else ""
     return contract.replies + TASK_CONTEXT_NOTE + note + "\n\nJob data:\n" + json.dumps(payload)
 
 

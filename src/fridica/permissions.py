@@ -207,7 +207,8 @@ class Permissions:
                     return replace(self.apply(identifier, automatic=True), update=update)
                 return AgentResult(f'File request {identifier} is waiting for local approval.', 'waiting', update=update)
             return AgentResult('The file request needs more local context before I can continue.', 'blocked')
-        except (ValueError, OSError):
+        except (ValueError, OSError) as error:
+            logger.warning('File plan for event %s was rejected (%s): %s', message.event_id, type(error).__name__, error)
             return AgentResult('The file request could not pass the local access checks. No change was applied.', 'blocked')
 
     def _escalation(self, plan: dict, update) -> AgentResult:

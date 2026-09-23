@@ -383,3 +383,16 @@ def test_scoped_file_access_escalates_only_to_remote_hosts(config, store, messag
     run(replica, first)
     assert agent.worked[0][3] == "dart9" and store.task(first)["worker_host"] == "dart9"
     assert [sent[1].text for sent in transport.sent] == ["Training on the GPU box.", "trained"]
+
+
+def test_worker_receives_linked_messages(heavy_config, store, message):
+    from test_replica import LinkTransport
+    spec = [{"sender": "UBOB", "text": "Level 0 spec", "timestamp": "90.000001"}]
+    agent = HeavyAgent([AgentResult("Started.", escalate="Run the Level 0 spec in the thread.")])
+    replica = Replica(heavy_config, store, agent, LinkTransport({"90.000001": spec}))
+    run(replica, message(text="<@UOWNER> run https://team.slack.com/archives/CROOM/p90000001"))
+    brief, context, _resume, _host = agent.worked[0]
+    assert context.linked == ({"link": "https://team.slack.com/archives/CROOM/p90000001", "sender": "UBOB", "text": "Level 0 spec"},)
+    prompt = worker_prompt(brief, context)
+    assert '"linked": [{"link"' in prompt and "linked holds" in prompt
+    assert "linked holds" not in worker_prompt(brief, replace(context, linked=()))
