@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 import pytest
 from slack_sdk.errors import SlackApiError
@@ -539,3 +540,45 @@ def test_permalinks_parse_slack_message_links():
         ("https://athena-snap.slack.com/archives/C0C3WJ6KUF4/p1790176447536319", "C0C3WJ6KUF4", "1790176447.536319", None),
         ("https://x.slack.com/archives/C2ABC/p1790176447536400", "C2ABC", "1790176447.536400", "1790176447.000100"),
     ]
+
+
+class History(Client):
+    def __init__(self, history, replies):
+        super().__init__()
+        self.history, self.replies, self.calls = history, replies, []
+
+    async def conversations_history(self, **kwargs):
+        self.calls.append(("history", kwargs))
+        return {"messages": self.history}
+
+    async def conversations_replies(self, **kwargs):
+        self.calls.append(("replies", kwargs))
+        return {"messages": self.replies.get(kwargs["ts"], [])}
+
+
+def test_catch_up_stores_messages_socket_mode_missed(config, store, message):
+    from fridica.replica import Replica
+    from fridica.slack import catch_up
+    from test_replica import Agent
+    now = time.time()
+    old, root, fresh = f"{now - 7200:.6f}", f"{now - 60:.6f}", f"{now - 30:.6f}"
+    client = History(
+        [{"ts": root, "user": "UALICE", "text": "<@UOWNER> run it", "reply_count": 1, "latest_reply": fresh, "thread_ts": root},
+         {"ts": f"{now - 20:.6f}", "user": "UALICE", "subtype": "channel_join", "text": "joined"}],
+        {root: [{"ts": root, "user": "UALICE", "text": "<@UOWNER> run it", "thread_ts": root},
+                {"ts": fresh, "user": "UBOB", "text": "details", "thread_ts": root}],
+         "50.000001": [{"ts": "50.000001", "user": "UALICE", "text": "old root", "thread_ts": "50.000001"},
+                       {"ts": old, "user": "UALICE", "text": "too old", "thread_ts": "50.000001"},
+                       {"ts": f"{now - 10:.6f}", "user": "UOTHER", "bot_id": "B1", "text": "peer reply", "thread_ts": "50.000001",
+                        "metadata": {"event_type": "fridica_message", "event_payload": {"turn": 2, "task_id": "t", "status": "waiting"}}}]})
+    store.add(message("known", thread_id="50.000001", timestamp="50.000001"))
+    with store.connection:
+        store.connection.execute("INSERT INTO tasks(workspace,channel,thread,task_id,status,updated) VALUES('TTEAM','CROOM','50.000001','t','waiting',?)", (now,))
+    replica = Replica(config, store, Agent(), SlackTransport(config, client))
+    assert asyncio.run(catch_up(replica.transport, replica, store, 900)) == 3
+    assert client.calls[0][1]["include_all_metadata"] is True and float(client.calls[0][1]["oldest"]) == pytest.approx(now - 900, abs=5)
+    rows = {json.loads(row["payload"])["text"]: json.loads(row["payload"]) for row in store.connection.execute("SELECT payload FROM events")}
+    assert set(rows) == {"<@UOWNER> help", "<@UOWNER> run it", "details", "peer reply"}
+    assert rows["details"]["thread_id"] == root and rows["peer reply"]["generated"] and rows["peer reply"]["turn"] == 2
+    # Messages that are already stored, whether from Socket Mode or an earlier catch-up, are not added again.
+    assert asyncio.run(catch_up(replica.transport, replica, store, 900)) == 0

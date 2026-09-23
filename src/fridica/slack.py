@@ -20,6 +20,10 @@ from .replica import DeliveryRejected, RateLimited, Replica
 logger = logging.getLogger(__name__)
 MARKER = "\n\n[via fridica]"
 LINKED_REPLY_LIMIT = 50
+# Socket Mode can drop events while the daemon is down or reconnecting, so on startup it re-reads
+# the last hour of channel history. Messages it already stored are ignored by the store's unique index.
+CATCH_UP_WINDOW = 3600
+CATCH_UP_THREAD_AGE = 86400
 
 
 def normalize(payload: dict) -> Message | None:
@@ -114,6 +118,28 @@ class SlackTransport:
                          "timestamp": entry.get("ts", "")} for entry in chosen]
         return []
 
+    async def recent(self, channel: str, oldest: float, threads=()) -> list[dict]:
+        """Messages posted in ``channel`` since ``oldest``, as Events API payloads for ``normalize``.
+
+        Covers top-level messages, replies in threads whose roots are that recent, and replies in ``threads``.
+        """
+        bound = f"{oldest:.6f}"
+        history = await self.client.conversations_history(channel=channel, oldest=bound, limit=200, include_all_metadata=True)
+        found = {item["ts"]: item for item in history.get("messages") or [] if isinstance(item, dict) and isinstance(item.get("ts"), str)}
+        roots = set(threads) | {ts for ts, item in found.items() if item.get("reply_count")}
+        for root in sorted(roots):
+            replies = await self.client.conversations_replies(channel=channel, ts=root, oldest=bound, limit=200, include_all_metadata=True)
+            for item in replies.get("messages") or []:
+                if isinstance(item, dict) and isinstance(item.get("ts"), str) and item["ts"] != root:
+                    found.setdefault(item["ts"], item)
+        payloads = []
+        for ts, item in sorted(found.items()):
+            if not re.fullmatch(r"\d+\.\d+", ts) or float(ts) < oldest:
+                continue
+            payloads.append({"type": "event_callback", "event_id": f"catchup:{channel}:{ts}", "team_id": self.config.workspace_id,
+                             "event": {**item, "type": "message", "channel": channel}})
+        return payloads
+
     async def _post(self, channel: str, text: str, task_id: str, turn: int, status: str, *, thread_ts: str | None) -> str:
         try:
             arguments = {"channel": channel, "text": text, "unfurl_links": False, "unfurl_media": False,
@@ -143,6 +169,21 @@ class SlackTransport:
         return timestamp
 
 
+async def catch_up(transport: SlackTransport, replica: Replica, store, window: float) -> int:
+    """Store messages Socket Mode did not deliver from the last ``window`` seconds; return how many were new."""
+    now, added = time.time(), 0
+    for channel in replica.config.channels:
+        threads = [row[0] for row in store.connection.execute(
+            "SELECT thread FROM tasks WHERE workspace=? AND channel=? AND updated>=? AND control_state='active'",
+            (replica.config.workspace_id, channel, now - CATCH_UP_THREAD_AGE))]
+        for payload in await transport.recent(channel, now - window, threads):
+            message = normalize(payload)
+            if message is not None and replica.receive(message):
+                added += 1
+                logger.info("Caught up on message %s in %s that Slack did not deliver live", message.timestamp, channel)
+    return added
+
+
 async def serve(config: Config, store, agent, observe_only: bool = False, config_path=None) -> None:
     started_at = time.time()
     store.heartbeat('connecting', observe_only, started_at)
@@ -165,6 +206,12 @@ async def serve(config: Config, store, agent, observe_only: bool = False, config
                         logger.warning("Ignored a message that mentions you: %s", reason)
             await client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
+        async def recover_missed():
+            try:
+                await catch_up(transport, replica, store, CATCH_UP_WINDOW)
+            except Exception as error:
+                logger.warning("Catching up on missed messages failed (%s)", type(error).__name__)
+
         async def heartbeat():
             while True:
                 connected = await socket.is_connected()
@@ -177,6 +224,7 @@ async def serve(config: Config, store, agent, observe_only: bool = False, config
             logger.info("Listening as %s in %d configured channels", config.owner_id, len(config.channels))
             async with asyncio.TaskGroup() as workers:
                 workers.create_task(heartbeat())
+                workers.create_task(recover_missed())
                 workers.create_task(replica.run())
         finally:
             await socket.close()
