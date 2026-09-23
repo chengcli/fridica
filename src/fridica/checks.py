@@ -107,8 +107,7 @@ def check_host(config: Config, host: Host) -> list[str]:
         return problems
     if which(config, config.backend, host) is None:
         return [f"Install {config.backend} and sign in on {host.name} before starting Fridica."]
-    problems = check_authentication(config, host) + check_gpu_confinement(config, host)
-    return problems
+    return check_backend(config, host) + check_authentication(config, host)
 
 
 def check_gpu_confinement(config: Config, host: Host | None = None) -> list[str]:
@@ -132,10 +131,10 @@ def unreachable(config: Config, result: subprocess.CompletedProcess, host: Host 
     return []
 
 
-def check_backend(config: Config) -> list[str]:
-    executable = which(config, config.backend)
+def check_backend(config: Config, host: Host | None = None) -> list[str]:
+    executable = which(config, config.backend, host)
     if executable is None:
-        return [f"Install {config.backend} and authenticate {where(config)} before starting Fridica."]
+        return [f"Install {config.backend} and authenticate {where(config, host)} before starting Fridica."]
     command = [executable, "exec", "--help"] if config.backend == "codex" else [executable, "--help"]
     required = (["--ignore-user-config", "--ignore-rules", "--output-schema", "--ephemeral", "resume"]
                 if config.backend == "codex" else
@@ -144,24 +143,24 @@ def check_backend(config: Config) -> list[str]:
     if config.file_access and config.backend == "codex":
         required += ["--strict-config"]
     try:
-        result = probe(config, command, stdin=None)
+        result = probe(config, command, stdin=None, host=host)
     except (OSError, subprocess.TimeoutExpired):
-        return [f"Could not inspect {config.backend} {where(config)}; check its installation."]
-    if unreachable(config, result):
-        return unreachable(config, result)
+        return [f"Could not inspect {config.backend} {where(config, host)}; check its installation."]
+    if unreachable(config, result, host):
+        return unreachable(config, result, host)
     if result.returncode or any(flag not in result.stdout for flag in required):
-        return [f"Upgrade {config.backend} {where(config)}: required isolation/structured-output flags are unavailable."]
+        return [f"Upgrade {config.backend} {where(config, host)}: required isolation/structured-output flags are unavailable."]
     if config.heavy_tasks:
         if config.backend == "codex":
             try:
-                result = probe(config, [executable, "app-server", "--help"], stdin=None)
+                result = probe(config, [executable, "app-server", "--help"], stdin=None, host=host)
             except (OSError, subprocess.TimeoutExpired):
-                return [f"Could not inspect codex app-server {where(config)}; check its installation."]
+                return [f"Could not inspect codex app-server {where(config, host)}; check its installation."]
             if result.returncode or "--listen" not in result.stdout:
-                return [f"Upgrade codex {where(config)}: heavy_tasks needs the codex app-server command."]
+                return [f"Upgrade codex {where(config, host)}: heavy_tasks needs the codex app-server command."]
         elif "--input-format" not in result.stdout:
-            return [f"Upgrade claude {where(config)}: heavy_tasks needs --input-format stream-json."]
-        return check_gpu_confinement(config)
+            return [f"Upgrade claude {where(config, host)}: heavy_tasks needs --input-format stream-json."]
+        return check_gpu_confinement(config, host)
     return []
 
 

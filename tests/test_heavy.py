@@ -79,9 +79,9 @@ def test_escalation_posts_report_in_thread(heavy_config, store, message):
     run(replica, first)
     assert [sent[1].text for sent in transport.sent] == ["Starting the full run; I'll post the result here.", "Full suite: 312 passed, 0 failed."]
     brief, context, resume, host = agent.worked[0]
-    assert host == ""
+    assert host == "local"
     assert brief == "Run the full test suite on the GPU box." and resume is None
-    assert context.worker == {"state": "running", "since": pytest.approx(store.task(first)["worker_since"])}
+    assert context.worker == {"state": "running", "since": pytest.approx(store.task(first)["worker_since"]), "host": "local"}
     assert context.task_id == store.task(first)["task_id"]
     task = store.task(first)
     assert task["worker_state"] == "done" and task["worker_thread"] == "thr-1"
@@ -254,7 +254,7 @@ def test_backend_work_uses_thread_worker(config, message, monkeypatch):
             seen["prompt"], seen["resume"] = prompt, resume
             return "x" * 5000, "thr-1"
 
-    backend.workers.workers["task"] = FakeWorker()
+    backend.workers.workers[("task", "local")] = FakeWorker()
     context = ConversationContext([], config.owner_id, "profile", "task", 1)
     report, thread = asyncio.run(backend.work("do it", context, "thr-0"))
     assert thread == "thr-1" and len(report) == 3500 and seen["resume"] == "thr-0"
@@ -272,11 +272,11 @@ def test_resources_and_heavy_config(tmp_path, config):
     assert loaded.resources.environment() == {"OMP_NUM_THREADS": "8", "CUDA_VISIBLE_DEVICES": "1,0"}
     assert Resources().payload() == {} and Resources().environment() == {}
     assert Resources(gpus=()).environment() == {"CUDA_VISIBLE_DEVICES": ""}
-    assert loaded.resources.unsandboxed and loaded.resources.payload()["gpu_access"] is True
-    assert not Resources(gpus=()).unsandboxed and "gpu_access" not in Resources(gpus=()).payload()
-    assert not Resources(cpus=2).unsandboxed and "gpu_access" not in Resources(cpus=2).payload()
+    assert loaded.resources.gpu_worker and loaded.resources.payload()["gpu_access"] is True
+    assert not Resources(gpus=()).gpu_worker and "gpu_access" not in Resources(gpus=()).payload()
+    assert not Resources(cpus=2).gpu_worker and "gpu_access" not in Resources(cpus=2).payload()
     kept = Resources(gpus=(0,), gpu_access=False)
-    assert not kept.unsandboxed and kept.payload()["gpu_access"] is False
+    assert not kept.gpu_worker and kept.payload()["gpu_access"] is False
     with pytest.raises(ValueError):
         Resources(gpu_access="yes")
     assert load_config(source).resources == loaded.resources  # frozen and comparable for hot reload
@@ -311,3 +311,52 @@ def test_heavy_capability_check(config, monkeypatch):
     (problem,) = agents.check_backend(replace(config, backend="codex", heavy_tasks=True))
     assert "app-server" in problem
     assert agents.check_backend(replace(config, backend="codex")) == []
+
+
+def test_escalation_routes_to_named_host(config, store, message, tmp_path):
+    from pathlib import PurePosixPath
+    from fridica.config import Host, Resources
+    dart9 = Host("dart9", (PurePosixPath("/mnt/data1/projects"),), Resources(gpus=(0,)))
+    heavy = replace(config, heavy_tasks=True, heavy_task_timeout=5, remote_hosts=(dart9,))
+    agent = HeavyAgent([AgentResult("Training on the GPU box.", escalate="train", escalate_host="dart9"),
+                        AgentResult("Local build next.", escalate="build", escalate_host="")],
+                       reports=["trained", "built"])
+    transport = Transport()
+    replica = Replica(heavy, store, agent, transport)
+    first = message()
+    run(replica, first)
+    assert agent.worked[0][3] == "dart9" and agent.worked[0][2] is None
+    task = store.task(first)
+    assert task["worker_host"] == "dart9" and task["worker_thread"] == "thr-1" and task["worker_state"] == "done"
+    assert agent.responded[0][1].worker is None
+    # A job on another host must not resume dart9's worker thread.
+    run(replica, message("event2", text="<@UOWNER> build it", timestamp="100.000003"))
+    assert agent.worked[1][3] == "local" and agent.worked[1][2] is None
+    assert store.task(first)["worker_host"] == "local" and store.task(first)["worker_thread"] == "thr-2"
+    assert [sent[1].text for sent in transport.sent] == ["Training on the GPU box.", "trained", "Local build next.", "built"]
+
+
+def test_backend_validates_escalation_host(config, monkeypatch, message, caplog):
+    from pathlib import PurePosixPath
+    from fridica import agents
+    from fridica.agents import ClaudeBackend
+    from fridica.config import Host
+    heavy = replace(config, heavy_tasks=True, resume_sessions=False, remote_hosts=(Host("dart9", (PurePosixPath("/mnt/a"),)),))
+    answers = iter([("dart9", "dart9"), ("local", ""), ("", ""), ("snowy", None)])
+
+    async def run_cli(command, prompt, cwd, settings):
+        data = json.loads(prompt.split("Conversation data:\n", 1)[1])
+        assert [host["name"] for host in data["hosts"]] == ["local", "dart9"]
+        return json.dumps({"structured_output": {"text": "Started.", "status": "complete", "discussion": "ongoing",
+                                                 "send": True, "escalate": "job", "escalate_host": current[0]}})
+
+    monkeypatch.setattr(agents, "_run", run_cli)
+    context = ConversationContext([], config.owner_id, "profile", "task", 1)
+    import logging
+    for current in answers:
+        with caplog.at_level(logging.WARNING, logger="fridica.agents"):
+            result = asyncio.run(ClaudeBackend(heavy).respond(message(), context))
+        if current[1] is None:
+            assert result.escalate == "job" and result.escalate_host == "" and "unknown host" in caplog.text
+        else:
+            assert result.escalate == "job" and result.escalate_host == current[1]

@@ -240,3 +240,54 @@ def test_remote_command_failure_is_distinguished_from_missing_directory(remote_c
                         lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", "bash: uname: command not found"))
     (problem,) = checks.check_connection(remote_config)
     assert "status 1" in problem and "command not found" in problem and "not a directory" not in problem
+
+
+def test_heavy_host_checks_and_doctor(config, monkeypatch, capsys):
+    from fridica import doctor
+    from fridica.cli import main
+    from fridica.config import Host, Resources
+    dart9 = Host("dart9", (PurePosixPath("/mnt/data1/projects"),), Resources(gpus=(0,)))
+    heavy = replace(config, heavy_tasks=True, remote_hosts=(dart9,))
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(command)
+        assert command[0] == "ssh" and command[command.index("--") + 1] == "dart9"
+        script = command[-1]
+        if "uname -s" in script:
+            return subprocess.CompletedProcess(command, 0, "Linux\n", "")
+        if "login status" in script:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if "--help" in script:
+            return subprocess.CompletedProcess(command, 0, "--ignore-user-config --ignore-rules --output-schema --ephemeral resume --listen", "")
+        if "command -v" in script:
+            name = re.findall(r"command -v ([A-Za-z0-9_-]+)", script)[-1]
+            return subprocess.CompletedProcess(command, 0 if name != "bwrap" or bwrap_present else 1, f"/remote/bin/{name}\n", "")
+        raise AssertionError(script)
+
+    bwrap_present = True
+    monkeypatch.setattr(agents.subprocess, "run", run)
+    monkeypatch.setattr(agents.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setenv(heavy.user_token_env, "xoxp-secret")
+    assert checks.check_host(replace(heavy, backend="codex"), dart9) == []
+    assert all("cd /mnt/data1/projects" in command[-1] for command in seen)
+    bwrap_present = False
+    (problem,) = checks.check_host(replace(heavy, backend="codex"), dart9)
+    assert "bwrap" in problem and "dart9" in problem
+    assert checks.check_gpu_confinement(replace(heavy, heavy_tasks=False), dart9) == []
+    assert checks.check_gpu_confinement(heavy) == []  # the local host declares no GPUs
+
+    monkeypatch.setattr(doctor, "load_config", lambda path: heavy)
+    monkeypatch.setenv(heavy.app_token_env, "xapp-secret")
+    for name in ("check_backend", "check_sandbox", "check_authentication"):
+        monkeypatch.setattr(doctor, name, lambda config: [])
+    monkeypatch.setattr(doctor, "check_host", lambda config, host: [f"Could not reach {host.name} over SSH."])
+    assert main(["doctor"]) == 1
+    output = capsys.readouterr().out
+    assert "FAIL Heavy-task host dart9 (dart9:/mnt/data1/projects): Could not reach dart9" in output
+    monkeypatch.setattr(doctor, "check_host", lambda config, host: [])
+    assert main(["doctor"]) == 0
+    assert "PASS Heavy-task host dart9" in capsys.readouterr().out
+    monkeypatch.setattr(doctor, "load_config", lambda path: replace(heavy, heavy_tasks=False))
+    assert main(["doctor"]) == 1
+    assert "only used by heavy tasks" in capsys.readouterr().out

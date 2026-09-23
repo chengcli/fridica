@@ -403,15 +403,17 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
     values["read_only_workspaces"] = tuple(path for _root_host, path in read_only)
     values["additional_workspaces"] = tuple(path for root_host, path in additional if root_host == primary)
     others: dict[str, list[PurePath]] = {}
-    for root_host, path in additional:
+    for root_host, root in additional:
         if root_host != primary:
-            others.setdefault(root_host, []).append(path)
+            others.setdefault(root_host, []).append(root)
     tables = values.pop("resources", None)
     per_host: dict[str, dict] = {}
     if tables is not None:
         if not isinstance(tables, dict):
             raise ValueError("resources must be a [resources] table or [resources.<host>] tables")
-        if tables and all(isinstance(table, dict) for table in tables.values()):
+        if tables and any(isinstance(table, dict) for table in tables.values()):
+            if not all(isinstance(table, dict) for table in tables.values()):
+                raise ValueError("resources must be either one [resources] table or only [resources.<host>] tables, not both")
             per_host = dict(tables)
             known = {primary or LOCAL, *others}
             for name in per_host:

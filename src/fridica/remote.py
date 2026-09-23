@@ -52,26 +52,33 @@ def ssh_command(target: Config | Host, script: str) -> list[str]:
 
 BWRAP = "bwrap"
 BACKEND_STATE = (".codex", ".claude", ".claude.json")
+# Inside the writable state directories, the files that decide what the backends run
+# (hooks, MCP servers, sandbox mode) stay read-only so a job cannot plant anything that
+# would later run outside the confinement, in the owner's own sessions.
+BACKEND_SETTINGS = (".codex/config.toml", ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks")
 
 
-def confinement(roots, *, network: bool, home: str | None) -> list[str]:
+def confinement(roots, *, home: str | None) -> list[str]:
     """The bubblewrap prefix that confines a GPU worker to ``roots`` while exposing the GPU devices.
 
     The whole filesystem is visible read-only; only the designated roots, ``/tmp`` (a
-    private tmpfs) and the backend's own state under the home directory are writable.
-    ``/dev`` is bound in full so CUDA can open the device nodes. Without ``network``
-    the worker gets no network namespace access at all. ``home`` is the local home
-    directory, or None for a remote host, where the login shell expands ``$HOME``.
+    private tmpfs) and the backend's own state under the home directory are writable,
+    with the backend's settings files read-only again on top. ``/dev`` is bound in full
+    so CUDA can open the device nodes. The network is shared with the host: the CLI
+    itself must reach the model API, and bubblewrap cannot separate that from the
+    commands the agent runs. ``home`` is the local home directory, or None for a remote
+    host, where the login shell expands ``$HOME``.
     """
     words = [BWRAP, "--die-with-parent", "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/",
              "--dev-bind", "/dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
-    if not network:
-        words.append("--unshare-net")
     for root in roots:
         words += ["--bind", str(root), str(root)]
     for name in BACKEND_STATE:
         path = f"$HOME/{name}" if home is None else os.path.join(home, name)
         words += ["--bind-try", path, path]
+    for name in BACKEND_SETTINGS:
+        path = f"$HOME/{name}" if home is None else os.path.join(home, name)
+        words += ["--ro-bind-try", path, path]
     return words + ["--"]
 
 
@@ -120,7 +127,7 @@ def remote_script(command: list[str], cwd: PurePath, *, files: dict[str, str] | 
 
 def launch(target: Config | Host, command: list[str], cwd: PurePath, *, files: dict[str, str] | None = None,
            directory: PurePosixPath | None = None, env: dict[str, str] | None = None,
-           timeout: float | None = None, confine: tuple | None = None, network: bool = False) -> tuple[list[str], Path | None]:
+           timeout: float | None = None, confine: tuple | None = None) -> tuple[list[str], Path | None]:
     """The argv to start locally, and the local cwd to start it in.
 
     A local ``target`` returns ``command`` and ``cwd`` (prefixed by the bubblewrap
@@ -128,8 +135,8 @@ def launch(target: Config | Host, command: list[str], cwd: PurePath, *, files: d
     ``ssh`` argv wrapping ``remote_script`` and ``None`` for the local cwd.
     """
     if not target.remote:
-        prefix = confinement(confine, network=network, home=str(Path.home())) if confine is not None else []
+        prefix = confinement(confine, home=str(Path.home())) if confine is not None else []
         return [*prefix, *command], Path(cwd)
-    prefix = shell_words(confinement(confine, network=network, home=None)) if confine is not None else ""
+    prefix = shell_words(confinement(confine, home=None)) if confine is not None else ""
     script = remote_script(command, cwd, files=files, directory=directory, env=env, timeout=timeout, prefix=prefix)
     return ssh_command(target, script), None

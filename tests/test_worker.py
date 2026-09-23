@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import replace
 import json
 import os
+import pathlib
 from pathlib import PurePosixPath
 import sys
 
@@ -102,14 +103,25 @@ def heavy_config(config):
                    resources=Resources(cpus=4, gpus=(0, 1), gpu_type="A100"))
 
 
+FAKE_BWRAP = f'''#!{sys.executable}
+"""A stand-in for bubblewrap: records the confinement options and runs the wrapped command directly."""
+import json, os, pathlib, subprocess, sys
+arguments = sys.argv[1:]
+separator = arguments.index("--")
+pathlib.Path(os.environ["BWRAP_LOG"]).open("a").write(json.dumps(arguments[:separator]) + "\\n")
+os.execvp(arguments[separator + 1], arguments[separator + 1:])
+'''
+
+
 @pytest.fixture
 def fake_worker_cli(tmp_path, monkeypatch):
     log = tmp_path / "worker.log"
     monkeypatch.setenv("WORKER_LOG", str(log))
+    monkeypatch.setenv("BWRAP_LOG", str(tmp_path / "bwrap.log"))
     monkeypatch.setenv(os.environ.get("FRIDICA_UNUSED", "SLACK_APP_TOKEN"), "xapp-secret")
     binaries = tmp_path / "bin"
     binaries.mkdir()
-    for name, body in (("codex", FAKE_APP_SERVER), ("claude", FAKE_CLAUDE_STREAM)):
+    for name, body in (("codex", FAKE_APP_SERVER), ("claude", FAKE_CLAUDE_STREAM), ("bwrap", FAKE_BWRAP)):
         executable = binaries / name
         executable.write_text(body)
         executable.chmod(0o700)
@@ -132,9 +144,17 @@ def test_codex_worker_job_resume_and_idle(heavy_config, fake_worker_cli, monkeyp
         assert start["data"]["params"]["cwd"] == str(config.workspace) and start["data"]["params"]["model"] == "gpt-x"
         assert start["cwd"] == str(config.workspace) and start["omp"] == "4" and start["cuda"] == "0,1"
         turn = [entry for entry in fake_worker_cli() if entry["kind"] == "turn/start"][0]["data"]["params"]
-        # GPUs are declared, so the worker runs outside the filesystem sandbox to reach them.
+        # GPUs are declared: Codex's own sandbox is off and Fridica's bubblewrap confines the worker instead.
         assert start["data"]["params"]["sandbox"] == "danger-full-access"
         assert turn["sandboxPolicy"] == {"type": "dangerFullAccess"}
+        bwrap = json.loads(pathlib.Path(os.environ["BWRAP_LOG"]).read_text().splitlines()[0])
+        assert bwrap[:3] == ["--die-with-parent", "--unshare-user", "--unshare-pid"]
+        assert ["--ro-bind", "/", "/"] == bwrap[3:6] and ["--dev-bind", "/dev", "/dev"] == bwrap[6:9]
+        assert ["--bind", str(config.workspace), str(config.workspace)] == bwrap[bwrap.index("--bind"):bwrap.index("--bind") + 3]
+        assert "--unshare-net" not in bwrap  # the CLI itself must reach the model API
+        assert any(word.endswith("/.codex") for word in bwrap) and "--bind-try" in bwrap
+        assert ["--ro-bind-try"] * 4 == [word for word in bwrap if word == "--ro-bind-try"]
+        assert any(word.endswith("/.codex/config.toml") for word in bwrap) and any(word.endswith("/.claude/hooks") for word in bwrap)
         assert turn["input"] == [{"type": "text", "text": "Run the suite"}]
         # A second job on the live process needs no new handshake.
         report, thread = await worker.run("Again", thread)
@@ -344,7 +364,7 @@ def test_workers_keep_the_sandbox_without_gpu_access(heavy_config, fake_worker_c
     extra = tmp_path / "extra"
     extra.mkdir()
     config = replace(heavy_config, backend="codex", resources=resources, additional_workspaces=(extra,))
-    assert not resources.unsandboxed
+    assert not resources.gpu_worker
 
     async def scenario():
         worker = CodexWorker(config)
@@ -362,3 +382,49 @@ def test_workers_keep_the_sandbox_without_gpu_access(heavy_config, fake_worker_c
     settings = json.loads(argv[argv.index("--settings") + 1])
     assert settings["sandbox"]["enabled"] and settings["sandbox"]["failIfUnavailable"]
     assert argv[argv.index("--allowedTools") + 1] == "Read,Glob,Grep"
+
+
+def test_remote_gpu_worker_is_confined_by_fridica_bwrap(heavy_config, fake_worker_cli, tmp_path, monkeypatch):
+    """A GPU host other than the workspace's: the ssh script wraps the agent in bwrap bound to that host's roots."""
+    from test_remote import FAKE_SSH
+    from fridica.config import Host, Resources
+    ssh = tmp_path / "bin" / "ssh"
+    ssh.write_text(FAKE_SSH)
+    ssh.chmod(0o700)
+    monkeypatch.setenv("SSH_LOG", str(tmp_path / "ssh.log"))
+    monkeypatch.setenv("EXPECTED_HOST", "dart9")
+    roots = (PurePosixPath(heavy_config.workspace), PurePosixPath(tmp_path / "data"))
+    dart9 = Host("dart9", roots, Resources(cpus=6, gpus=(1,), gpu_type="RTX"))
+    config = replace(heavy_config, backend="codex", resources=Resources(), remote_hosts=(dart9,))
+
+    async def scenario():
+        workers = Workers(config, CodexWorker)
+        worker = workers.get("task", dart9)
+        assert workers.get("task", dart9) is worker and workers.get("task") is not worker
+        report, thread = await worker.run("Run", None)
+        assert report.startswith("Ran the suite") and thread == "thr_1"
+        await workers.close()
+
+    asyncio.run(scenario())
+    entry = fake_worker_cli()[0]
+    assert entry["cwd"] == str(roots[0]) and entry["omp"] == "6" and entry["cuda"] == "1"
+    start = [e for e in fake_worker_cli() if e["kind"] == "thread/start"][0]["data"]["params"]
+    assert start["sandbox"] == "danger-full-access" and start["cwd"] == str(roots[0])
+    script = json.loads((tmp_path / "ssh.log").read_text().splitlines()[0])["script"]
+    assert "bwrap --die-with-parent" in script and "--dev-bind /dev /dev" in script and '"$HOME/.codex"' in script
+    assert f"--bind {roots[1]} {roots[1]}" in script and "--unshare-net" not in script
+    assert '"$HOME/.claude/settings.json" "$HOME/.claude/settings.json"' in script
+    assert "export CUDA_VISIBLE_DEVICES=1" in script and "export OMP_NUM_THREADS=6" in script
+    bwrap = json.loads(pathlib.Path(os.environ["BWRAP_LOG"]).read_text().splitlines()[0])
+    assert [w for w in bwrap if w.startswith("/home") or w.startswith("/root") or "/." in w][0].endswith("/.codex")
+
+
+def test_confinement_words():
+    from fridica import remote
+    local = remote.confinement([PurePosixPath("/w")], home="/home/me")
+    assert local[0] == "bwrap" and "--unshare-net" not in local and local[-1] == "--"
+    assert ["--bind", "/w", "/w"] == local[local.index("--bind"):local.index("--bind") + 3]
+    assert ["--bind-try", "/home/me/.codex", "/home/me/.codex"] == local[local.index("--bind-try"):local.index("--bind-try") + 3]
+    words = remote.shell_words(remote.confinement([PurePosixPath("/my dir")], home=None))
+    assert "'/my dir' '/my dir'" in words and '"$HOME/.claude.json" "$HOME/.claude.json"' in words
+    assert words.index("--ro-bind-try") > words.index("--bind-try")

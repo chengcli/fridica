@@ -264,9 +264,11 @@ workspace = "dart9:/mnt/data1/projects/my-project"
 additional_workspaces = ["dart9:/mnt/data1/projects/shared-lib"]
 ```
 
-Every agent run then happens on that host: the reply, the tool-less classification,
-summaries and debriefs, the environment checks, and the heavy-task worker described
-below. Fridica starts each one as `ssh -T host 'cd /path && codex exec ...'` (or
+Every per-turn run then happens on that host: the reply, the tool-less classification,
+summaries and debriefs, and the environment checks. Roots on *other* hosts, such as
+`additional_workspaces = ["dart9:/mnt/data1/projects"]` next to a local `workspace`,
+do not take part in replies at all: they make that host available to the heavy tasks
+described below, each confined to its own roots (see [Heavy tasks](#heavy-tasks)). Fridica starts each one as `ssh -T host 'cd /path && codex exec ...'` (or
 `claude -p ...`) with no PTY, feeds the prompt on stdin, and reads the structured
 result from stdout, so SSH itself is the transport and the security boundary;
 nothing listens on a port and no filesystem is mounted. Slack, the state database,
@@ -284,12 +286,15 @@ Requirements on the remote host:
   `claude auth status`) is what `fridica doctor` runs.
 - For Claude, `bwrap` and `socat` on the remote host (see the sandbox dependencies
   above); for Codex, a system `bwrap` is used when present.
-- All roots must carry the same `host:` prefix, or none. `file_access` (scoped file
-  access) is local-only and is rejected with a remote working folder.
+- With a remote `workspace`, every other root carries a `host:` prefix too.
+  `read_only_workspaces` stay on the workspace's host. `file_access` (scoped file
+  access) is local-only and is rejected when any root is remote.
 
 `fridica doctor` adds an `SSH connection` check that connects, confirms the roots are
 directories, and checks the remote OS, then runs the executable, capability, sandbox,
-and sign-in checks on the host. A run that cannot reach the host is logged as an SSH
+and sign-in checks on the host. Each further heavy-task host gets its own
+`Heavy-task host` check covering the connection, its roots, the backend and its
+sign-in, and `bwrap` when it declares GPUs. A run that cannot reach the host is logged as an SSH
 failure (status 255) rather than an agent error. The remote agent is bounded by
 `timeout` when the host has it, so a dropped connection cannot leave it running.
 
@@ -563,9 +568,19 @@ Per-turn replies are one short CLI run each. With `heavy_tasks = true`, the repl
 agent may decide that a request needs long-running or hardware-heavy work (a full
 build, a long test suite, a GPU or multi-core job) and hand it to a **persistent
 worker** instead of doing it in the turn: it returns a self-contained brief in the
-structured reply's `escalate` field and tells the requester that the job has started.
-Fridica then runs the brief on the working host, locally or over SSH, and posts the
-worker's report as a follow-up message in the same Slack thread when it finishes.
+structured reply's `escalate` field, names the host in `escalate_host`, and tells the
+requester that the job has started. Fridica then runs the brief on that host, locally
+or over SSH, and posts the worker's report as a follow-up message in the same Slack
+thread when it finishes.
+
+**Hosts.** Every host that owns a root is a candidate: the workspace's own host
+(`local`, or its SSH alias) and every other alias among `additional_workspaces`. The
+agent sees each host's roots and `[resources.<host>]` hardware as data and picks the
+one the job needs; a worker on a host can only write inside that host's roots, and it
+starts in the first root listed for that host. With a local `workspace` and
+`additional_workspaces = ["dart9:/mnt/data1/projects"]`, replies run on this machine
+and a GPU job runs on dart9 inside `/mnt/data1/projects`. A host the agent names that
+is not configured falls back to the workspace's own host.
 
 - With Codex the worker is `codex app-server`, a long-lived process speaking JSON-RPC
   over JSONL on stdin/stdout (OpenAI marks the command experimental). Fridica sends
@@ -574,7 +589,8 @@ worker's report as a follow-up message in the same Slack thread when it finishes
   completes. With Claude it is `claude -p --input-format stream-json --output-format
   stream-json` with the same sandbox, permission, and tool flags as task runs.
 - The worker keeps the per-turn policy: workspace-write sandbox, network access only
-  when `allowed_domains` lists hosts, and no approvals. Fridica has no approval UI, so
+  when `allowed_domains` lists hosts, and no approvals (a host that declares GPUs is
+  confined differently; see GPU access below). Fridica has no approval UI, so
   any approval request from the agent is declined and logged. One difference for
   Codex: `codex app-server` has no `--ignore-user-config`, so the owner's
   `~/.codex/config.toml` on the working host, including any MCP servers it defines,
@@ -595,10 +611,12 @@ worker's report as a follow-up message in the same Slack thread when it finishes
   the setting is off by default. `fridica doctor` checks that the backend provides
   `codex app-server` or `--input-format stream-json`.
 
-Declare the hardware heavy tasks may use in a `[resources]` table:
+Declare the hardware heavy tasks may use per host, `[resources.local]` for this
+machine and `[resources.<alias>]` for each SSH host among the roots (a plain
+`[resources]` table describes the workspace's host):
 
 ```toml
-[resources]
+[resources.dart9]
 cpus = 8                          # sets OMP_NUM_THREADS for the worker
 gpus = [0, 1]                     # device indices; sets CUDA_VISIBLE_DEVICES ([] = no GPU)
 gpu_type = "NVIDIA A100 80GB"
@@ -613,14 +631,23 @@ host). Nothing is measured or enforced beyond those variables; the notes are the
 place for site rules such as a batch scheduler.
 
 **GPU access.** Both backends sandbox commands with bubblewrap, whose minimal `/dev`
-hides the GPU device nodes: inside the sandbox `nvidia-smi` cannot reach the driver
-and CUDA finds no device. Declaring `gpus` therefore makes the heavy worker run
-**without the filesystem sandbox** by default: Codex threads use `danger-full-access`
-and Claude runs with its sandbox disabled and Bash allowed, so the worker can read and
-run anything the remote account can, not only the workspace roots. The per-turn
-replies stay sandboxed, and the reply agent is told that GPU work must be escalated.
-`CUDA_VISIBLE_DEVICES` still limits the devices. Set `gpu_access = false` under
-`[resources]` to keep the sandbox (and lose GPU access), or leave `gpus` out.
+hides the GPU device nodes: inside their sandbox `nvidia-smi` cannot reach the driver
+and CUDA finds no device. Declaring `gpus` for a host therefore makes its heavy worker
+run inside **Fridica's own bubblewrap** instead: `/dev` is bound in full so CUDA works,
+the whole filesystem is visible read-only, and writes are allowed only in that host's
+designated roots, a private `/tmp`, and the backend's own state directory (whose
+settings and hook files stay read-only, so a job cannot plant anything that would run
+outside the confinement later). The backend's sandbox is turned off inside (Codex
+threads use `danger-full-access`, Claude runs with its sandbox disabled and Bash
+allowed) because Fridica's wrapper already confines the process. The wrapper shares
+the host's network: the CLI itself must reach the model API, and bubblewrap cannot
+separate that from the commands the job runs, so `allowed_domains` does not restrict a
+GPU worker's commands. Configured roots should be real directories rather than
+symlinks. This needs `bwrap` on that host and Linux; `fridica doctor` checks both. The
+per-turn replies keep their normal sandbox, and the reply agent is told that GPU work
+must be escalated to a GPU host. `CUDA_VISIBLE_DEVICES` still limits the devices. Set
+`gpu_access = false` for a host to keep the backend's sandbox there (and lose GPU
+access), or leave `gpus` out.
 
 ### Network access
 

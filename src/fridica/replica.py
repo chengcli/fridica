@@ -359,8 +359,10 @@ class Replica:
         if task is None or task["worker_state"] == "running":
             logger.info("Thread %s already has a heavy task running; brief ignored", message.thread_id)
             return
-        # A worker thread only continues on the host that created it.
-        thread = task["worker_thread"] if task["worker_host"] in (None, host) else None
+        # A worker thread only continues on the host that created it; rows written before hosts
+        # were recorded came from the workspace's own host.
+        previous = task["worker_host"] or self.config.primary.name
+        thread = task["worker_thread"] if previous == host else None
         self.store.save_worker(message, "running", thread, host)
         if self._spawn(self._heavy(message, brief, host)) is None:
             self.store.save_worker(message, task["worker_state"], task["worker_thread"], task["worker_host"])

@@ -156,8 +156,9 @@ class CLIBackend:
             logger.warning("Agent asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief")
             escalate = ""
         if escalate and host and host not in {candidate.name for candidate in self.config.hosts}:
-            logger.warning("Agent asked to escalate to unknown host %r; ignoring the brief", host[:80])
-            escalate = ""
+            logger.warning("Agent asked to escalate to unknown host %r; running the job on %s instead",
+                           host[:80], self.config.primary.name)
+            host = ""
         if host == self.config.primary.name:
             host = ""
         return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send,

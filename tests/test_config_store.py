@@ -164,7 +164,7 @@ def test_remote_workspace_config(tmp_path):
 
 
 @pytest.mark.parametrize("workspace,extra,match", [
-    ("dart9:/mnt/xxx", {"additional_workspaces": '["/local/data"]'}, "same host"),
+    ("dart9:/mnt/xxx", {"additional_workspaces": '["/local/data"]'}, "prefix every other root"),
     ("dart9:/mnt/xxx", {"read_only_workspaces": '["snowy:/data"]'}, "same host"),
     ("dart9:/mnt/xxx", {"ssh_host": "snowy"}, "disagrees"),
     ("dart9:/mnt/xxx", {"file_access": "true"}, "file_access requires local"),
@@ -176,3 +176,71 @@ def test_remote_workspace_config(tmp_path):
 def test_remote_workspace_rejections(tmp_path, workspace, extra, match):
     with pytest.raises(ValueError, match=match):
         load_config(write_remote_config(tmp_path, workspace, **extra))
+
+
+def test_multi_host_roots_and_resources(tmp_path, config):
+    from pathlib import PurePosixPath
+    from fridica.config import Host, Resources
+    source = tmp_path / "multi.toml"
+    source.write_text(f'''owner_id="UOWNER"
+workspace_id="TTEAM"
+channels=["CROOM"]
+workspace="{config.workspace}"
+additional_workspaces=["dart9:/mnt/data1/projects", "snowy:/scratch/a", "dart9:/mnt/data1/shared"]
+state_path="{config.state_path}"
+heavy_tasks=true
+[resources.local]
+cpus = 2
+[resources.dart9]
+cpus = 6
+gpus = [0, 1]
+''')
+    loaded = load_config(source)
+    assert not loaded.remote and loaded.ssh_host is None and loaded.additional_workspaces == ()
+    assert loaded.resources == Resources(cpus=2)
+    assert loaded.remote_hosts == (
+        Host("dart9", (PurePosixPath("/mnt/data1/projects"), PurePosixPath("/mnt/data1/shared")), Resources(cpus=6, gpus=(0, 1))),
+        Host("snowy", (PurePosixPath("/scratch/a"),)),
+    )
+    assert [host.name for host in loaded.hosts] == ["local", "dart9", "snowy"]
+    assert loaded.primary.workspace == config.workspace and not loaded.primary.remote
+    assert loaded.host("dart9").workspace == PurePosixPath("/mnt/data1/projects") and loaded.host("dart9").ssh_host == "dart9"
+    assert loaded.host("dart9").resources.gpu_worker and not loaded.host("snowy").resources.gpu_worker
+    assert loaded.host("dart9").payload() == {"name": "dart9", "roots": ["/mnt/data1/projects", "/mnt/data1/shared"],
+                                             "resources": {"cpus": 6, "gpus": [0, 1], "gpu_access": True}}
+    assert loaded.root_labels() == [str(config.workspace), "dart9:/mnt/data1/projects", "dart9:/mnt/data1/shared", "snowy:/scratch/a"]
+    with pytest.raises(KeyError):
+        loaded.host("nowhere")
+    # A plain [resources] table describes the workspace's host; other hosts get defaults.
+    source.write_text(source.read_text().replace("[resources.local]\ncpus = 2\n[resources.dart9]\ncpus = 6\ngpus = [0, 1]\n", "[resources]\ncpus = 3\n"))
+    flat = load_config(source)
+    assert flat.resources == Resources(cpus=3) and flat.host("dart9").resources == Resources()
+    # Hot reload compares configurations by value.
+    assert load_config(source) == flat
+
+
+@pytest.mark.parametrize("body,match", [
+    ("[resources.snowy]\ncpus = 2\n", "names a host that has no workspace roots"),
+    ("[resources.dart9]\ntpus = 2\n", "accepts cpus"),
+    ("[resources]\ncpus = 2\n[resources.dart9]\ncpus = 4\n", "not both"),
+    ("[resources.dart9]\ncpus = 0\n", "positive integer"),
+    ('additional_workspaces=["dart9:/mnt/a"]\nfile_access=true\n', "local machine"),
+    ('resources = 3\n', "resources must be"),
+])
+def test_multi_host_rejections(tmp_path, config, body, match):
+    source = tmp_path / "multi.toml"
+    extra = "" if "additional_workspaces" in body else 'additional_workspaces=["dart9:/mnt/data1/projects"]\n'
+    source.write_text(f'owner_id="UOWNER"\nworkspace_id="TTEAM"\nchannels=["CROOM"]\nworkspace="{config.workspace}"\n'
+                      f'state_path="{config.state_path}"\n{extra}{body}')
+    with pytest.raises(ValueError, match=match):
+        load_config(source)
+
+
+def test_remote_workspace_with_further_hosts(tmp_path):
+    from pathlib import PurePosixPath
+    source = write_remote_config(tmp_path, "dart9:/mnt/xxx", additional_workspaces='["dart9:/mnt/data", "snowy:/scratch"]')
+    loaded = load_config(source)
+    assert loaded.ssh_host == "dart9" and loaded.additional_workspaces == (PurePosixPath("/mnt/data"),)
+    assert [host.name for host in loaded.remote_hosts] == ["snowy"] and loaded.primary.roots == (PurePosixPath("/mnt/xxx"), PurePosixPath("/mnt/data"))
+    with pytest.raises(ValueError, match="same host as workspace"):
+        load_config(write_remote_config(tmp_path, "dart9:/mnt/xxx", read_only_workspaces='["snowy:/data"]', file_access="true"))

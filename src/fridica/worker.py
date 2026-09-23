@@ -68,8 +68,7 @@ class Worker:
     async def start(self) -> None:
         limits = self.host.resources.environment()
         confine = self.host.roots if self.host.resources.gpu_worker else None
-        argv, cwd = remote.launch(self.host, self.command(), self.host.workspace, env=limits,
-                                  confine=confine, network=bool(self.config.allowed_domains))
+        argv, cwd = remote.launch(self.host, self.command(), self.host.workspace, env=limits, confine=confine)
         env = environment(self.config)
         if not self.host.remote:
             env.update(limits)
