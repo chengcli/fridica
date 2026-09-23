@@ -89,7 +89,7 @@ class CLIBackend:
             contract, repositories = self.contract(), self.repositories()
             session = context.session if self.config.resume_sessions else None
             options = {"heavy": self.config.heavy_tasks, "resources": self.config.resources.payload(),
-                       "hosts": [host.payload() for host in self.config.hosts]}
+                       "hosts": [host.payload() for host in self.config.heavy_hosts]}
             try:
                 prompt = conversation_prompt(message, context, False, contract, repositories, **options)
                 result, session = await self._invoke(prompt, False, session)
@@ -114,7 +114,8 @@ class CLIBackend:
 
     async def plan(self, message, context, files, roots) -> dict:
         """Propose one scoped file operation (file-access mode); tool-less and stateless."""
-        prompt = plan_prompt(message, context, self.contract(), files, roots, self.repositories())
+        prompt = plan_prompt(message, context, self.contract(), files, roots, self.repositories(),
+                             heavy=self.config.heavy_tasks, hosts=[host.payload() for host in self.config.heavy_hosts])
         result, _session = await self._invoke(prompt, True, schema=FILE_PLAN_SCHEMA)
         return result
 
@@ -124,7 +125,7 @@ class CLIBackend:
         Failures propagate as ``BackendError`` (or ``TimeoutError``) so the replica can
         tell the thread that the job did not finish; nothing is retried.
         """
-        target = self.config.host(host) if host else self.config.primary
+        target = self.config.host(host) if host else self.config.heavy_hosts[0]
         prompt = worker_prompt(brief, context, self.contract(), self.repositories(), target.resources.payload(), target.payload())
         report, thread = await self.workers.get(context.task_id, target).run(prompt, resume)
         return truncate(report, REPLY_LIMIT), thread
@@ -155,11 +156,11 @@ class CLIBackend:
         if escalate and not self.config.heavy_tasks:
             logger.warning("Agent asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief")
             escalate = ""
-        if escalate and host and host not in {candidate.name for candidate in self.config.hosts}:
+        if escalate and host and host not in {candidate.name for candidate in self.config.heavy_hosts}:
             logger.warning("Agent asked to escalate to unknown host %r; running the job on %s instead",
-                           host[:80], self.config.primary.name)
+                           host[:80], self.config.heavy_hosts[0].name)
             host = ""
-        if host == self.config.primary.name:
+        if self.config.heavy_hosts and host == self.config.heavy_hosts[0].name:
             host = ""
         return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send,
                            update=update, escalate=escalate, escalate_host=host if escalate else "")

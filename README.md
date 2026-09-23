@@ -250,7 +250,7 @@ cooldown = 60
 max_turns = 6
 resume_sessions = true
 session_timeout = 1209600
-allowed_domains = []
+allowed_domains = ["*"]
 ```
 
 ### Remote working folder over SSH
@@ -288,7 +288,8 @@ Requirements on the remote host:
   above); for Codex, a system `bwrap` is used when present.
 - With a remote `workspace`, every other root carries a `host:` prefix too.
   `read_only_workspaces` stay on the workspace's host. `file_access` (scoped file
-  access) is local-only and is rejected when any root is remote.
+  access) covers local roots only: it is rejected with a remote `workspace`, while
+  remote roots in `additional_workspaces` simply become heavy-task hosts next to it.
 
 `fridica doctor` adds an `SSH connection` check that connects, confirms the roots are
 directories, and checks the remote OS, then runs the executable, capability, sandbox,
@@ -529,9 +530,12 @@ one ephemeral session per reply.
 
 ## Workspace authority
 
-The selected agent can read, edit, and run commands using its provider-supported
-sandbox in the configured workspace roots. Task-command network access is
-disabled unless `allowed_domains` lists hosts (see
+By default (`file_access = true`) the agent works on the local roots through scoped
+file operations (see [Scoped file access](#scoped-file-access)); heavy tasks then run
+only on remote hosts. With `file_access = false`, or with a remote `workspace`, the
+selected agent instead reads, edits, and runs commands using its provider-supported
+sandbox in the configured workspace roots. Task-command network access follows
+`allowed_domains`, which defaults to every host (see
 [Network access](#network-access)). Provider API access is still needed to run the model. Claude requires
 its [sandbox dependencies](#sandbox-dependencies-on-linux). Fridica does
 not enable bypass-permission flags or automatically approve broader access.
@@ -574,13 +578,17 @@ or over SSH, and posts the worker's report as a follow-up message in the same Sl
 thread when it finishes.
 
 **Hosts.** Every host that owns a root is a candidate: the workspace's own host
-(`local`, or its SSH alias) and every other alias among `additional_workspaces`. The
+(`local`, or its SSH alias) and every other alias among `additional_workspaces`. With
+`file_access = true` the local roots stay under scoped file access and are not a
+candidate, so at least one remote root is required and the reply agent hands work off
+with the planner's `escalate` operation (host name in `path`, brief in `content`). The
 agent sees each host's roots and `[resources.<host>]` hardware as data and picks the
 one the job needs; a worker on a host can only write inside that host's roots, and it
 starts in the first root listed for that host. With a local `workspace` and
 `additional_workspaces = ["dart9:/mnt/data1/projects"]`, replies run on this machine
 and a GPU job runs on dart9 inside `/mnt/data1/projects`. A host the agent names that
-is not configured falls back to the workspace's own host.
+is not configured falls back to the first candidate: the workspace's own host, or the
+first remote host under `file_access`.
 
 - With Codex the worker is `codex app-server`, a long-lived process speaking JSON-RPC
   over JSONL on stdin/stdout (OpenAI marks the command experimental). Fridica sends
@@ -651,9 +659,10 @@ access), or leave `gpus` out.
 
 ### Network access
 
-By default, commands the agent runs cannot reach the network: `git fetch`,
-`pip install`, and similar calls are denied inside the run, the model is told,
-and the reply says what it could not do. To allow specific hosts, list them:
+By default (`allowed_domains = ["*"]`) commands the agent runs may reach any host.
+With an empty list, `git fetch`, `pip install`, and similar calls are denied inside
+the run, the model is told, and the reply says what it could not do. To allow only
+specific hosts, list them:
 
 ```toml
 allowed_domains = ["github.com", "*.pypi.org"]
@@ -677,8 +686,13 @@ run. Leave the list empty to keep the previous behavior.
 
 ### Scoped file access
 
-Set `file_access = true` to replace native agent tools with checked file
-operations. This is opt-in; the default workspace mode above is unchanged.
+`file_access = true` replaces native agent tools with checked file operations on the
+local roots. It is the default whenever `workspace` is local. Remote roots in
+`additional_workspaces` are unaffected: they host heavy tasks with the agent's native
+tools, confined to their own roots. A config that enables `heavy_tasks` without any
+remote root leaves the local roots as the only place to run them, so it either falls
+back to the native tools when `file_access` is left out, or fails when it is set
+explicitly.
 
 ```toml
 file_access = true
@@ -733,7 +747,9 @@ This first version supports UTF-8 text files up to 64 KiB, existing parent
 directories, and one write or deletion per request. It does not execute shell
 commands, tests, merges, deployments, arbitrary sends, or directory operations.
 The model gets up to eight planning calls per message, each stateless; this mode
-does not resume native workspace sessions. File contents passed to the model
+does not resume native workspace sessions. With `heavy_tasks`, a planning call may
+instead return `escalate`, which starts a persistent worker on a remote host exactly
+as in the native mode; the local roots are never touched by that worker. File contents passed to the model
 and before/after contents saved in SQLite may be private: only allow projects
 appropriate for the selected channel, and protect the database accordingly.
 

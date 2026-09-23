@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import uuid
 from .config import within_casefold
 from .models import AgentResult, Message
 
+
+logger = logging.getLogger(__name__)
 
 FILE_LIMIT = 65536
 PROTECTED = {'.git', '.codex', '.claude', '.ssh', '.env'}
@@ -178,6 +181,8 @@ class Permissions:
                     if not plan['text'].strip() or len(plan['text']) > 3500:
                         raise ValueError('Invalid reply')
                     return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete', update=update)
+                if operation == 'escalate':
+                    return self._escalation(plan, update)
                 if operation == 'read':
                     files[plan['path']] = self.files.read(plan['path'])
                     continue
@@ -204,6 +209,21 @@ class Permissions:
             return AgentResult('The file request needs more local context before I can continue.', 'blocked')
         except (ValueError, OSError):
             return AgentResult('The file request could not pass the local access checks. No change was applied.', 'blocked')
+
+    def _escalation(self, plan: dict, update) -> AgentResult:
+        """A heavy-task hand-off: the brief runs on a remote host's worker; the local roots stay scoped."""
+        from .prompts import ESCALATE_LIMIT
+        brief, host, text = plan['content'].strip(), plan['path'].strip(), plan['text']
+        if not text.strip() or len(text) > 3500 or not brief or len(brief) > ESCALATE_LIMIT:
+            raise ValueError('Invalid heavy-task brief')
+        candidates = [candidate.name for candidate in self.config.heavy_hosts]
+        if not self.config.heavy_tasks or not candidates:
+            logger.warning('Planner asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief')
+            return AgentResult(text, 'complete', update=update)
+        if host and host not in candidates:
+            logger.warning('Planner asked to escalate to unknown host %r; running the job on %s instead', host[:80], candidates[0])
+            host = ''
+        return AgentResult(text, 'complete', update=update, escalate=brief, escalate_host='' if host == candidates[0] else host)
 
     def apply(self, identifier: str, *, automatic: bool = False) -> AgentResult:
         self.db.execute('BEGIN IMMEDIATE')

@@ -203,8 +203,14 @@ class Config:
 
     @property
     def hosts(self) -> tuple[Host, ...]:
-        """Every host heavy tasks may run on; the primary host first."""
+        """Every configured host; the primary host first."""
         return (self.primary, *self.remote_hosts)
+
+    @property
+    def heavy_hosts(self) -> tuple[Host, ...]:
+        """The hosts heavy tasks may run on: every host, or only the remote ones when the local roots
+        stay under scoped file access (a worker with native tools never touches them)."""
+        return self.remote_hosts if self.file_access else self.hosts
 
     def host(self, name: str) -> Host:
         for host in self.hosts:
@@ -244,15 +250,14 @@ class Config:
                 raise ValueError(f"{name} must be boolean")
         if not isinstance(self.resources, Resources):
             raise ValueError("resources must be a [resources] table")
-        if self.heavy_tasks and self.file_access:
-            raise ValueError("heavy_tasks requires the agent's native workspace tools; disable file_access")
         if not isinstance(self.remote_hosts, tuple) or any(not isinstance(host, Host) or not host.remote for host in self.remote_hosts):
             raise ValueError("remote_hosts must be remote Host entries")
         names = [host.name for host in self.remote_hosts]
         if len(set(names)) != len(names) or (self.ssh_host or LOCAL) in names:
             raise ValueError("each host may appear once among the workspace roots")
-        if self.remote_hosts and self.file_access:
-            raise ValueError("file_access requires every workspace root on the local machine")
+        if self.heavy_tasks and self.file_access and not self.remote_hosts:
+            raise ValueError("heavy_tasks with file_access needs a remote host among additional_workspaces: "
+                             "local roots stay under scoped file access, so heavy tasks run elsewhere")
         for host in self.remote_hosts:
             for directory in host.roots:
                 if not isinstance(directory, PurePosixPath) or not directory.is_absolute() or directory == PurePosixPath("/"):
@@ -429,7 +434,7 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
         return Resources(**table)
     values["resources"] = resources_for(primary or LOCAL)
     values["remote_hosts"] = tuple(Host(name, tuple(paths), resources_for(name)) for name, paths in others.items())
-    domains = values.get("allowed_domains", [])
+    domains = values.get("allowed_domains", ["*"])
     if not isinstance(domains, list):
         raise ValueError("allowed_domains must be a list of host names")
     values["allowed_domains"] = tuple(dict.fromkeys(str(domain).lower() for domain in domains))
@@ -445,6 +450,10 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
             raise ValueError("repos must be a nonempty path")
         repos = Path(values["repos"]).expanduser()
         values["repos"] = repos if repos.is_absolute() else (path.expanduser().parent / repos).resolve()
+    if "file_access" not in values:
+        # Scoped file access is the default whenever the workspace is local. Heavy tasks then
+        # need a remote host; without one they fall back to the agent's native workspace tools.
+        values["file_access"] = primary is None and (bool(others) or not values.get("heavy_tasks", False))
     config = Config(**values)
     if config.file_access:
         roots = (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)
@@ -463,15 +472,17 @@ workspace = "~/projects/your-project"
 # is an alias from ~/.ssh/config that connects without a prompt. Every per-turn run then
 # happens on that host, which needs the backend CLI installed and signed in.
 # Roots on other hosts, such as "dart9:/mnt/data1/projects", make those hosts available
-# for heavy tasks only, each confined to its own roots. file_access is local-only.
+# for heavy tasks only, each confined to its own roots.
 additional_workspaces = []
-# Use scoped file operations instead of the agent's native workspace tools.
-file_access = false
+# Scoped file operations confined to the local roots above (the default when the
+# workspace is local). Set to false to use the agent's native workspace tools.
+file_access = true
 read_only_workspaces = []
-# Hosts that task commands may reach, e.g. ["github.com", "*.pypi.org"]; ["*"] allows
-# every host. Empty keeps task-command network access disabled. Codex cannot filter
-# by host: any entry enables full network access for Codex tasks.
-allowed_domains = []
+# Hosts that task commands may reach: ["*"] (the default) allows every host; list
+# names such as ["github.com", "*.pypi.org"] to restrict, or [] to disable network
+# access for task commands. Codex cannot filter by host: any entry enables full
+# network access for Codex tasks.
+allowed_domains = ["*"]
 backend = "claude"
 # model = "your-preferred-model"
 # reasoning_effort = "low"  # Codex only

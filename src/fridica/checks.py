@@ -150,7 +150,8 @@ def check_backend(config: Config, host: Host | None = None) -> list[str]:
         return unreachable(config, result, host)
     if result.returncode or any(flag not in result.stdout for flag in required):
         return [f"Upgrade {config.backend} {where(config, host)}: required isolation/structured-output flags are unavailable."]
-    if config.heavy_tasks:
+    if config.heavy_tasks and (host is not None or not config.file_access):
+        # With file_access the local roots never run a worker, so only remote hosts need the worker command.
         if config.backend == "codex":
             try:
                 result = probe(config, [executable, "app-server", "--help"], stdin=None, host=host)

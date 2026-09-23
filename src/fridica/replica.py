@@ -354,7 +354,7 @@ class Replica:
         brief = getattr(result, "escalate", "")
         if not brief or not self.config.heavy_tasks or self.agent is None:
             return
-        host = getattr(result, "escalate_host", "") or self.config.primary.name
+        host = getattr(result, "escalate_host", "") or self.config.heavy_hosts[0].name
         task = self.store.task(message)
         if task is None or task["worker_state"] == "running":
             logger.info("Thread %s already has a heavy task running; brief ignored", message.thread_id)
