@@ -160,7 +160,7 @@ class CLIBackend:
             logger.warning("Agent asked to escalate to unknown host %r; running the job on %s instead",
                            host[:80], self.config.heavy_hosts[0].name)
             host = ""
-        if host == self.config.heavy_hosts[0].name:
+        if self.config.heavy_hosts and host == self.config.heavy_hosts[0].name:
             host = ""
         return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send,
                            update=update, escalate=escalate, escalate_host=host if escalate else "")
