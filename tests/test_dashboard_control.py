@@ -149,3 +149,55 @@ def test_continued_thread_can_be_archived_and_resume_clears_continuation(config,
     task = store.task(msg)
     thread_action(config, 'CROOM', msg.thread_id, 'archive', task['control_revision'])
     assert store.task(msg)['control_state'] == 'archived'
+
+
+def blocked_thread(config, store, message):
+    from fridica.models import AgentResult
+    store.bind(config.owner_id, config.workspace_id)
+    first = message()
+    store.add(first)
+    store.begin(first, 't1', 1)
+    store.save_result(first, AgentResult('failed', 'blocked'))
+    store.delivered(first, '100.000002')
+    assert store.task(first)['status'] == 'blocked'
+    return first
+
+
+@pytest.mark.parametrize('turned_away', ['blocked', 'before_resume', 'notice'])
+def test_resuming_blocked_thread_answers_latest_unanswered_message(config, store, message, turned_away):
+    from fridica.dashboard_control import thread_action
+    from fridica.models import AgentResult
+    first = blocked_thread(config, store, message)
+    later = message('event2', timestamp='200.000001', text='<@UOWNER> could you check the error?')
+    store.add(later)
+    if turned_away == 'notice':
+        store.save_notice(later, AgentResult('notice', 'blocked'), 't1', 1)
+        store.delivered(later, '200.000002')
+    else:
+        store.mark('event2', 'observed', turned_away)
+    # The owner's own later message does not hide the one waiting for an answer.
+    store.add(message('event3', timestamp='300.000001', sender_id=config.owner_id, text='nudge'), 'observed')
+    result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
+    assert result['replayed'] is True
+    task = store.task(first)
+    assert task['status'] == 'complete' and 100.000001 < task['reset_at'] < 200.000001
+    assert [row['event_id'] for row in store.pending()] == ['event2']
+    assert store.get('event2')['reply_only'] == 0 and store.get('event2')['result'] is None
+    assert store.get('event1')['state'] == 'sent'
+
+
+def test_resume_does_not_replay_answered_or_paused_threads(config, store, message):
+    from fridica.dashboard_control import thread_action
+    first = blocked_thread(config, store, message)
+    # Nothing arrived after the failure: the failed request itself is not retried.
+    result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
+    assert result['replayed'] is False and store.pending() == []
+    assert store.task(first)['reset_at'] > 200
+    # A paused (loop-protected) thread only accepts future messages.
+    later = message('event2', timestamp='200.000001')
+    store.add(later)
+    store.mark('event2', 'observed', 'blocked')
+    with store.connection:
+        store.connection.execute("UPDATE tasks SET control_state='paused',pause_reason='loop' WHERE thread=?", (first.thread_id,))
+    result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
+    assert result['replayed'] is False and store.pending() == []

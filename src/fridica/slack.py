@@ -21,10 +21,14 @@ logger = logging.getLogger(__name__)
 MARKER = "\n\n[via fridica]"
 TEXT_LIMIT = 40000
 LINKED_REPLY_LIMIT = 50
-# Socket Mode can drop events while the daemon is down or reconnecting, so on startup it re-reads
-# the last hour of channel history. Messages it already stored are ignored by the store's unique index.
+# Socket Mode can drop events while the daemon is down or reconnecting, and occasionally while it is
+# connected, so on startup it re-reads the last hour of channel history and then, every
+# CATCH_UP_INTERVAL, the last CATCH_UP_RECENT seconds. Messages it already stored are ignored by the
+# store's unique index.
 CATCH_UP_WINDOW = 3600
 CATCH_UP_THREAD_AGE = 86400
+CATCH_UP_INTERVAL = 300
+CATCH_UP_RECENT = 900
 
 
 def normalize(payload: dict) -> Message | None:
@@ -210,10 +214,14 @@ async def serve(config: Config, store, agent, observe_only: bool = False, config
             await client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
         async def recover_missed():
-            try:
-                await catch_up(transport, replica, store, CATCH_UP_WINDOW)
-            except Exception as error:
-                logger.warning("Catching up on missed messages failed (%s)", type(error).__name__)
+            window = CATCH_UP_WINDOW
+            while True:
+                try:
+                    await catch_up(transport, replica, store, window)
+                except Exception as error:
+                    logger.warning("Catching up on missed messages failed (%s)", type(error).__name__)
+                await asyncio.sleep(CATCH_UP_INTERVAL)
+                window = CATCH_UP_RECENT
 
         async def heartbeat():
             while True:

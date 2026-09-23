@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 FILE_LIMIT = 65536
 PROTECTED = {'.git', '.codex', '.claude', '.ssh', '.env'}
+ESCALATION_FAILED = "I couldn't start the heavy task because its job brief failed validation. Nothing was run or changed."
+
+
+class InvalidBrief(ValueError):
+    """An escalate plan the controller rejected; the message says which field to correct."""
 
 
 class Files:
@@ -166,9 +171,11 @@ class Permissions:
         files = {}
         roots = {'writable': [str(root) for root in self.files.writable],
                  'read_only': [str(root) for root in self.files.read_only]}
+        feedback, corrected = '', False
         try:
             for _ in range(8):
-                plan = await self.agent.plan(message, context, files, roots)
+                plan = await self.agent.plan(message, context, files, roots, feedback=feedback)
+                feedback = ''
                 if not isinstance(plan, dict) or set(plan) - {'operation', 'path', 'content', 'text', 'update', 'details'} or not {'operation', 'path', 'content', 'text'} <= set(plan):
                     raise ValueError('Invalid file plan')
                 details = checked_details(plan.get('details', ''))
@@ -185,7 +192,16 @@ class Permissions:
                     return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete', update=update,
                                        details=details)
                 if operation == 'escalate':
-                    return self._escalation(plan, update)
+                    try:
+                        return self._escalation(plan, update)
+                    except InvalidBrief as error:
+                        # One correction round: the model sees why the plan was rejected and may fix it.
+                        if corrected:
+                            raise
+                        logger.warning('Escalation plan for event %s was rejected; asking for a correction: %s',
+                                       message.event_id, error)
+                        feedback, corrected = str(error), True
+                        continue
                 if operation == 'read':
                     files[plan['path']] = self.files.read(plan['path'])
                     continue
@@ -212,13 +228,23 @@ class Permissions:
             return AgentResult('The file request needs more local context before I can continue.', 'blocked')
         except (ValueError, OSError) as error:
             logger.warning('File plan for event %s was rejected (%s): %s', message.event_id, type(error).__name__, error)
+            if isinstance(error, InvalidBrief):
+                return AgentResult(ESCALATION_FAILED, 'blocked')
             return AgentResult('The file request could not pass the local access checks. No change was applied.', 'blocked')
 
     def _escalation(self, plan: dict, update) -> AgentResult:
         """A heavy-task hand-off: the brief runs on a remote host's worker; the local roots stay scoped."""
         brief, text = plan['content'].strip(), plan['text']
-        if not text.strip() or len(text) > REPLY_LIMIT or not brief or len(brief) > ESCALATE_LIMIT:
-            raise ValueError('Invalid heavy-task brief')
+        if not text.strip():
+            raise InvalidBrief('Invalid heavy-task brief: text, the reply telling the requester the job has started, is empty')
+        if len(text) > REPLY_LIMIT:
+            raise InvalidBrief(f'Invalid heavy-task brief: text is {len(text)} characters; the limit is {REPLY_LIMIT}')
+        if not brief:
+            raise InvalidBrief('Invalid heavy-task brief: content, which holds the brief, is empty; '
+                               'put the brief in content, not in details')
+        if len(brief) > ESCALATE_LIMIT:
+            raise InvalidBrief(f'Invalid heavy-task brief: content is {len(brief)} characters; the limit is {ESCALATE_LIMIT}. '
+                               'Refer to long specifications in the thread instead of copying them')
         brief, host = self.config.route_escalation(brief, plan['path'])
         return AgentResult(text, 'complete', update=update, escalate=brief, escalate_host=host)
 

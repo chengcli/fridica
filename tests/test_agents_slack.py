@@ -556,6 +556,51 @@ class History(Client):
         return {"messages": self.replies.get(kwargs["ts"], [])}
 
 
+def test_serve_keeps_catching_up_while_connected(config, store, monkeypatch):
+    """Socket Mode can drop an event while connected, so catch-up repeats over a shorter recent window."""
+    from fridica import slack
+    from fridica.config import Config
+
+    class Socket:
+        def __init__(self, **kwargs):
+            self.socket_mode_request_listeners = []
+        async def connect(self): pass
+        async def close(self): pass
+        async def is_connected(self): return True
+
+    windows, done = [], asyncio.Event()
+
+    async def fake_catch_up(transport, replica, database, window):
+        windows.append(window)
+        if len(windows) == 2:
+            raise RuntimeError("Slack unavailable")
+        if len(windows) >= 3:
+            done.set()
+        return 0
+
+    async def validate(self): pass
+    async def run(self): await asyncio.Future()
+    monkeypatch.setattr(Config, "tokens", lambda self: ("app", "user"))
+    monkeypatch.setattr(slack, "SocketModeClient", Socket)
+    monkeypatch.setattr(slack.SlackTransport, "validate", validate)
+    monkeypatch.setattr(slack.Replica, "run", run)
+    monkeypatch.setattr(slack, "catch_up", fake_catch_up)
+    monkeypatch.setattr(slack, "CATCH_UP_INTERVAL", 0.01)
+
+    async def scenario():
+        worker = asyncio.create_task(slack.serve(config, store, None, True))
+        try:
+            await asyncio.wait_for(done.wait(), 2)
+        finally:
+            worker.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await worker
+
+    asyncio.run(scenario())
+    # The startup pass covers the last hour; a failed pass does not stop later ones.
+    assert windows[:3] == [slack.CATCH_UP_WINDOW, slack.CATCH_UP_RECENT, slack.CATCH_UP_RECENT]
+
+
 def test_catch_up_stores_messages_socket_mode_missed(config, store, message):
     from fridica.replica import Replica
     from fridica.slack import catch_up

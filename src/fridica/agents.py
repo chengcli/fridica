@@ -112,10 +112,14 @@ class CLIBackend:
         """Write the closing debrief of a finished discussion; a stateless, tool-less run governed by ``## Debriefs``."""
         return await self._digest(context, self.contract().debriefs, DEBRIEF_SCHEMA, "debrief")
 
-    async def plan(self, message, context, files, roots) -> dict:
-        """Propose one scoped file operation (file-access mode); tool-less and stateless."""
+    async def plan(self, message, context, files, roots, *, feedback: str = "") -> dict:
+        """Propose one scoped file operation (file-access mode); tool-less and stateless.
+
+        ``feedback`` is why the controller rejected the previous plan, so the model can correct it.
+        """
         prompt = plan_prompt(message, context, self.contract(), files, roots, self.repositories(),
-                             heavy=self.config.heavy_tasks, hosts=[host.payload() for host in self.config.heavy_hosts])
+                             heavy=self.config.heavy_tasks, hosts=[host.payload() for host in self.config.heavy_hosts],
+                             feedback=feedback)
         result, _session = await self._invoke(prompt, True, schema=FILE_PLAN_SCHEMA)
         return result
 
