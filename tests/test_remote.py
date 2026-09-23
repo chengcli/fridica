@@ -123,8 +123,10 @@ else:
     assert result.text == "Finished remotely" and result.status == "complete"
     assert result.session == "0193b2c4-1111-7000-8000-000000000000"
     classify_cwd, respond_cwd = cwd_log.read_text().splitlines()
-    assert classify_cwd.startswith("/tmp/fridica-agent-") and not os.path.exists(classify_cwd)
-    assert respond_cwd == str(remote_config.workspace)
+    # os.getcwd() reports the resolved path (/private/tmp on macOS), so compare resolved parents.
+    assert os.path.basename(classify_cwd).startswith("fridica-agent-") and not os.path.exists(classify_cwd)
+    assert os.path.realpath(os.path.dirname(classify_cwd)) == os.path.realpath("/tmp")
+    assert os.path.realpath(respond_cwd) == os.path.realpath(str(remote_config.workspace))
     calls = [json.loads(line) for line in fake_ssh.read_text().splitlines()]
     assert len(calls) == 2 and all(call["host"] == "dart9" for call in calls)
     assert all(call["script"].startswith("exec sh -c ") for call in calls)
