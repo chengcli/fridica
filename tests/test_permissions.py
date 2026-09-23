@@ -8,7 +8,7 @@ import time
 import pytest
 
 from fridica.cli import main
-from fridica.models import AgentResult, ConversationContext, Message
+from fridica.models import ConversationContext, Message
 from fridica.replica import RateLimited, Replica
 from fridica.store import Store
 

@@ -97,6 +97,14 @@ will be posted in this thread, and use status complete. The resources field of t
 hardware the worker may use. Never escalate while worker.state is running; report that the job is still in progress
 instead. Leave escalate empty in every other case.
 """
+GPU_NOTE = """
+GPU work (CUDA, training, inference, benchmarks, nvidia-smi) can only run in a heavy task: this turn's sandbox has no
+access to the GPU devices, so escalate any request that needs them instead of running it here.
+"""
+GPU_WORKER_NOTE = """
+The GPU devices listed in resources are available to you directly (CUDA_VISIBLE_DEVICES is set accordingly); no
+scheduler is needed unless the notes say so.
+"""
 WORKER_NOTE = """
 
 You are the persistent heavy-task worker for this Slack thread. Carry out the brief below inside the workspace roots
@@ -142,6 +150,8 @@ def conversation_prompt(message: Message, context: ConversationContext, classify
     instruction += TASK_CONTEXT_NOTE
     if not classify and heavy:
         instruction += HEAVY_NOTE
+        if (resources or {}).get("gpu_access"):
+            instruction += GPU_NOTE
     if not classify and context.session:
         instruction += CONTINUATION_NOTE
     payload = {
@@ -169,7 +179,8 @@ def worker_prompt(brief: str, context: ConversationContext, contract: Contract |
         "thread": [{"sender": item.sender_id, "generated": item.generated, "text": item.text} for item in context.messages],
         "brief": brief,
     }
-    return contract.replies + TASK_CONTEXT_NOTE + WORKER_NOTE + "\n\nJob data:\n" + json.dumps(payload)
+    note = WORKER_NOTE + (GPU_WORKER_NOTE if (resources or {}).get("gpu_access") else "")
+    return contract.replies + TASK_CONTEXT_NOTE + note + "\n\nJob data:\n" + json.dumps(payload)
 
 
 def digest_prompt(context: ConversationContext, instruction: str) -> str:

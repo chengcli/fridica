@@ -252,7 +252,8 @@ class CodexWorker(Worker):
         self.next_id = 1
         await self.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": {"experimentalApi": False}})
         await self.send({"method": "initialized", "params": {}})
-        params = {"cwd": str(self.config.workspace), "sandbox": "workspace-write", "approvalPolicy": "never"}
+        sandbox = "danger-full-access" if self.config.resources.unsandboxed else "workspace-write"
+        params = {"cwd": str(self.config.workspace), "sandbox": sandbox, "approvalPolicy": "never"}
         if self.config.model:
             params["model"] = self.config.model
         thread = None
@@ -268,8 +269,12 @@ class CodexWorker(Worker):
         self.thread = thread["id"]
 
     async def job(self, prompt: str) -> str:
-        policy: dict[str, Any] = {"type": "workspaceWrite", "networkAccess": bool(self.config.allowed_domains),
-                                  "writableRoots": [str(root) for root in self.config.additional_workspaces]}
+        if self.config.resources.unsandboxed:
+            # Only the unsandboxed policy exposes the GPU device nodes; see Resources.unsandboxed.
+            policy: dict[str, Any] = {"type": "dangerFullAccess"}
+        else:
+            policy = {"type": "workspaceWrite", "networkAccess": bool(self.config.allowed_domains),
+                      "writableRoots": [str(root) for root in self.config.additional_workspaces]}
         result = await self.request("turn/start", {"threadId": self.thread, "input": [{"type": "text", "text": prompt}],
                                                    "cwd": str(self.config.workspace), "sandboxPolicy": policy})
         turn = result.get("turn") if isinstance(result.get("turn"), dict) else {}
@@ -309,11 +314,18 @@ class ClaudeWorker(Worker):
 
     def command(self) -> list[str]:
         from .agents import ClaudeBackend
+        settings = ClaudeBackend.settings(self.config, False)
+        allowed = "Read,Glob,Grep"
+        if self.config.resources.unsandboxed:
+            # The sandbox hides the GPU devices, so it is off for GPU work; Bash then needs an
+            # explicit allowance because nothing sandboxes it any more. See Resources.unsandboxed.
+            settings["sandbox"] = {"enabled": False}
+            allowed = "Bash," + allowed
         command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                   "--setting-sources", "", "--settings", json.dumps(ClaudeBackend.settings(self.config, False)),
+                   "--setting-sources", "", "--settings", json.dumps(settings),
                    "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-chrome",
                    "--permission-mode", "acceptEdits", "--tools", "Bash,Read,Glob,Grep,Edit,Write",
-                   "--allowedTools", "Read,Glob,Grep"]
+                   "--allowedTools", allowed]
         command += ["--resume", self.resume] if self.resume is not None else ["--session-id", self.thread]
         for workspace in self.config.additional_workspaces:
             command += ["--add-dir", str(workspace)]

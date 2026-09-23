@@ -610,11 +610,17 @@ The table is sent to the reply agent and to the worker as data, so the agent can
 judge what a request needs, and the worker process is started with matching
 `OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES` (exported through SSH for a remote
 host). Nothing is measured or enforced beyond those variables; the notes are the
-place for site rules such as a batch scheduler. Note that the backend's sandbox
-still applies inside the worker: Codex's bubblewrap sandbox mounts a minimal `/dev`,
-so on some hosts GPU devices are not visible to commands the worker runs directly
-(`nvidia-smi` fails). Ask for a quick `nvidia-smi` as a first heavy task to find out,
-and use `notes` to route GPU jobs through a scheduler such as Slurm when needed.
+place for site rules such as a batch scheduler.
+
+**GPU access.** Both backends sandbox commands with bubblewrap, whose minimal `/dev`
+hides the GPU device nodes: inside the sandbox `nvidia-smi` cannot reach the driver
+and CUDA finds no device. Declaring `gpus` therefore makes the heavy worker run
+**without the filesystem sandbox** by default: Codex threads use `danger-full-access`
+and Claude runs with its sandbox disabled and Bash allowed, so the worker can read and
+run anything the remote account can, not only the workspace roots. The per-turn
+replies stay sandboxed, and the reply agent is told that GPU work must be escalated.
+`CUDA_VISIBLE_DEVICES` still limits the devices. Set `gpu_access = false` under
+`[resources]` to keep the sandbox (and lose GPU access), or leave `gpus` out.
 
 ### Network access
 
@@ -839,6 +845,17 @@ python -m build --no-isolation
 fridica --help
 python -m fridica --version
 ```
+
+Before opening a pull request, run the contributor hooks once over the whole tree:
+
+```bash
+python -m pip install pre-commit
+pre-commit run --all-files   # or `pre-commit install` to run them on every commit
+```
+
+They check file hygiene (whitespace, file endings, merge markers, valid TOML, YAML
+and JSON, leftover debugger calls) and lint with ruff's default rules as configured
+in `pyproject.toml`; no formatter is applied.
 
 Frontend regression tests use Node 22 or later and its built-in test runner, with no npm dependencies.
 Tests use fake Slack clients and fake agent processes and require no tokens or

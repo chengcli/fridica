@@ -1,5 +1,4 @@
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
@@ -8,7 +7,7 @@ from fridica.cli import main
 from fridica.config import load_config
 from fridica.contract import load_contract
 from fridica.models import ConversationContext
-from fridica.repos import REPOS_LIMIT, Repo, default_repos_text, load_repos, parse_repos
+from fridica.repos import REPOS_LIMIT, default_repos_text, load_repos, parse_repos
 
 VALID = '''
 [[repos]]

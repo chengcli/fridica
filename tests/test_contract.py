@@ -1,9 +1,7 @@
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
-from fridica import agents
 from fridica.agents import ClaudeBackend, _prompt
 from fridica.cli import main
 from fridica.config import load_config

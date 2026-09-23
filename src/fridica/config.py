@@ -57,8 +57,12 @@ class Resources:
     gpu_type: str = ""
     memory_gb: float | None = None
     notes: str = ""
+    gpu_access: bool = True
+    """Run heavy tasks outside the filesystem sandbox when GPUs are declared, so the devices are reachable."""
 
     def __post_init__(self) -> None:
+        if not isinstance(self.gpu_access, bool):
+            raise ValueError("resources.gpu_access must be boolean")
         if self.cpus is not None and (isinstance(self.cpus, bool) or not isinstance(self.cpus, int) or self.cpus < 1):
             raise ValueError("resources.cpus must be a positive integer")
         if self.gpus is not None:
@@ -76,10 +80,20 @@ class Resources:
             if not isinstance(value, str) or len(value) > 1000:
                 raise ValueError(f"resources.{name} must be a string of at most 1000 characters")
 
+    @property
+    def unsandboxed(self) -> bool:
+        """True when heavy tasks run without the filesystem sandbox: GPUs are declared and gpu_access is on.
+
+        Both backends sandbox commands with bubblewrap, whose minimal ``/dev`` hides the
+        GPU device nodes, so a sandboxed worker cannot use the hardware it was given.
+        """
+        return bool(self.gpus) and self.gpu_access
+
     def payload(self) -> dict:
         """The JSON-friendly description sent to the agent; unspecified values are left out."""
         data = {"cpus": self.cpus, "gpus": list(self.gpus) if self.gpus is not None else None,
-                "gpu_type": self.gpu_type, "memory_gb": self.memory_gb, "notes": self.notes}
+                "gpu_type": self.gpu_type, "memory_gb": self.memory_gb, "notes": self.notes,
+                "gpu_access": self.unsandboxed if self.gpus else None}
         return {key: value for key, value in data.items() if value not in (None, "")}
 
     def environment(self) -> dict[str, str]:
@@ -383,12 +397,15 @@ heavy_task_timeout = 14400
 heavy_task_idle = 1800
 # Hardware on the working host that heavy tasks may use. The agent sees these values
 # as data; the worker runs with matching OMP_NUM_THREADS and CUDA_VISIBLE_DEVICES.
+# Declaring gpus makes the heavy worker run outside the filesystem sandbox (the
+# sandbox hides GPU devices); set gpu_access = false to keep the sandbox instead.
 [resources]
 # cpus = 8
 # gpus = [0, 1]
 # gpu_type = "NVIDIA A100 80GB"
 # memory_gb = 128
 # notes = "Long jobs go through Slurm: srun --gres=gpu:1."
+# gpu_access = true
 
 # Agent rules live in contract.md beside this file (created by fridica init).
 # Uncomment to use a different file; relative paths resolve from this directory.

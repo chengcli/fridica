@@ -42,7 +42,7 @@ for line in sys.stdin:
             thread_id = params["threadId"]
             emit({{"id": identifier, "result": {{"thread": {{"id": thread_id}}, "cwd": params.get("cwd"), "model": "m"}}}})
     elif method == "thread/start":
-        assert params["approvalPolicy"] == "never" and params["sandbox"] == "workspace-write", params
+        assert params["approvalPolicy"] == "never" and params["sandbox"] in ("workspace-write", "danger-full-access"), params
         thread_id = "thr_" + os.environ.get("THREAD_SUFFIX", "1")
         emit({{"id": identifier, "result": {{"thread": {{"id": thread_id}}, "cwd": params["cwd"], "model": "m"}}}})
     elif method == "turn/start":
@@ -132,7 +132,9 @@ def test_codex_worker_job_resume_and_idle(heavy_config, fake_worker_cli, monkeyp
         assert start["data"]["params"]["cwd"] == str(config.workspace) and start["data"]["params"]["model"] == "gpt-x"
         assert start["cwd"] == str(config.workspace) and start["omp"] == "4" and start["cuda"] == "0,1"
         turn = [entry for entry in fake_worker_cli() if entry["kind"] == "turn/start"][0]["data"]["params"]
-        assert turn["sandboxPolicy"] == {"type": "workspaceWrite", "networkAccess": True, "writableRoots": []}
+        # GPUs are declared, so the worker runs outside the filesystem sandbox to reach them.
+        assert start["data"]["params"]["sandbox"] == "danger-full-access"
+        assert turn["sandboxPolicy"] == {"type": "dangerFullAccess"}
         assert turn["input"] == [{"type": "text", "text": "Run the suite"}]
         # A second job on the live process needs no new handshake.
         report, thread = await worker.run("Again", thread)
@@ -212,8 +214,10 @@ def test_claude_worker_roundtrip(heavy_config, fake_worker_cli):
         assert argv[argv.index("--session-id") + 1] == session and "--resume" not in argv
         assert fake_worker_cli()[0]["omp"] == "4"
         settings = json.loads(argv[argv.index("--settings") + 1])
-        assert settings["sandbox"]["enabled"] and settings["sandbox"]["failIfUnavailable"]
+        # GPUs are declared, so the sandbox is off and Bash is allowed explicitly.
+        assert settings["sandbox"] == {"enabled": False} and settings["disableAllHooks"]
         assert argv[argv.index("--tools") + 1] == "Bash,Read,Glob,Grep,Edit,Write"
+        assert argv[argv.index("--allowedTools") + 1] == "Bash,Read,Glob,Grep"
         report, again = await worker.run("Again", session)
         assert again == session and len(fake_worker_cli()) == 1
         await asyncio.sleep(0.6)
@@ -333,3 +337,28 @@ def test_idle_close_skips_a_worker_that_became_busy(heavy_config, fake_worker_cl
         await worker.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("resources", [Resources(cpus=4), Resources(gpus=()), Resources(gpus=(0,), gpu_access=False)])
+def test_workers_keep_the_sandbox_without_gpu_access(heavy_config, fake_worker_cli, tmp_path, resources):
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    config = replace(heavy_config, backend="codex", resources=resources, additional_workspaces=(extra,))
+    assert not resources.unsandboxed
+
+    async def scenario():
+        worker = CodexWorker(config)
+        await worker.run("Run", None)
+        await worker.close()
+
+    asyncio.run(scenario())
+    start = [entry for entry in fake_worker_cli() if entry["kind"] == "thread/start"][0]["data"]["params"]
+    turn = [entry for entry in fake_worker_cli() if entry["kind"] == "turn/start"][0]["data"]["params"]
+    assert start["sandbox"] == "workspace-write"
+    assert turn["sandboxPolicy"] == {"type": "workspaceWrite", "networkAccess": False, "writableRoots": [str(extra)]}
+    claude = ClaudeWorker(replace(config, backend="claude"))
+    claude.prepare(None)
+    argv = claude.command()
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings["sandbox"]["enabled"] and settings["sandbox"]["failIfUnavailable"]
+    assert argv[argv.index("--allowedTools") + 1] == "Read,Glob,Grep"

@@ -219,6 +219,11 @@ def test_response_schema_and_prompts(config, message):
     payload = json.loads(job.split("Job data:\n", 1)[1])
     assert payload["brief"] == "Run the GPU tests" and payload["resources"] == {"gpus": [0]}
     assert "final message is posted to the Slack thread" in job and "Slack replies" in job
+    # GPU notes appear only when the worker really has GPU access.
+    assert "GPU devices listed in resources are available" not in job
+    assert "GPU devices listed in resources are available" in worker_prompt("x", context, resources={"gpus": [0], "gpu_access": True})
+    assert "can only run in a heavy task" not in heavy
+    assert "can only run in a heavy task" in conversation_prompt(message(), context, False, heavy=True, resources={"gpus": [0], "gpu_access": True})
 
 
 def test_backend_result_carries_escalation(config, tmp_path, monkeypatch, message):
@@ -262,10 +267,17 @@ def test_resources_and_heavy_config(tmp_path, config):
     loaded = load_config(source)
     assert loaded.heavy_tasks and loaded.heavy_task_timeout == 60 and loaded.heavy_task_idle == 0
     assert loaded.resources == Resources(8, (1, 0), "A100", 64, "use srun")
-    assert loaded.resources.payload() == {"cpus": 8, "gpus": [1, 0], "gpu_type": "A100", "memory_gb": 64, "notes": "use srun"}
+    assert loaded.resources.payload() == {"cpus": 8, "gpus": [1, 0], "gpu_type": "A100", "memory_gb": 64, "notes": "use srun", "gpu_access": True}
     assert loaded.resources.environment() == {"OMP_NUM_THREADS": "8", "CUDA_VISIBLE_DEVICES": "1,0"}
     assert Resources().payload() == {} and Resources().environment() == {}
     assert Resources(gpus=()).environment() == {"CUDA_VISIBLE_DEVICES": ""}
+    assert loaded.resources.unsandboxed and loaded.resources.payload()["gpu_access"] is True
+    assert not Resources(gpus=()).unsandboxed and "gpu_access" not in Resources(gpus=()).payload()
+    assert not Resources(cpus=2).unsandboxed and "gpu_access" not in Resources(cpus=2).payload()
+    kept = Resources(gpus=(0,), gpu_access=False)
+    assert not kept.unsandboxed and kept.payload()["gpu_access"] is False
+    with pytest.raises(ValueError):
+        Resources(gpu_access="yes")
     assert load_config(source).resources == loaded.resources  # frozen and comparable for hot reload
     for body in ('[resources]\ncpus = 0\n', '[resources]\ngpus = [0, 0]\n', '[resources]\ngpus = "0"\n', '[resources]\nmemory_gb = -1\n',
                  '[resources]\ntpus = 1\n', 'resources = 3\n', 'heavy_tasks = 1\n', 'heavy_task_timeout = 0\n', 'heavy_task_idle = -1\n',
