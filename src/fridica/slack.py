@@ -19,6 +19,7 @@ from .replica import DeliveryRejected, RateLimited, Replica
 
 logger = logging.getLogger(__name__)
 MARKER = "\n\n[via fridica]"
+TEXT_LIMIT = 40000
 LINKED_REPLY_LIMIT = 50
 # Socket Mode can drop events while the daemon is down or reconnecting, so on startup it re-reads
 # the last hour of channel history. Messages it already stored are ignored by the store's unique index.
@@ -59,7 +60,7 @@ def normalize(payload: dict) -> Message | None:
     task_id = data.get("task_id")
     return Message(
         event_id=payload["event_id"], workspace_id=payload["team_id"], channel_id=event["channel"],
-        sender_id=event["user"], text=event["text"][:40000], timestamp=timestamp, thread_id=thread,
+        sender_id=event["user"], text=event["text"][:TEXT_LIMIT], timestamp=timestamp, thread_id=thread,
         generated=generated, task_id=task_id if isinstance(task_id, str) and 0 < len(task_id) <= 128 else None, turn=min(turn, 10000),
         task_status=data.get("status") if data.get("status") in ("complete", "waiting", "blocked") else None,
     )
@@ -114,9 +115,13 @@ class SlackTransport:
             if item.get("ts") == timestamp:
                 root = item.get("thread_ts") in (None, timestamp)
                 chosen = messages[index:] if root else [item]
-                return [{"sender": entry.get("user") or entry.get("bot_id") or "", "text": entry["text"][:40000],
+                return [{"sender": entry.get("user") or entry.get("bot_id") or "", "text": entry["text"][:TEXT_LIMIT],
                          "timestamp": entry.get("ts", "")} for entry in chosen]
         return []
+
+    async def upload(self, message: Message, data: bytes, filename: str) -> None:
+        await self.client.files_upload_v2(channel=message.channel_id, thread_ts=message.thread_id, file=data,
+                                          filename=filename, title=filename)
 
     async def recent(self, channel: str, oldest: float, threads=()) -> list[dict]:
         """Messages posted in ``channel`` since ``oldest``, as Events API payloads for ``normalize``.
@@ -173,9 +178,7 @@ async def catch_up(transport: SlackTransport, replica: Replica, store, window: f
     """Store messages Socket Mode did not deliver from the last ``window`` seconds; return how many were new."""
     now, added = time.time(), 0
     for channel in replica.config.channels:
-        threads = [row[0] for row in store.connection.execute(
-            "SELECT thread FROM tasks WHERE workspace=? AND channel=? AND updated>=? AND control_state='active'",
-            (replica.config.workspace_id, channel, now - CATCH_UP_THREAD_AGE))]
+        threads = store.recent_threads(replica.config.workspace_id, channel, now - CATCH_UP_THREAD_AGE)
         for payload in await transport.recent(channel, now - window, threads):
             message = normalize(payload)
             if message is not None and replica.receive(message):

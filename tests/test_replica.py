@@ -44,6 +44,7 @@ class Transport:
         self.error = error
         self.sent = []
         self.announced = []
+        self.uploads = []
 
     async def send(self, message, result, task_id, turn):
         self.sent.append((message, result, task_id, turn))
@@ -54,6 +55,12 @@ class Transport:
     async def announce(self, message, text, task_id):
         self.announced.append((message, text, task_id))
         return f"{500 + len(self.announced)}.000009"
+
+    async def upload(self, message, data, filename):
+        self.uploads.append((message.thread_id, data, filename))
+
+    async def fetch(self, channel, timestamp, thread):
+        return []
 
 
 def process(replica, message):
@@ -485,7 +492,7 @@ def test_links_from_earlier_turns_and_fetch_failures(config, store, message, cap
     assert agent.responded[1][1].linked[0]["text"] == "Spec"
 
 
-def test_transport_without_fetch_has_no_linked_messages(config, store, message):
-    agent = Agent()
-    process(Replica(config, store, agent, Transport()), message(text="<@UOWNER> https://team.slack.com/archives/CROOM/p90000001"))
-    assert agent.responded[0][1].linked == ()
+def test_message_without_links_fetches_nothing(config, store, message):
+    agent, transport = Agent(), LinkTransport()
+    process(Replica(config, store, agent, transport), message(text="<@UOWNER> no links here"))
+    assert agent.responded[0][1].linked == () and transport.fetched == []

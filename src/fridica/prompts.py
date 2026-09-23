@@ -44,7 +44,28 @@ In update, empty strings leave fields unchanged; kind describes the reply, not p
 Claims must be exact message excerpts with source_event; set corrects to the disputed claim's id.
 Keep credentials, file contents and private diagnostics out of dashboard notes.
 """
+# Character limits on what the model returns. A heavy-task report may be longer than one Slack
+# message; it is posted as several consecutive thread messages.
+REPLY_LIMIT = 3500
+REPORT_LIMIT = 12000
 ESCALATE_LIMIT = 40000
+DETAILS_LIMIT = 40000
+DIGEST_LIMIT = 2500
+SUMMARY_LIMIT = DIGEST_LIMIT
+MAX_ATTACHMENTS = 3
+DETAILS_FIELD = {
+    "type": "string",
+    "description": f"Empty for simple replies. For an intermediate reply, a Markdown document of at most {DETAILS_LIMIT} characters elaborating the executive summary in text; Fridica uploads it to the thread as a file.",
+}
+
+
+def checked_details(value: object) -> str:
+    """The stripped ``details`` Markdown of a reply; ValueError when it is not a string within DETAILS_LIMIT."""
+    if not isinstance(value, str) or len(value) > DETAILS_LIMIT:
+        raise ValueError("Invalid details")
+    return value.strip()
+
+
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -64,8 +85,9 @@ RESPONSE_SCHEMA = {
             "type": "string",
             "description": "With escalate: the name of the host from the hosts field whose hardware the job needs; empty for the workspace's own host.",
         },
+        "details": DETAILS_FIELD,
     },
-    "required": ["text", "status", "discussion", "send", "update", "escalate", "escalate_host"],
+    "required": ["text", "status", "discussion", "send", "update", "escalate", "escalate_host", "details"],
     "additionalProperties": False,
 }
 SUMMARY_SCHEMA = {
@@ -88,13 +110,11 @@ FILE_PLAN_SCHEMA = {
         "path": {"type": "string"},
         "content": {"type": "string"},
         "text": {"type": "string"},
+        "details": DETAILS_FIELD,
     },
-    "required": ["operation", "path", "content", "text", "update"],
+    "required": ["operation", "path", "content", "text", "update", "details"],
     "additionalProperties": False,
 }
-REPLY_LIMIT = 3500
-DIGEST_LIMIT = 2500
-SUMMARY_LIMIT = DIGEST_LIMIT
 
 BRIEF_NOTE = f"""Keep the brief under {ESCALATE_LIMIT} characters. The worker also receives this Slack thread and the linked
 messages, so refer to a long specification there (for example "the Level 0 spec in the thread") instead of copying it.
@@ -117,15 +137,23 @@ GPU_WORKER_NOTE = """
 The GPU devices listed in resources are available to you directly (CUDA_VISIBLE_DEVICES is set accordingly); no
 scheduler is needed unless the notes say so.
 """
-WORKER_NOTE = """
+WORKER_NOTE = f"""
 
 You are the persistent heavy-task worker for this Slack thread on the host named in the job data. Carry out the brief
 below inside that host's roots using your tools; take the time the job needs. The resources field lists the hardware
 you may use; stay within it.
-Your final message is posted to the Slack thread verbatim, so make it a plain-text report of at most 3500 characters
-in the owner's voice: what was run, the outcome with the key numbers, what failed or remains, and no file paths,
-hostnames, tool transcripts, or headings. It is prose, not a structured reply: do not include status, discussion,
-escalate, or other field names from the reply rules.
+Your final message is posted to the Slack thread verbatim, so make it a plain-text report of at most {REPORT_LIMIT} characters,
+as short as the results allow, in the owner's voice: what was run, the outcome with the key numbers, what failed or
+remains, and no file paths, hostnames, tool transcripts, or headings. It is prose, not a structured reply: do not
+include status, discussion, escalate, or other field names from the reply rules.
+Files you write inside your host's roots can be attached to the thread: end the report with one line per file,
+ATTACH: <absolute path>
+for at most {MAX_ATTACHMENTS} .png, .pdf or .md files, in the order they should appear. Those lines are removed from the report
+and the files are uploaded after it, so never say you cannot attach files. The response depth rules decide which files
+to produce. To build the PDF of a sophisticated report, write the .rst files and an index.rst that pulls them in with
+.. include:: directives, then run rst2pdf index.rst -o <name>.pdf. If rst2pdf is missing, create a virtual environment
+inside your roots and pip install rst2pdf "matplotlib<3.10" there (newer matplotlib breaks rst2pdf's math rendering).
+Render figures with matplotlib at dpi 150 or more.
 """
 CONTINUATION_NOTE = (
     "\n\nThis is a continuation of your earlier session for the same Slack thread; the history field repeats "
@@ -154,6 +182,10 @@ FILE_ESCALATE_NOTE = (
 ) + BRIEF_NOTE
 
 
+def _linked_note(context: ConversationContext) -> str:
+    return LINKED_NOTE if context.linked else ""
+
+
 def conversation_prompt(message: Message, context: ConversationContext, classify: bool,
                         contract: Contract | None = None, repositories: tuple[Repo, ...] = (), *,
                         heavy: bool = False, resources: dict | None = None, hosts: list[dict] | None = None) -> str:
@@ -166,7 +198,7 @@ def conversation_prompt(message: Message, context: ConversationContext, classify
     """
     contract = contract or load_contract(None)
     instruction = contract.participation if classify else contract.replies + COLLABORATION_NOTE
-    instruction += TASK_CONTEXT_NOTE + (LINKED_NOTE if context.linked else "")
+    instruction += TASK_CONTEXT_NOTE + _linked_note(context)
     if not classify and heavy:
         instruction += HEAVY_NOTE
         if (resources or {}).get("gpu_access") or any(host.get("resources", {}).get("gpu_access") for host in hosts or []):
@@ -202,8 +234,7 @@ def worker_prompt(brief: str, context: ConversationContext, contract: Contract |
         "linked": list(context.linked),
         "brief": brief,
     }
-    note = WORKER_NOTE + (GPU_WORKER_NOTE if (resources or {}).get("gpu_access") else "")
-    note += LINKED_NOTE if context.linked else ""
+    note = WORKER_NOTE + (GPU_WORKER_NOTE if (resources or {}).get("gpu_access") else "") + _linked_note(context)
     return contract.replies + TASK_CONTEXT_NOTE + note + "\n\nJob data:\n" + json.dumps(payload)
 
 

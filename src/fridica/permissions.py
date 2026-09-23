@@ -14,6 +14,7 @@ import uuid
 
 from .config import within_casefold
 from .models import AgentResult, Message
+from .prompts import ESCALATE_LIMIT, REPLY_LIMIT, checked_details
 
 
 logger = logging.getLogger(__name__)
@@ -168,8 +169,9 @@ class Permissions:
         try:
             for _ in range(8):
                 plan = await self.agent.plan(message, context, files, roots)
-                if not isinstance(plan, dict) or set(plan) - {'operation', 'path', 'content', 'text', 'update'} or not {'operation', 'path', 'content', 'text'} <= set(plan):
+                if not isinstance(plan, dict) or set(plan) - {'operation', 'path', 'content', 'text', 'update', 'details'} or not {'operation', 'path', 'content', 'text'} <= set(plan):
                     raise ValueError('Invalid file plan')
+                details = checked_details(plan.get('details', ''))
                 if any(not isinstance(plan[field], str) for field in ('operation', 'path', 'content', 'text')):
                     raise ValueError('Invalid file plan')
                 from .collaboration import validate
@@ -178,9 +180,10 @@ class Permissions:
                 if operation == 'observe':
                     return AgentResult('', send=False, update=update)
                 if operation in {'reply', 'clarify'}:
-                    if not plan['text'].strip() or len(plan['text']) > 3500:
+                    if not plan['text'].strip() or len(plan['text']) > REPLY_LIMIT:
                         raise ValueError('Invalid reply')
-                    return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete', update=update)
+                    return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete', update=update,
+                                       details=details)
                 if operation == 'escalate':
                     return self._escalation(plan, update)
                 if operation == 'read':
@@ -213,18 +216,11 @@ class Permissions:
 
     def _escalation(self, plan: dict, update) -> AgentResult:
         """A heavy-task hand-off: the brief runs on a remote host's worker; the local roots stay scoped."""
-        from .prompts import ESCALATE_LIMIT
-        brief, host, text = plan['content'].strip(), plan['path'].strip(), plan['text']
-        if not text.strip() or len(text) > 3500 or not brief or len(brief) > ESCALATE_LIMIT:
+        brief, text = plan['content'].strip(), plan['text']
+        if not text.strip() or len(text) > REPLY_LIMIT or not brief or len(brief) > ESCALATE_LIMIT:
             raise ValueError('Invalid heavy-task brief')
-        candidates = [candidate.name for candidate in self.config.heavy_hosts]
-        if not self.config.heavy_tasks or not candidates:
-            logger.warning('Planner asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief')
-            return AgentResult(text, 'complete', update=update)
-        if host and host not in candidates:
-            logger.warning('Planner asked to escalate to unknown host %r; running the job on %s instead', host[:80], candidates[0])
-            host = ''
-        return AgentResult(text, 'complete', update=update, escalate=brief, escalate_host='' if host == candidates[0] else host)
+        brief, host = self.config.route_escalation(brief, plan['path'])
+        return AgentResult(text, 'complete', update=update, escalate=brief, escalate_host=host)
 
     def apply(self, identifier: str, *, automatic: bool = False) -> AgentResult:
         self.db.execute('BEGIN IMMEDIATE')

@@ -54,6 +54,8 @@ class AgentResult:
     """A self-contained brief for the persistent heavy-task worker; empty when the reply is the whole answer."""
     escalate_host: str = ""
     """The configured host the brief should run on; empty means the workspace's own host."""
+    details: str = ""
+    """Markdown elaborating an intermediate reply; uploaded as a file next to ``text``, which is the executive summary."""
 
 
 class AgentBackend(Protocol):
@@ -79,6 +81,10 @@ class Transport(Protocol):
 
     async def announce(self, message: Message, text: str, task_id: str) -> str:
         """Post ``text`` as a new top-level message in the message's channel and return its timestamp."""
+        ...
+
+    async def upload(self, message: Message, data: bytes, filename: str) -> None:
+        """Attach the file ``data`` (an image, PDF or Markdown document) to the message's thread."""
         ...
 
     async def fetch(self, channel: str, timestamp: str, thread: str | None) -> list[dict]:

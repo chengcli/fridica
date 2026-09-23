@@ -21,6 +21,17 @@ def permalinks(text: str) -> list[tuple[str, str, str, str | None]]:
     return found[:LINK_LIMIT]
 
 
+def split_message(text: str, limit: int) -> list[str]:
+    """``text`` in consecutive parts of at most ``limit`` characters, split at paragraphs, then lines, then words."""
+    parts, rest = [], text.strip()
+    while len(rest) > limit:
+        window = rest[:limit + 1]
+        cut = next((index for index in (window.rfind(mark) for mark in ("\n\n", "\n", " ")) if index > limit // 3), limit)
+        parts.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    return [*parts, rest] if rest else parts
+
+
 def format_reply(text: str, message: Message, context: ConversationContext) -> str:
     text = re.sub(r"(?:\s*\[via fridica\])+\s*$", "", text).rstrip()
     participants = {context.owner_id, message.sender_id}

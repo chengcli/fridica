@@ -508,3 +508,11 @@ def test_planner_prompt_lists_only_remote_hosts_for_heavy_work(managed, message)
         assert ("under 40000 characters" in prompt) is expected
         if expected:
             assert '"hosts": [{"name": "dart9"' in prompt and '"name": "local"' not in prompt
+
+
+def test_reply_plan_carries_details(managed, store, message):
+    manager = policy(managed, store, [dict(action('reply', text='Executive summary.'), details='  # Details\n\nMore.  ')])
+    result = respond(manager, message())
+    assert result.text == 'Executive summary.' and result.details == '# Details\n\nMore.'
+    manager = policy(managed, store, [dict(action('reply', text='Summary.'), details='x' * 40001)])
+    assert respond(manager, message('event-long', timestamp='200.000001')).status == 'blocked'

@@ -10,7 +10,7 @@ from fridica.models import AgentResult, ConversationContext, Decision, Message
 from fridica.prompts import HEAVY_NOTE, RESPONSE_SCHEMA, conversation_prompt, worker_prompt
 from fridica.replica import HEAVY_FAILED_NOTICE, HEAVY_INTERRUPTED_NOTICE, Replica
 from fridica.store import Store
-from test_replica import Transport
+from test_replica import Agent, Transport
 
 
 class HeavyAgent:
@@ -252,12 +252,14 @@ def test_backend_work_uses_thread_worker(config, message, monkeypatch):
     class FakeWorker:
         async def run(self, prompt, resume):
             seen["prompt"], seen["resume"] = prompt, resume
-            return "x" * 5000, "thr-1"
+            return seen.get("report", "x" * 5000), "thr-1"
 
     backend.workers.workers[("task", "local")] = FakeWorker()
     context = ConversationContext([], config.owner_id, "profile", "task", 1)
     report, thread = asyncio.run(backend.work("do it", context, "thr-0"))
-    assert thread == "thr-1" and len(report) == 3500 and seen["resume"] == "thr-0"
+    assert thread == "thr-1" and report == "x" * 5000 and seen["resume"] == "thr-0"
+    seen["report"] = "x" * 13000
+    assert len(asyncio.run(backend.work("do it", context, "thr-0"))[0]) == 12000
     assert '"brief": "do it"' in seen["prompt"] and '"cpus": 2' in seen["prompt"]
 
 
@@ -396,3 +398,120 @@ def test_worker_receives_linked_messages(heavy_config, store, message):
     prompt = worker_prompt(brief, context)
     assert '"linked": [{"link"' in prompt and "linked holds" in prompt
     assert "linked holds" not in worker_prompt(brief, replace(context, linked=()))
+
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\0" * 32
+
+
+def test_long_report_is_split_and_figure_attached(heavy_config, store, message, tmp_path):
+    figure = heavy_config.workspace / "out" / "summary.png"
+    figure.parent.mkdir()
+    figure.write_bytes(PNG_BYTES)
+    report = "\n\n".join(f"Paragraph {index}: " + "result " * 120 for index in range(8)) + f"\n\nFIGURE: {figure}\n"
+    agent = HeavyAgent([AgentResult("Started.", escalate="Run it.")], reports=[report])
+    transport = Transport()
+    run(Replica(heavy_config, store, agent, transport), message())
+    parts = [sent[1].text for sent in transport.sent[1:]]
+    assert len(parts) > 1 and all(len(part) <= 3500 for part in parts)
+    assert parts[0].startswith("Paragraph 0:") and parts[-1].rstrip().endswith("result")
+    assert "FIGURE" not in "".join(parts)
+    assert " ".join(" ".join(parts).split()) == " ".join(report.split("FIGURE:")[0].split())
+    assert transport.uploads == [(message().thread_id, PNG_BYTES, "summary.png")]
+
+
+@pytest.mark.parametrize("make_path,error", [
+    (lambda root, tmp: tmp / "outside.png", "outside the host's roots"),
+    (lambda root, tmp: root / "link.png", "outside the host's roots"),
+    (lambda root, tmp: root / "fake.png", "not a PNG image"),
+    (lambda root, tmp: root / "fake.pdf", "not a PDF document"),
+    (lambda root, tmp: root / "binary.md", "not a Markdown file"),
+    (lambda root, tmp: root / "plot.svg", "absolute path to a .png, .pdf or .md"),
+])
+def test_attachment_must_be_an_allowed_file_inside_the_roots(heavy_config, store, message, tmp_path, caplog, make_path, error):
+    root = heavy_config.workspace
+    (tmp_path / "outside.png").write_bytes(PNG_BYTES)
+    (root / "link.png").symlink_to(tmp_path / "outside.png")
+    (root / "fake.png").write_bytes(b"not an image")
+    (root / "fake.pdf").write_bytes(PNG_BYTES)
+    (root / "binary.md").write_bytes(b"\xff\xfe\x00")
+    (root / "plot.svg").write_bytes(b"<svg/>")
+    path = make_path(root, tmp_path)
+    agent = HeavyAgent([AgentResult("Started.", escalate="Run it.")], reports=[f"All passed.\nATTACH: {path}"])
+    transport = Transport()
+    run(Replica(heavy_config, store, agent, transport), message())
+    assert transport.sent[-1][1].text == "All passed." and not transport.uploads
+    assert f"Could not upload {path.name}" in caplog.text and error in caplog.text
+
+
+def test_report_attaches_figure_and_pdf_in_order(heavy_config, store, message):
+    root = heavy_config.workspace
+    (root / "summary.png").write_bytes(PNG_BYTES)
+    (root / "report.pdf").write_bytes(b"%PDF-1.4 body")
+    report = f"Summary of the run.\n\nATTACH: {root / 'summary.png'}\nATTACH: {root / 'report.pdf'}\nATTACH: {root / 'summary.png'}"
+    agent = HeavyAgent([AgentResult("Started.", escalate="Run it.")], reports=[report])
+    transport = Transport()
+    run(Replica(heavy_config, store, agent, transport), message())
+    assert transport.sent[-1][1].text == "Summary of the run."
+    assert [(name, data[:5]) for _thread, data, name in transport.uploads] == [("summary.png", PNG_BYTES[:5]), ("report.pdf", b"%PDF-")]
+
+
+def test_intermediate_reply_uploads_details_markdown(config, store, message, caplog):
+    agent = Agent(results=[AgentResult("Executive summary.", details="# Details\n\nThe long version."), AgentResult("Plain.")])
+    transport = Transport()
+    replica = Replica(config, store, agent, transport)
+    entry = message()
+    run(replica, entry)
+    task_id = store.task(entry)["task_id"]
+    assert transport.sent[0][1].text == "Executive summary."
+    assert transport.uploads == [(entry.thread_id, b"# Details\n\nThe long version.", f"details-{task_id[:8]}.md")]
+    run(replica, message("event2", text="<@UOWNER> thanks", timestamp="100.000003"))
+    assert len(transport.uploads) == 1
+
+
+def test_remote_attachment_is_read_over_ssh_and_checked(monkeypatch):
+    from pathlib import PurePosixPath
+    from fridica import attachments
+    from fridica.config import Host
+    host = Host("dungeon2", (PurePosixPath("/data01/ai_workspace"),))
+    scripts = []
+
+    def respond(output, code=0):
+        async def fake_exec(*argv, **kwargs):
+            scripts.append(argv[-1])
+
+            class Process:
+                returncode = code
+
+                async def communicate(self):
+                    return output, b""
+            return Process()
+        monkeypatch.setattr(attachments.asyncio, "create_subprocess_exec", fake_exec)
+
+    respond(b"/data01/ai_workspace/run/summary.png\n/data01/ai_workspace\n\0" + PNG_BYTES)
+    assert asyncio.run(attachments.load(host, "/data01/ai_workspace/run/summary.png")) == PNG_BYTES
+    assert "realpath -e -- /data01/ai_workspace/run/summary.png" in scripts[-1] and scripts[-1].startswith("f=$(")
+    # A symlink that resolves outside the roots is refused even though the requested path looked inside.
+    respond(b"/etc/secret.png\n/data01/ai_workspace\n\0" + PNG_BYTES)
+    with pytest.raises(ValueError, match="outside"):
+        asyncio.run(attachments.load(host, "/data01/ai_workspace/link.png"))
+    respond(b"", code=3)
+    with pytest.raises(ValueError, match="could not be read"):
+        asyncio.run(attachments.load(host, "/data01/ai_workspace/missing.pdf"))
+
+
+def test_split_attachments_and_split_message():
+    from fridica.attachments import split_attachments
+    from fridica.replies import split_message
+    assert split_attachments("Done.\n\nFIGURE: `/a/b.png`\nATTACH: /a/r.pdf\n") == ("Done.", ["/a/b.png", "/a/r.pdf"])
+    assert split_attachments("x\nATTACH: /1.md\nATTACH: /2.md\nATTACH: /3.md\nATTACH: /4.md")[1] == ["/1.md", "/2.md", "/3.md"]
+    assert split_attachments("No plot here.") == ("No plot here.", [])
+    assert split_message("short", 3500) == ["short"]
+    parts = split_message("a" * 50 + "\n\n" + "b" * 50 + "\n" + "c" * 80, 100)
+    assert parts == ["a" * 50, "b" * 50, "c" * 80]
+    assert split_message("x" * 250, 100) == ["x" * 100, "x" * 100, "x" * 50]
+
+
+def test_worker_note_states_the_configured_limits():
+    from fridica.prompts import MAX_ATTACHMENTS, REPORT_LIMIT, WORKER_NOTE
+    assert f"at most {REPORT_LIMIT} characters" in WORKER_NOTE and f"at most {MAX_ATTACHMENTS} .png" in WORKER_NOTE
+    assert "{" not in WORKER_NOTE

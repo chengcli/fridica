@@ -204,6 +204,12 @@ class Store:
         ).fetchall()
         return [Message(**json.loads(row["payload"])) for row in reversed(rows)]
 
+    def recent_threads(self, workspace: str, channel: str, since: float) -> list[str]:
+        """Active task threads in ``channel`` updated since ``since``."""
+        return [row[0] for row in self.connection.execute(
+            "SELECT thread FROM tasks WHERE workspace=? AND channel=? AND updated>=? AND control_state='active'",
+            (workspace, channel, since))]
+
     def waiting_threads(self, workspace: str) -> list[Message]:
         """The latest message of every active thread whose last reply asked for information."""
         rows = self.connection.execute(

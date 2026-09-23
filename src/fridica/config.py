@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 from pathlib import Path, PurePath, PurePosixPath
@@ -10,6 +11,8 @@ import unicodedata
 from dataclasses import dataclass
 
 import tomlkit
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_CONFIG = Path.home() / ".config" / "fridica" / "config.toml"
@@ -211,6 +214,23 @@ class Config:
         """The hosts heavy tasks may run on: every host, or only the remote ones when the local roots
         stay under scoped file access (a worker with native tools never touches them)."""
         return self.remote_hosts if self.file_access else self.hosts
+
+    def route_escalation(self, brief: str, host: str) -> tuple[str, str]:
+        """The brief and host a heavy task is handed to; the brief is empty when heavy tasks cannot run.
+
+        An unknown host falls back to the first heavy host, which is returned as ``""``.
+        """
+        brief, host = brief.strip(), host.strip()
+        candidates = [candidate.name for candidate in self.heavy_hosts]
+        if not brief:
+            return "", ""
+        if not self.heavy_tasks or not candidates:
+            logger.warning("Asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief")
+            return "", ""
+        if host and host not in candidates:
+            logger.warning("Asked to escalate to unknown host %r; running the job on %s instead", host[:80], candidates[0])
+            host = ""
+        return brief, "" if host == candidates[0] else host
 
     def host(self, name: str) -> Host:
         for host in self.hosts:

@@ -19,12 +19,13 @@ import uuid
 
 from . import collaboration
 from .config import Config
+from . import attachments
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message, Transport
-from .replies import format_reply, permalinks
+from .prompts import REPLY_LIMIT, REPORT_LIMIT
+from .replies import format_reply, permalinks, split_message
 from .store import Store
 
 logger = logging.getLogger(__name__)
-REPLY_LIMIT = 3500
 LINKED_TEXT_LIMIT = 20000
 OPEN_STATUSES = {"complete", "waiting"}
 
@@ -260,10 +261,8 @@ class Replica:
         the agent, so following links elsewhere would expose channels they cannot read.
         Links into the current thread are skipped because history already carries them.
         """
-        fetch = getattr(self.transport, "fetch", None)
         linked, budget = [], LINKED_TEXT_LIMIT
-        links = permalinks("\n".join(entry.text for entry in [message, *reversed(history)])) if fetch else []
-        for link, channel, timestamp, root in links:
+        for link, channel, timestamp, root in permalinks("\n".join(entry.text for entry in [message, *reversed(history)])):
             if budget <= 0:
                 break
             if channel not in self.config.channels:
@@ -272,7 +271,7 @@ class Replica:
             if channel == message.channel_id and (root or timestamp) == message.thread_id:
                 continue
             try:
-                entries = await fetch(channel, timestamp, root)
+                entries = await self.transport.fetch(channel, timestamp, root)
             except Exception as error:
                 logger.warning("Linked message %s in %s could not be fetched (%s)", timestamp, channel, type(error).__name__)
                 linked.append({"link": link, "error": "could not be fetched"})
@@ -339,12 +338,12 @@ class Replica:
                 raise ValueError("invalid silent response")
             return replace(result, text="", session=None, finished=False)
         if not isinstance(text, str) or not text.strip() or len(text) > REPLY_LIMIT:
-            raise ValueError("agent response must contain 1 to 3500 characters")
+            raise ValueError(f"agent response must contain 1 to {REPLY_LIMIT} characters")
         if result.status == "waiting" and f"<@{message.sender_id}>" not in text:
             text = f"<@{message.sender_id}> {text}"
         text = format_reply(text, message, context)
         if not text.strip() or len(text) > REPLY_LIMIT:
-            raise ValueError("formatted response must contain 1 to 3500 characters")
+            raise ValueError(f"formatted response must contain 1 to {REPLY_LIMIT} characters")
         return replace(result, text=text, session=None, finished=bool(result.finished) and result.status == "complete")
 
     # ----- delivery and follow-through -----
@@ -377,6 +376,8 @@ class Replica:
         self.store.delivered(message, timestamp)
         self._record_outgoing(message, result.text, timestamp, thread=message.thread_id,
                               task_id=row["task_id"], turn=row["turn"], status=result.status)
+        if result.details:
+            await self._upload(message, f"details-{(row['task_id'] or '')[:8]}.md", result.details.encode("utf-8"))
         if result.status == 'waiting':
             self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
         if not row["reply_only"]:
@@ -411,11 +412,14 @@ class Replica:
         task = self.store.task(message)
         context = self._thread_context(message, task)
         context = replace(context, worker=self.store.worker(message), linked=await self._linked(message, context.messages))
-        thread = task["worker_thread"]
+        thread, files = task["worker_thread"], []
         try:
             try:
                 report, thread = await self.agent.work(brief, context, task["worker_thread"], host)
-                if not isinstance(report, str) or not report.strip() or len(report) > REPLY_LIMIT:
+                if not isinstance(report, str) or not report.strip() or len(report) > REPORT_LIMIT:
+                    raise ValueError("invalid heavy-task report")
+                report, files = attachments.split_attachments(report)
+                if not report:
                     raise ValueError("invalid heavy-task report")
                 text, state = format_reply(report, message, context), "done"
             except asyncio.CancelledError:
@@ -425,10 +429,26 @@ class Replica:
                 text, state = HEAVY_FAILED_NOTICE, "failed"
             async with self._lock:
                 self.store.save_worker(message, state, thread, host)
-                await self._post_notice(message, text, task["task_id"], task["turns"])
+                for part in split_message(text, REPLY_LIMIT):
+                    await self._post_notice(message, part, task["task_id"], task["turns"])
+                for path in files if state == "done" else ():
+                    await self._upload(message, os.path.basename(path),
+                                       lambda path=path: attachments.load(self.config.host(host), path))
         except asyncio.CancelledError:
             self.store.save_worker(message, "interrupted", thread, host)
             raise
+
+    async def _upload(self, message: Message, filename: str, data) -> None:
+        """Upload a file into the thread after the text it belongs to; failures are logged and the text stands alone.
+
+        ``data`` is the file's bytes, or an async callable that reads them (such as a worker's attachment).
+        """
+        try:
+            await self.transport.upload(message, data if isinstance(data, bytes) else await data(), filename)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error("Could not upload %s to thread %s (%s): %s", filename, message.thread_id, type(error).__name__, error)
 
     async def _post_notice(self, message: Message, text: str, task_id: str, turn: int) -> None:
         """Post ``text`` in the thread and record it as our own message; failures are logged, never retried."""
