@@ -22,11 +22,13 @@ def policy(config, store, answers=()):
     from fridica.permissions import Permissions
 
     class Planner:
-        async def plan(self, message, context, files, roots):
+        async def plan(self, message, context, files, roots, *, feedback=''):
+            self.feedback.append(feedback)
             return next(self.answers)
 
         def __init__(self):
             self.answers = iter(answers)
+            self.feedback = []
 
     return Permissions(config, store, Planner())
 
@@ -384,7 +386,7 @@ def test_file_change_while_planning_does_not_get_overwritten(managed, store, mes
     manager.grant('UALICE', 'CROOM', str(target))
 
     class Planner:
-        async def plan(self, entry, context, files, roots):
+        async def plan(self, entry, context, files, roots, *, feedback=''):
             if not files:
                 return action('read', target)
             if change == 'delete':
@@ -474,16 +476,57 @@ def test_escalate_hands_brief_to_remote_host(managed, store, message, caplog):
     manager = policy(managed, store, [action("escalate", "", "job", "Started.")])
     result = respond(manager, message("event-off", timestamp="300.000001"))
     assert result.status == "complete" and result.escalate == "" and result.text == "Started."
-    # An empty brief or reply is invalid, and blocks like any other malformed plan.
-    manager = policy(heavy, store, [action("escalate", "dart9", "", "Started.")])
-    assert respond(manager, message("event-bad", timestamp="400.000001")).status == "blocked"
-    # A brief that carries a long pasted specification fits; one past the limit blocks and logs why.
+    # A brief that carries a long pasted specification fits.
     manager = policy(heavy, store, [action("escalate", "dart9", "x" * 40000, "Started.")])
     assert respond(manager, message("event-long", timestamp="500.000001")).escalate == "x" * 40000
-    manager = policy(heavy, store, [action("escalate", "dart9", "x" * 40001, "Started.")])
+
+
+@pytest.mark.parametrize("content,text,reason", [
+    ("", "Started.", "content, which holds the brief, is empty; put the brief in content, not in details"),
+    ("x" * 40001, "Started.", "content is 40001 characters; the limit is 40000"),
+    ("job", "", "text, the reply telling the requester the job has started, is empty"),
+    ("job", "y" * 3501, "text is 3501 characters; the limit is 3500"),
+])
+def test_invalid_escalation_is_corrected_once_then_blocks_with_reason(managed, store, message, caplog, content, text, reason):
+    import logging
+    from pathlib import PurePosixPath
+    from fridica.config import Host
+    from fridica.permissions import ESCALATION_FAILED
+    heavy = replace(managed, heavy_tasks=True, remote_hosts=(Host("dart9", (PurePosixPath("/mnt/a"),)),))
+    bad = action("escalate", "dart9", content, text)
+    # The model is told why its plan was rejected and may correct it.
+    manager = policy(heavy, store, [bad, action("escalate", "dart9", "Run the full suite.", "Started.")])
     with caplog.at_level(logging.WARNING, logger="fridica.permissions"):
-        assert respond(manager, message("event-huge", timestamp="600.000001")).status == "blocked"
-    assert "File plan for event event-huge was rejected (ValueError): Invalid heavy-task brief" in caplog.text
+        result = respond(manager, message())
+    assert result.status == "complete" and result.escalate == "Run the full suite."
+    assert manager.agent.feedback[0] == "" and reason in manager.agent.feedback[1]
+    assert f"asking for a correction: Invalid heavy-task brief: {reason}" in caplog.text
+    # A second invalid plan blocks with an escalation-specific reply, not a file-access one, and logs why.
+    caplog.clear()
+    manager = policy(heavy, store, [bad, bad])
+    with caplog.at_level(logging.WARNING, logger="fridica.permissions"):
+        result = respond(manager, message("event-bad", timestamp="200.000001"))
+    assert result.status == "blocked" and result.text == ESCALATION_FAILED and "local access" not in result.text
+    assert f"File plan for event event-bad was rejected (InvalidBrief): Invalid heavy-task brief: {reason}" in caplog.text
+
+
+def test_plan_prompt_carries_rejection_feedback(managed, message):
+    from fridica.agents import ClaudeBackend
+    from fridica.prompts import FEEDBACK_NOTE
+    context = ConversationContext([], managed.owner_id, "profile", "task", 1)
+    seen = []
+
+    async def fake_invoke(self, prompt, classify, session=None, *, schema=None):
+        seen.append(prompt)
+        return {"operation": "observe", "path": "", "content": "", "text": "", "update": None}, None
+
+    backend = ClaudeBackend(managed)
+    backend._invoke = fake_invoke.__get__(backend)
+    roots = {"writable": [], "read_only": []}
+    asyncio.run(backend.plan(message(), context, {}, roots))
+    asyncio.run(backend.plan(message(), context, {}, roots, feedback="content is empty"))
+    assert FEEDBACK_NOTE not in seen[0] and "rejected_plan" not in seen[0]
+    assert FEEDBACK_NOTE in seen[1] and seen[1].endswith('"rejected_plan": "content is empty"}')
 
 
 def test_planner_prompt_lists_only_remote_hosts_for_heavy_work(managed, message):

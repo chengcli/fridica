@@ -438,7 +438,10 @@ the old modules in memory. Restart with Ctrl-C in the daemon's terminal or tmux
 pane followed by `fridica start`; no message is lost, because incoming events are
 acknowledged and stored before processing, and undelivered replies resume. The
 startup log lists earlier events that ended blocked or uncertain so you can inspect
-them; it never replays them.
+them; it never replays them. Slack occasionally drops a Socket Mode event even
+while connected, so besides the one-hour catch-up at startup the daemon re-reads
+the last 15 minutes of channel and active-thread history every 5 minutes, and
+the full hour again after a failed pass.
 All subcommands accept `--config PATH`; `python -m fridica` is also supported.
 
 Fridica responds to mentions of the owner and follow-ups while a task is waiting
@@ -808,7 +811,10 @@ Acknowledgments and repeated replies can stay silent. Three turns without
 recorded progress pause the task; this is a heuristic, not automatic fact
 checking. Blocked or paused threads make no further model calls or replies.
 Use **Resume** for future messages or **Close request** to stop the thread.
-Resume does not replay old messages. Continuation threads share task notes and
+Resuming a blocked thread also answers the latest message someone else posted
+while it was blocked, when that message mentions you; otherwise the dashboard says
+it was not replayed. The failed request itself is not retried, and resuming a
+paused thread replays nothing. Continuation threads share task notes and
 the progress counter; a no-progress pause does not create a continuation.
 
 Task notes are bookkeeping attached to a reply, never a reason to withhold it.

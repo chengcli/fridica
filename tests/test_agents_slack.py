@@ -556,6 +556,78 @@ class History(Client):
         return {"messages": self.replies.get(kwargs["ts"], [])}
 
 
+def test_serve_keeps_catching_up_while_connected(config, store, monkeypatch):
+    """Socket Mode can drop an event while connected, so catch-up repeats over a shorter recent window."""
+    from fridica import slack
+    from fridica.config import Config
+
+    class Socket:
+        def __init__(self, **kwargs):
+            self.socket_mode_request_listeners = []
+        async def connect(self): pass
+        async def close(self): pass
+        async def is_connected(self): return True
+
+    windows, done = [], asyncio.Event()
+
+    async def fake_catch_up(transport, replica, database, window):
+        windows.append(window)
+        if len(windows) in (1, 3):
+            raise RuntimeError("Slack unavailable")
+        if len(windows) >= 5:
+            done.set()
+        return 0
+
+    async def validate(self): pass
+    async def run(self): await asyncio.Future()
+    monkeypatch.setattr(Config, "tokens", lambda self: ("app", "user"))
+    monkeypatch.setattr(slack, "SocketModeClient", Socket)
+    monkeypatch.setattr(slack.SlackTransport, "validate", validate)
+    monkeypatch.setattr(slack.Replica, "run", run)
+    monkeypatch.setattr(slack, "catch_up", fake_catch_up)
+    monkeypatch.setattr(slack, "CATCH_UP_INTERVAL", 0.01)
+
+    async def scenario():
+        worker = asyncio.create_task(slack.serve(config, store, None, True))
+        try:
+            await asyncio.wait_for(done.wait(), 2)
+        finally:
+            worker.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await worker
+
+    asyncio.run(scenario())
+    # The window narrows only after a pass succeeds; a failed pass is retried over the full hour.
+    hour, recent = slack.CATCH_UP_WINDOW, slack.CATCH_UP_RECENT
+    assert windows[:5] == [hour, hour, recent, hour, recent]
+
+
+def test_recent_reads_every_page_of_history_and_replies(config):
+    class Paged(Client):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def conversations_history(self, **kwargs):
+            self.calls.append(("history", kwargs.get("cursor")))
+            if kwargs.get("cursor") is None:
+                return {"messages": [{"ts": "200.000001", "user": "UALICE", "text": "a", "reply_count": 1}],
+                        "response_metadata": {"next_cursor": "page2"}}
+            return {"messages": [{"ts": "200.000002", "user": "UALICE", "text": "b"}], "response_metadata": {"next_cursor": ""}}
+
+        async def conversations_replies(self, **kwargs):
+            self.calls.append(("replies", kwargs.get("cursor")))
+            if kwargs.get("cursor") is None:
+                return {"messages": [{"ts": "200.000001", "user": "UALICE", "text": "a"},
+                                     {"ts": "200.000003", "user": "UBOB", "text": "c"}], "response_metadata": {"next_cursor": "r2"}}
+            return {"messages": [{"ts": "200.000004", "user": "UBOB", "text": "d"}]}
+
+    client = Paged()
+    payloads = asyncio.run(SlackTransport(config, client).recent("CROOM", 100.0))
+    assert [p["event"]["text"] for p in payloads] == ["a", "b", "c", "d"]
+    assert client.calls == [("history", None), ("history", "page2"), ("replies", None), ("replies", "r2")]
+
+
 def test_catch_up_stores_messages_socket_mode_missed(config, store, message):
     from fridica.replica import Replica
     from fridica.slack import catch_up

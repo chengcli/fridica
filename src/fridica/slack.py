@@ -21,10 +21,15 @@ logger = logging.getLogger(__name__)
 MARKER = "\n\n[via fridica]"
 TEXT_LIMIT = 40000
 LINKED_REPLY_LIMIT = 50
-# Socket Mode can drop events while the daemon is down or reconnecting, so on startup it re-reads
-# the last hour of channel history. Messages it already stored are ignored by the store's unique index.
+# Socket Mode can drop events while the daemon is down or reconnecting, and occasionally while it is
+# connected, so on startup it re-reads the last hour of channel history and then, every
+# CATCH_UP_INTERVAL, the last CATCH_UP_RECENT seconds; after a failed pass the next one covers the
+# full hour again. Messages it already stored are ignored by the store's unique index.
 CATCH_UP_WINDOW = 3600
 CATCH_UP_THREAD_AGE = 86400
+CATCH_UP_INTERVAL = 300
+CATCH_UP_RECENT = 900
+CATCH_UP_PAGES = 10
 
 
 def normalize(payload: dict) -> Message | None:
@@ -129,13 +134,11 @@ class SlackTransport:
         Covers top-level messages, replies in threads whose roots are that recent, and replies in ``threads``.
         """
         bound = f"{oldest:.6f}"
-        history = await self.client.conversations_history(channel=channel, oldest=bound, limit=200, include_all_metadata=True)
-        found = {item["ts"]: item for item in history.get("messages") or [] if isinstance(item, dict) and isinstance(item.get("ts"), str)}
+        found = {item["ts"]: item for item in await self._pages(self.client.conversations_history, channel=channel, oldest=bound)}
         roots = set(threads) | {ts for ts, item in found.items() if item.get("reply_count")}
         for root in sorted(roots):
-            replies = await self.client.conversations_replies(channel=channel, ts=root, oldest=bound, limit=200, include_all_metadata=True)
-            for item in replies.get("messages") or []:
-                if isinstance(item, dict) and isinstance(item.get("ts"), str) and item["ts"] != root:
+            for item in await self._pages(self.client.conversations_replies, channel=channel, ts=root, oldest=bound):
+                if item["ts"] != root:
                     found.setdefault(item["ts"], item)
         payloads = []
         for ts, item in sorted(found.items()):
@@ -144,6 +147,20 @@ class SlackTransport:
             payloads.append({"type": "event_callback", "event_id": f"catchup:{channel}:{ts}", "team_id": self.config.workspace_id,
                              "event": {**item, "type": "message", "channel": channel}})
         return payloads
+
+    @staticmethod
+    async def _pages(method, **kwargs) -> list[dict]:
+        """Every message a paginated history or replies call returns, up to CATCH_UP_PAGES pages."""
+        items, cursor = [], None
+        for _ in range(CATCH_UP_PAGES):
+            response = await method(**kwargs, limit=200, include_all_metadata=True, **({"cursor": cursor} if cursor else {}))
+            items += [item for item in response.get("messages") or [] if isinstance(item, dict) and isinstance(item.get("ts"), str)]
+            cursor = (response.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                break
+        else:
+            logger.warning("Catch-up stopped after %d pages; older messages in this window were not read", CATCH_UP_PAGES)
+        return items
 
     async def _post(self, channel: str, text: str, task_id: str, turn: int, status: str, *, thread_ts: str | None) -> str:
         try:
@@ -210,10 +227,16 @@ async def serve(config: Config, store, agent, observe_only: bool = False, config
             await client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
         async def recover_missed():
-            try:
-                await catch_up(transport, replica, store, CATCH_UP_WINDOW)
-            except Exception as error:
-                logger.warning("Catching up on missed messages failed (%s)", type(error).__name__)
+            window = CATCH_UP_WINDOW
+            while True:
+                try:
+                    await catch_up(transport, replica, store, window)
+                except Exception as error:
+                    logger.warning("Catching up on missed messages failed (%s)", type(error).__name__)
+                    window = CATCH_UP_WINDOW
+                else:
+                    window = CATCH_UP_RECENT
+                await asyncio.sleep(CATCH_UP_INTERVAL)
 
         async def heartbeat():
             while True:

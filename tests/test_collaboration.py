@@ -82,10 +82,14 @@ def test_blocked_task_stays_quiet_until_resumed(config, store, message, send):
     assert len(replica.transport.sent) == int(send)
     row = store.task(entry)
     assert row['status'] == 'blocked'
-    thread_action(config, 'CROOM', entry.thread_id, 'resume', row['control_revision'])
+    # Resume answers the message turned away while blocked; an older message that arrives late does not trigger.
+    assert thread_action(config, 'CROOM', entry.thread_id, 'resume', row['control_revision'])['replayed'] is True
     assert store.task(entry)['status'] == 'complete'
-    process(replica, message('late', timestamp='201'))
-    assert len(replica.agent.responded) == 1
+    replica.agent.results.append(AgentResult('Signed in now.'))
+    process(replica, message('again', timestamp='200'))
+    assert len(replica.agent.responded) == 2 and store.get('again')['state'] == 'sent'
+    process(replica, message('late', timestamp='150'))
+    assert len(replica.agent.responded) == 2 and store.get('late')['decision'] == 'before_resume'
 
 
 def test_reports_reject_invalid_identity_source_and_authority(config, store, message):
