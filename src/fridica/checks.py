@@ -13,60 +13,65 @@ import subprocess
 import sys
 
 from . import remote
-from .config import Config
+from .config import Config, Host
 from .runner import diagnostic, environment
 
 SANDBOX_TOOLS = {"linux": ("bwrap", "socat")}
 PLATFORMS = {"Linux": "linux", "Darwin": "darwin"}
 
 
-def where(config: Config) -> str:
+def where(config: Config, host: Host | None = None) -> str:
     """``locally`` or ``on <host>``, for messages that tell the owner where to fix something."""
-    return f"on {config.ssh_host}" if config.remote else "locally"
+    target = host or config.primary
+    return f"on {target.ssh_host}" if target.remote else "locally"
 
 
 def probe(config: Config, command: list[str], *, timeout: float = 10,
-          stdin=subprocess.DEVNULL) -> subprocess.CompletedProcess:
-    """Run a short diagnostic command where the agent runs and capture its output.
+          stdin=subprocess.DEVNULL, host: Host | None = None) -> subprocess.CompletedProcess:
+    """Run a short diagnostic command where the agent runs (on ``host``, default the primary) and capture its output.
 
     Raises ``OSError`` or ``subprocess.TimeoutExpired`` like ``subprocess.run``; a
     remote connection failure surfaces as exit status 255 with ssh's stderr.
     """
-    if config.remote:
-        command = remote.ssh_command(config, remote.remote_script(command, config.workspace, timeout=timeout))
+    target = host or config.primary
+    if target.remote:
+        command = remote.ssh_command(target, remote.remote_script(command, target.workspace, timeout=timeout))
     return subprocess.run(command, capture_output=True, text=True, stdin=stdin, timeout=timeout, env=environment(config))
 
 
-def which(config: Config, name: str) -> str | None:
+def which(config: Config, name: str, host: Host | None = None) -> str | None:
     """The executable's path where the agent runs, or None when it is not on PATH there."""
-    if not config.remote:
+    target = host or config.primary
+    if not target.remote:
         return shutil.which(name)
     try:
-        result = probe(config, ["command", "-v", name])
+        result = probe(config, ["command", "-v", name], host=target)
     except (OSError, subprocess.TimeoutExpired):
         return None
     found = result.stdout.strip().splitlines()
     return found[-1] if result.returncode == 0 and found else None
 
 
-def platform(config: Config) -> str | None:
+def platform(config: Config, host: Host | None = None) -> str | None:
     """``sys.platform``-style name of the host that runs the agent, or None when unknown."""
-    if not config.remote:
+    target = host or config.primary
+    if not target.remote:
         return sys.platform
     try:
-        result = probe(config, ["uname", "-s"])
+        result = probe(config, ["uname", "-s"], host=target)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return PLATFORMS.get(result.stdout.strip()) if result.returncode == 0 else None
 
 
-def check_connection(config: Config) -> list[str]:
-    """Report why the SSH host that owns the working folder cannot be used; empty for local configurations."""
-    if not config.remote:
+def check_connection(config: Config, host: Host | None = None) -> list[str]:
+    """Report why an SSH host (default: the workspace's) cannot be used; empty for the local machine."""
+    target = host or config.primary
+    if not target.remote:
         return []
-    host = config.ssh_host
+    host = target.ssh_host
     try:
-        result = probe(config, ["uname", "-s"], timeout=30)
+        result = probe(config, ["uname", "-s"], timeout=30, host=target)
     except subprocess.TimeoutExpired:
         return [f"Connecting to {host} timed out; check ssh {host} from this machine."]
     except OSError:
@@ -76,7 +81,7 @@ def check_connection(config: Config) -> list[str]:
         return [f"Could not connect to {host} without a prompt ({detail or 'ssh exited with status 255'}); "
                 f"set up key authentication and a Host entry in ~/.ssh/config."]
     if result.returncode == 98:
-        return [f"The workspace {config.root_label(config.workspace)} is not a directory on {host}."]
+        return [f"The workspace {target.label(target.workspace)} is not a directory on {host}."]
     if result.returncode:
         detail = diagnostic(result.stderr.encode())
         return [f"A command on {host} failed with status {result.returncode}"
@@ -84,21 +89,46 @@ def check_connection(config: Config) -> list[str]:
     if result.stdout.strip() not in PLATFORMS:
         return [f"{host} runs {result.stdout.strip() or 'an unknown system'}; Linux or macOS is required."]
     problems = []
-    for directory in (*config.additional_workspaces, *config.read_only_workspaces):
+    extra = config.read_only_workspaces if target.name == config.primary.name else ()
+    for directory in (*target.roots[1:], *extra):
         try:
-            result = probe(config, ["test", "-d", str(directory)])
+            result = probe(config, ["test", "-d", str(directory)], host=target)
         except (OSError, subprocess.TimeoutExpired):
-            return [f"Could not inspect {config.root_label(directory)}; check ssh {host}."]
+            return [f"Could not inspect {target.label(directory)}; check ssh {host}."]
         if result.returncode:
-            problems.append(f"{config.root_label(directory)} is not a directory on {host}.")
+            problems.append(f"{target.label(directory)} is not a directory on {host}.")
     return problems
 
 
-def unreachable(config: Config, result: subprocess.CompletedProcess) -> list[str]:
+def check_host(config: Config, host: Host) -> list[str]:
+    """Everything a heavy-task host other than the primary needs: connection, roots, the backend, its sign-in, and bwrap for GPUs."""
+    problems = check_connection(config, host)
+    if problems:
+        return problems
+    if which(config, config.backend, host) is None:
+        return [f"Install {config.backend} and sign in on {host.name} before starting Fridica."]
+    problems = check_authentication(config, host) + check_gpu_confinement(config, host)
+    return problems
+
+
+def check_gpu_confinement(config: Config, host: Host | None = None) -> list[str]:
+    """A host that declares GPUs needs bubblewrap and Linux so Fridica can confine the unsandboxed worker."""
+    target = host or config.primary
+    if not config.heavy_tasks or not target.resources.gpu_worker:
+        return []
+    if platform(config, target) != "linux":
+        return [f"GPU heavy tasks need Linux {where(config, target)}; set gpu_access = false for {target.name}."]
+    if which(config, remote.BWRAP, target) is None:
+        return [f"Install bubblewrap (bwrap) {where(config, target)}; GPU heavy tasks are confined with it. {SANDBOX_HELP}."]
+    return []
+
+
+def unreachable(config: Config, result: subprocess.CompletedProcess, host: Host | None = None) -> list[str]:
     """The problem to report when a remote probe never reached the agent's host; empty otherwise."""
-    if config.remote and result.returncode == remote.SSH_FAILURE:
+    target = host or config.primary
+    if target.remote and result.returncode == remote.SSH_FAILURE:
         detail = diagnostic(result.stderr.encode())
-        return [f"Could not reach {config.ssh_host} over SSH ({detail or 'ssh exited with status 255'})."]
+        return [f"Could not reach {target.ssh_host} over SSH ({detail or 'ssh exited with status 255'})."]
     return []
 
 
@@ -131,6 +161,7 @@ def check_backend(config: Config) -> list[str]:
                 return [f"Upgrade codex {where(config)}: heavy_tasks needs the codex app-server command."]
         elif "--input-format" not in result.stdout:
             return [f"Upgrade claude {where(config)}: heavy_tasks needs --input-format stream-json."]
+        return check_gpu_confinement(config)
     return []
 
 
@@ -181,26 +212,26 @@ def check_sandbox(config: Config) -> list[str]:
     return []
 
 
-def check_authentication(config: Config) -> list[str]:
-    executable = which(config, config.backend)
+def check_authentication(config: Config, host: Host | None = None) -> list[str]:
+    executable = which(config, config.backend, host)
     if executable is None:
-        return [f"Install {config.backend} {where(config)} before checking sign-in."]
+        return [f"Install {config.backend} {where(config, host)} before checking sign-in."]
     arguments = ["auth", "status"] if config.backend == "claude" else ["login", "status"]
     try:
-        result = probe(config, [executable, *arguments])
+        result = probe(config, [executable, *arguments], host=host)
     except subprocess.TimeoutExpired:
-        return [f"{config.backend} sign-in check timed out; run {' '.join([config.backend, *arguments])} {where(config)}."]
+        return [f"{config.backend} sign-in check timed out; run {' '.join([config.backend, *arguments])} {where(config, host)}."]
     except OSError:
-        return [f"Could not run {config.backend} {where(config)}; repair its installation and retry."]
-    if unreachable(config, result):
-        return unreachable(config, result)
+        return [f"Could not run {config.backend} {where(config, host)}; repair its installation and retry."]
+    if unreachable(config, result, host):
+        return unreachable(config, result, host)
     if result.returncode:
-        return [f"{config.backend} is not signed in or its status command failed; run {' '.join([config.backend, *arguments])} {where(config)}."]
+        return [f"{config.backend} is not signed in or its status command failed; run {' '.join([config.backend, *arguments])} {where(config, host)}."]
     if config.backend == "claude":
         try:
             status = json.loads(result.stdout)
         except (ValueError, TypeError):
-            return [f"Claude returned an unreadable authentication status; run claude auth status {where(config)}."]
+            return [f"Claude returned an unreadable authentication status; run claude auth status {where(config, host)}."]
         if not isinstance(status, dict) or status.get("loggedIn") is not True:
-            return [f"Claude is not signed in; run claude {where(config)} to sign in, then retry."]
+            return [f"Claude is not signed in; run claude {where(config, host)} to sign in, then retry."]
     return []

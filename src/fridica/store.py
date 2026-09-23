@@ -101,7 +101,7 @@ class Store:
         for name, definition in {"control_state": "TEXT NOT NULL DEFAULT 'active'", "pause_reason": "TEXT",
                                  "reset_at": "REAL NOT NULL DEFAULT 0", "control_revision": "INTEGER NOT NULL DEFAULT 0",
                                  "root_thread": "TEXT", "continuation": "TEXT", "digest_pending": "INTEGER NOT NULL DEFAULT 0", "debriefed_turn": "INTEGER NOT NULL DEFAULT 0",
-                                 "worker_thread": "TEXT", "worker_state": "TEXT", "worker_since": "REAL"}.items():
+                                 "worker_thread": "TEXT", "worker_state": "TEXT", "worker_since": "REAL", "worker_host": "TEXT"}.items():
             if name not in columns:
                 self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
         self.connection.execute("CREATE TABLE IF NOT EXISTS thread_decisions (workspace TEXT, channel TEXT, thread TEXT, action TEXT, decided_at REAL)")
@@ -349,18 +349,18 @@ class Store:
             )
 
     def worker(self, message: Message) -> dict | None:
-        """This thread's heavy-task worker state for the agent (``state`` and ``since``), or None."""
+        """This thread's heavy-task worker state for the agent (``state``, ``since`` and ``host``), or None."""
         task = self.task(message)
         if task is None or not task["worker_state"]:
             return None
-        return {"state": task["worker_state"], "since": task["worker_since"]}
+        return {"state": task["worker_state"], "since": task["worker_since"], "host": task["worker_host"]}
 
-    def save_worker(self, message: Message, state: str | None, thread: str | None) -> None:
-        """Record the heavy-task worker's state and the backend thread that continues its work."""
+    def save_worker(self, message: Message, state: str | None, thread: str | None, host: str | None = None) -> None:
+        """Record the heavy-task worker's state, the host it runs on, and the backend thread that continues its work."""
         with self.connection:
             self.connection.execute(
-                "UPDATE tasks SET worker_state=?,worker_thread=?,worker_since=? WHERE workspace=? AND channel=? AND thread=?",
-                (state, thread, time.time() if state else None, *self._key(message)),
+                "UPDATE tasks SET worker_state=?,worker_thread=?,worker_since=?,worker_host=? WHERE workspace=? AND channel=? AND thread=?",
+                (state, thread, time.time() if state else None, host, *self._key(message)),
             )
 
     def interrupted_workers(self, workspace: str) -> list[Message]:

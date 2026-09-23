@@ -88,7 +88,8 @@ class CLIBackend:
         try:
             contract, repositories = self.contract(), self.repositories()
             session = context.session if self.config.resume_sessions else None
-            options = {"heavy": self.config.heavy_tasks, "resources": self.config.resources.payload()}
+            options = {"heavy": self.config.heavy_tasks, "resources": self.config.resources.payload(),
+                       "hosts": [host.payload() for host in self.config.hosts]}
             try:
                 prompt = conversation_prompt(message, context, False, contract, repositories, **options)
                 result, session = await self._invoke(prompt, False, session)
@@ -117,14 +118,15 @@ class CLIBackend:
         result, _session = await self._invoke(prompt, True, schema=FILE_PLAN_SCHEMA)
         return result
 
-    async def work(self, brief: str, context: ConversationContext, resume: str | None) -> tuple[str, str | None]:
-        """Run an escalated brief on this thread's persistent worker and return its report and thread id.
+    async def work(self, brief: str, context: ConversationContext, resume: str | None, host: str = "") -> tuple[str, str | None]:
+        """Run an escalated brief on this thread's persistent worker for ``host`` and return its report and thread id.
 
         Failures propagate as ``BackendError`` (or ``TimeoutError``) so the replica can
         tell the thread that the job did not finish; nothing is retried.
         """
-        prompt = worker_prompt(brief, context, self.contract(), self.repositories(), self.config.resources.payload())
-        report, thread = await self.workers.get(context.task_id).run(prompt, resume)
+        target = self.config.host(host) if host else self.config.primary
+        prompt = worker_prompt(brief, context, self.contract(), self.repositories(), target.resources.payload(), target.payload())
+        report, thread = await self.workers.get(context.task_id, target).run(prompt, resume)
         return truncate(report, REPLY_LIMIT), thread
 
     async def close(self) -> None:
@@ -146,13 +148,20 @@ class CLIBackend:
             raise BackendError("Agent returned an invalid status.")
         finished = result.get("discussion") == "finished" and result["status"] == "complete"
         escalate = result.get("escalate", "")
-        if not isinstance(escalate, str) or len(escalate) > ESCALATE_LIMIT:
+        host = result.get("escalate_host", "")
+        if not isinstance(escalate, str) or len(escalate) > ESCALATE_LIMIT or not isinstance(host, str):
             raise BackendError("Agent returned an invalid heavy-task brief.")
-        if escalate.strip() and not self.config.heavy_tasks:
+        escalate, host = escalate.strip(), host.strip()
+        if escalate and not self.config.heavy_tasks:
             logger.warning("Agent asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief")
             escalate = ""
+        if escalate and host and host not in {candidate.name for candidate in self.config.hosts}:
+            logger.warning("Agent asked to escalate to unknown host %r; ignoring the brief", host[:80])
+            escalate = ""
+        if host == self.config.primary.name:
+            host = ""
         return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send,
-                           update=update, escalate=escalate.strip())
+                           update=update, escalate=escalate, escalate_host=host if escalate else "")
 
     async def _digest(self, context: ConversationContext, instruction: str, schema: dict, key: str) -> str:
         result, _session = await self._invoke(digest_prompt(context, instruction), True, schema=schema)

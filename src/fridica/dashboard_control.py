@@ -111,6 +111,7 @@ def save_metadata(config, value):
 def bind_project(config, root, repository):
     roots = {config.root_label(p if config.remote else p.resolve())
              for p in (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)}
+    roots |= {host.label(p) for host in config.remote_hosts for p in host.roots}
     if root not in roots:
         raise ValueError('Choose an already configured directory. This page cannot expand file access.')
     if not isinstance(repository, str) or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):

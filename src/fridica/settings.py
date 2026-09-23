@@ -44,7 +44,7 @@ def read_settings(base, path):
     current, revision = configured_snapshot(base, path)
     values = {name: getattr(current, name) for name in EDITABLE}
     values.update(workspace=current.root_label(current.workspace),
-                  additional_workspaces=[current.root_label(p) for p in current.additional_workspaces],
+                  additional_workspaces=current.root_labels()[1:],
                   read_only_workspaces=[current.root_label(p) for p in current.read_only_workspaces])
     result = {'values': values, 'revision': revision, 'applied_revision': None, 'applied_pid': None}
     with database(base) as db:

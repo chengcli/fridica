@@ -50,6 +50,8 @@ class AgentResult:
     update: dict | None = None
     escalate: str = ""
     """A self-contained brief for the persistent heavy-task worker; empty when the reply is the whole answer."""
+    escalate_host: str = ""
+    """The configured host the brief should run on; empty means the workspace's own host."""
 
 
 class AgentBackend(Protocol):
@@ -61,8 +63,8 @@ class AgentBackend(Protocol):
 
     async def debrief(self, context: ConversationContext) -> str: ...
 
-    async def work(self, brief: str, context: ConversationContext, resume: str | None) -> tuple[str, str | None]:
-        """Run ``brief`` on the persistent heavy-task worker; return the report and the worker thread to resume later."""
+    async def work(self, brief: str, context: ConversationContext, resume: str | None, host: str) -> tuple[str, str | None]:
+        """Run ``brief`` on ``host``'s persistent heavy-task worker; return the report and the worker thread to resume later."""
         ...
 
     async def close(self) -> None:

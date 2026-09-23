@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from .checks import check_authentication, check_backend, check_connection, check_sandbox, where, which
+from .checks import check_authentication, check_backend, check_connection, check_host, check_sandbox, where, which
 from .config import load_config
 from .contract import load_contract
 from .repos import load_repos
@@ -65,6 +65,10 @@ def run_doctor(path: Path) -> int:
             else:
                 checks.extend(("SKIP", f"{name}: install the AI executable first.")
                               for name in ("AI CLI capabilities", "AI sandbox", "AI sign-in"))
+        for host in config.remote_hosts:
+            roots = ", ".join(host.label(root) for root in host.roots)
+            record(f"Heavy-task host {host.name} ({roots})", check_host(config, host) if config.heavy_tasks
+                   else [f"roots on {host.name} are only used by heavy tasks; set heavy_tasks = true or remove them."])
     color = sys.stdout.isatty() and not os.environ.get("NO_COLOR") and os.environ.get("TERM") != "dumb"
     colors = {"PASS": "32", "FAIL": "31", "SKIP": "33"}
     for status, description in checks:

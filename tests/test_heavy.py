@@ -38,8 +38,8 @@ class HeavyAgent:
     async def debrief(self, context):
         return "debrief"
 
-    async def work(self, brief, context, resume):
-        self.worked.append((brief, context, resume))
+    async def work(self, brief, context, resume, host=""):
+        self.worked.append((brief, context, resume, host))
         await asyncio.sleep(self.delay)
         if self.error:
             raise self.error
@@ -78,7 +78,8 @@ def test_escalation_posts_report_in_thread(heavy_config, store, message):
     first = message()
     run(replica, first)
     assert [sent[1].text for sent in transport.sent] == ["Starting the full run; I'll post the result here.", "Full suite: 312 passed, 0 failed."]
-    brief, context, resume = agent.worked[0]
+    brief, context, resume, host = agent.worked[0]
+    assert host == ""
     assert brief == "Run the full test suite on the GPU box." and resume is None
     assert context.worker == {"state": "running", "since": pytest.approx(store.task(first)["worker_since"])}
     assert context.task_id == store.task(first)["task_id"]

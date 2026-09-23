@@ -31,7 +31,7 @@ def snapshot(config: Config, *, compact=False) -> dict:
                    'allowed_domains': list(config.allowed_domains), 'resume_sessions': config.resume_sessions,
                    'session_timeout': config.session_timeout,
                    'ssh_host': config.ssh_host,
-                   'write_roots': [config.root_label(p) for p in (config.workspace, *config.additional_workspaces)],
+                   'write_roots': config.root_labels(),
                    'read_roots': [config.root_label(p) for p in config.read_only_workspaces]},
     }
     if not config.state_path.exists():

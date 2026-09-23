@@ -19,7 +19,7 @@ from typing import Any
 import uuid
 
 from . import remote
-from .config import Config
+from .config import Config, Host
 from .runner import OUTPUT_LIMIT, RESUME_FAILURES, BackendError, _terminate, diagnostic, environment
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,9 @@ class Worker:
     idle timer that closes the process after ``heavy_task_idle`` seconds.
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, host: Host | None = None):
         self.config = config
+        self.host = host or config.primary
         self.process: asyncio.subprocess.Process | None = None
         self.reader: asyncio.Task | None = None
         self.stderr_task: asyncio.Task | None = None
@@ -65,10 +66,12 @@ class Worker:
         return self.process is not None and self.process.returncode is None
 
     async def start(self) -> None:
-        limits = self.config.resources.environment()
-        argv, cwd = remote.launch(self.config, self.command(), self.config.workspace, env=limits)
+        limits = self.host.resources.environment()
+        confine = self.host.roots if self.host.resources.gpu_worker else None
+        argv, cwd = remote.launch(self.host, self.command(), self.host.workspace, env=limits,
+                                  confine=confine, network=bool(self.config.allowed_domains))
         env = environment(self.config)
-        if not self.config.remote:
+        if not self.host.remote:
             env.update(limits)
         try:
             self.process = await asyncio.create_subprocess_exec(
@@ -208,8 +211,8 @@ class Worker:
 class CodexWorker(Worker):
     """``codex app-server`` over stdio: initialize, thread/start or thread/resume, then one turn per job."""
 
-    def __init__(self, config: Config):
-        super().__init__(config)
+    def __init__(self, config: Config, host: Host | None = None):
+        super().__init__(config, host)
         self.next_id = 1
 
     def command(self) -> list[str]:
@@ -252,8 +255,9 @@ class CodexWorker(Worker):
         self.next_id = 1
         await self.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": {"experimentalApi": False}})
         await self.send({"method": "initialized", "params": {}})
-        sandbox = "danger-full-access" if self.config.resources.unsandboxed else "workspace-write"
-        params = {"cwd": str(self.config.workspace), "sandbox": sandbox, "approvalPolicy": "never"}
+        # A GPU worker is already confined by Fridica's bubblewrap; Codex's own sandbox would hide the GPUs.
+        sandbox = "danger-full-access" if self.host.resources.gpu_worker else "workspace-write"
+        params = {"cwd": str(self.host.workspace), "sandbox": sandbox, "approvalPolicy": "never"}
         if self.config.model:
             params["model"] = self.config.model
         thread = None
@@ -269,14 +273,13 @@ class CodexWorker(Worker):
         self.thread = thread["id"]
 
     async def job(self, prompt: str) -> str:
-        if self.config.resources.unsandboxed:
-            # Only the unsandboxed policy exposes the GPU device nodes; see Resources.unsandboxed.
+        if self.host.resources.gpu_worker:
             policy: dict[str, Any] = {"type": "dangerFullAccess"}
         else:
             policy = {"type": "workspaceWrite", "networkAccess": bool(self.config.allowed_domains),
-                      "writableRoots": [str(root) for root in self.config.additional_workspaces]}
+                      "writableRoots": [str(root) for root in self.host.roots[1:]]}
         result = await self.request("turn/start", {"threadId": self.thread, "input": [{"type": "text", "text": prompt}],
-                                                   "cwd": str(self.config.workspace), "sandboxPolicy": policy})
+                                                   "cwd": str(self.host.workspace), "sandboxPolicy": policy})
         turn = result.get("turn") if isinstance(result.get("turn"), dict) else {}
         turn_id = turn.get("id")
         report = None
@@ -316,9 +319,9 @@ class ClaudeWorker(Worker):
         from .agents import ClaudeBackend
         settings = ClaudeBackend.settings(self.config, False)
         allowed = "Read,Glob,Grep"
-        if self.config.resources.unsandboxed:
-            # The sandbox hides the GPU devices, so it is off for GPU work; Bash then needs an
-            # explicit allowance because nothing sandboxes it any more. See Resources.unsandboxed.
+        if self.host.resources.gpu_worker:
+            # Claude's sandbox hides the GPU devices, so it is off for GPU work and Fridica's
+            # bubblewrap confines the process instead; Bash then needs an explicit allowance.
             settings["sandbox"] = {"enabled": False}
             allowed = "Bash," + allowed
         command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -327,7 +330,7 @@ class ClaudeWorker(Worker):
                    "--permission-mode", "acceptEdits", "--tools", "Bash,Read,Glob,Grep,Edit,Write",
                    "--allowedTools", allowed]
         command += ["--resume", self.resume] if self.resume is not None else ["--session-id", self.thread]
-        for workspace in self.config.additional_workspaces:
+        for workspace in self.host.roots[1:]:
             command += ["--add-dir", str(workspace)]
         if self.config.model:
             command += ["--model", self.config.model]
@@ -353,17 +356,18 @@ class ClaudeWorker(Worker):
 
 
 class Workers:
-    """The heavy-task workers of one backend, keyed by Slack task."""
+    """The heavy-task workers of one backend, keyed by Slack task and host."""
 
     def __init__(self, config: Config, factory):
         self.config = config
         self.factory = factory
-        self.workers: dict[str, Worker] = {}
+        self.workers: dict[tuple[str, str], Worker] = {}
 
-    def get(self, task_id: str) -> Worker:
-        worker = self.workers.get(task_id)
+    def get(self, task_id: str, host: Host | None = None) -> Worker:
+        host = host or self.config.primary
+        worker = self.workers.get((task_id, host.name))
         if worker is None:
-            worker = self.workers[task_id] = self.factory(self.config)
+            worker = self.workers[(task_id, host.name)] = self.factory(self.config, host)
         return worker
 
     async def close(self) -> None:

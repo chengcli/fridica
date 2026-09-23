@@ -81,11 +81,13 @@ class Resources:
                 raise ValueError(f"resources.{name} must be a string of at most 1000 characters")
 
     @property
-    def unsandboxed(self) -> bool:
-        """True when heavy tasks run without the filesystem sandbox: GPUs are declared and gpu_access is on.
+    def gpu_worker(self) -> bool:
+        """True when heavy tasks need Fridica's own confinement to reach the GPUs: GPUs declared and gpu_access on.
 
         Both backends sandbox commands with bubblewrap, whose minimal ``/dev`` hides the
-        GPU device nodes, so a sandboxed worker cannot use the hardware it was given.
+        GPU device nodes. A GPU worker therefore runs with the backend's sandbox off but
+        inside Fridica's bubblewrap, which exposes ``/dev`` and confines writes to the
+        host's designated roots (see ``remote.confinement``).
         """
         return bool(self.gpus) and self.gpu_access
 
@@ -93,7 +95,7 @@ class Resources:
         """The JSON-friendly description sent to the agent; unspecified values are left out."""
         data = {"cpus": self.cpus, "gpus": list(self.gpus) if self.gpus is not None else None,
                 "gpu_type": self.gpu_type, "memory_gb": self.memory_gb, "notes": self.notes,
-                "gpu_access": self.unsandboxed if self.gpus else None}
+                "gpu_access": self.gpu_worker if self.gpus else None}
         return {key: value for key, value in data.items() if value not in (None, "")}
 
     def environment(self) -> dict[str, str]:
@@ -104,6 +106,51 @@ class Resources:
         if self.gpus is not None:
             variables["CUDA_VISIBLE_DEVICES"] = ",".join(str(index) for index in self.gpus)
         return variables
+
+
+LOCAL = "local"
+
+
+@dataclass(frozen=True)
+class Host:
+    """One machine the agent may work on: its designated writable roots and declared hardware.
+
+    The primary host is where ``workspace`` lives (``local`` or an SSH alias) and where
+    every per-turn reply runs. Further hosts come from roots in ``additional_workspaces``
+    with another ``host:`` prefix; they only run heavy tasks, each confined to its own
+    roots.
+    """
+    name: str
+    roots: tuple[PurePath, ...]
+    resources: Resources = Resources()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not (self.name == LOCAL or SSH_HOST.fullmatch(self.name)):
+            raise ValueError("host names must be local or an SSH host alias")
+        if not self.roots:
+            raise ValueError(f"host {self.name} has no workspace roots")
+        if not isinstance(self.resources, Resources):
+            raise ValueError(f"resources for host {self.name} must be a table")
+
+    @property
+    def remote(self) -> bool:
+        return self.name != LOCAL
+
+    @property
+    def ssh_host(self) -> str | None:
+        return self.name if self.remote else None
+
+    @property
+    def workspace(self) -> PurePath:
+        """The working directory for this host's agent processes: its first root."""
+        return self.roots[0]
+
+    def label(self, path: PurePath) -> str:
+        return f"{self.name}:{path}" if self.remote else str(path)
+
+    def payload(self) -> dict:
+        """The JSON-friendly description handed to the reply agent so it can pick a host for heavy work."""
+        return {"name": self.name, "roots": [str(root) for root in self.roots], "resources": self.resources.payload()}
 
 
 @dataclass(frozen=True)
@@ -138,15 +185,36 @@ class Config:
     heavy_task_timeout: float = 4 * 3600
     heavy_task_idle: float = 1800
     resources: Resources = Resources()
+    remote_hosts: tuple[Host, ...] = ()
 
     @property
     def remote(self) -> bool:
-        """True when the workspace roots live on an SSH host and every agent run happens there."""
+        """True when the workspace roots live on an SSH host and every per-turn run happens there."""
         return self.ssh_host is not None
 
     def root_label(self, path: PurePath) -> str:
-        """The configured spelling of a root: ``host:/path`` when remote, the local path otherwise."""
+        """The configured spelling of a primary-host root: ``host:/path`` when remote, the local path otherwise."""
         return f"{self.ssh_host}:{path}" if self.remote else str(path)
+
+    @property
+    def primary(self) -> Host:
+        """The host that owns ``workspace`` and runs the per-turn replies."""
+        return Host(self.ssh_host or LOCAL, (self.workspace, *self.additional_workspaces), self.resources)
+
+    @property
+    def hosts(self) -> tuple[Host, ...]:
+        """Every host heavy tasks may run on; the primary host first."""
+        return (self.primary, *self.remote_hosts)
+
+    def host(self, name: str) -> Host:
+        for host in self.hosts:
+            if host.name == name:
+                return host
+        raise KeyError(name)
+
+    def root_labels(self) -> list[str]:
+        """The configured spelling of every writable root on every host."""
+        return [host.label(root) for host in self.hosts for root in host.roots]
 
     def __post_init__(self) -> None:
         for label, value, pattern in (
@@ -178,6 +246,17 @@ class Config:
             raise ValueError("resources must be a [resources] table")
         if self.heavy_tasks and self.file_access:
             raise ValueError("heavy_tasks requires the agent's native workspace tools; disable file_access")
+        if not isinstance(self.remote_hosts, tuple) or any(not isinstance(host, Host) or not host.remote for host in self.remote_hosts):
+            raise ValueError("remote_hosts must be remote Host entries")
+        names = [host.name for host in self.remote_hosts]
+        if len(set(names)) != len(names) or (self.ssh_host or LOCAL) in names:
+            raise ValueError("each host may appear once among the workspace roots")
+        if self.remote_hosts and self.file_access:
+            raise ValueError("file_access requires every workspace root on the local machine")
+        for host in self.remote_hosts:
+            for directory in host.roots:
+                if not isinstance(directory, PurePosixPath) or not directory.is_absolute() or directory == PurePosixPath("/"):
+                    raise ValueError(f"roots on {host.name} must be absolute POSIX paths below the filesystem root")
         if not isinstance(self.profile, str) or (self.model is not None and not isinstance(self.model, str)):
             raise ValueError("profile and model must be strings")
         if self.reasoning_effort not in {None, "low", "medium", "high", "xhigh", "max", "ultra"}:
@@ -301,34 +380,53 @@ def load_config(path: Path, *, contents: bytes | None = None) -> Config:
     if "ssh_host" in values and values["ssh_host"] is not None and (
             not isinstance(values["ssh_host"], str) or not SSH_HOST.fullmatch(values["ssh_host"])):
         raise ValueError("ssh_host must be an SSH host alias such as dart9 or user@dart9")
-    host = values.get("ssh_host")
-    hosts: set[str | None] = set()
-    for key in ("workspace", "additional_workspaces", "read_only_workspaces"):
-        if key == "workspace":
-            root_host, values[key] = parse_root(values[key])
-            hosts.add(root_host)
-        else:
-            parsed = [parse_root(root) for root in values.get(key, [])]
-            hosts.update(root_host for root_host, _path in parsed)
-            values[key] = tuple(path for _root_host, path in parsed)
-    if len(hosts) > 1:
-        raise ValueError("every workspace root must be on the same host: prefix all of them with the same "
-                         "host: or none of them")
-    (root_host,) = hosts
-    if host is not None and root_host is not None and host != root_host:
+    explicit = values.get("ssh_host")
+    workspace_host, values["workspace"] = parse_root(values["workspace"])
+    if explicit is not None and workspace_host is not None and explicit != workspace_host:
         raise ValueError("ssh_host disagrees with the host: prefix on the workspace roots")
-    if root_host is not None:
-        values["ssh_host"] = root_host
-    elif host is not None:
-        # ssh_host given explicitly with plain paths: treat every root as remote.
+    primary = workspace_host or explicit
+    if workspace_host is None and explicit is not None:
+        # ssh_host given explicitly with a plain workspace path: the workspace is remote.
         values["workspace"] = PurePosixPath(str(values["workspace"]))
-        for key in ("additional_workspaces", "read_only_workspaces"):
-            values[key] = tuple(PurePosixPath(str(path)) for path in values[key])
-    if "resources" in values:
-        table = values["resources"]
+    values["ssh_host"] = primary
+    additional = [parse_root(root) for root in values.get("additional_workspaces", [])]
+    read_only = [parse_root(root) for root in values.get("read_only_workspaces", [])]
+    if primary is not None and any(root_host is None for root_host, _path in (*additional, *read_only)):
+        if workspace_host is None:
+            # Explicit ssh_host with plain paths everywhere: every root is on that host.
+            additional = [(primary, PurePosixPath(str(path))) if root_host is None else (root_host, path) for root_host, path in additional]
+            read_only = [(primary, PurePosixPath(str(path))) if root_host is None else (root_host, path) for root_host, path in read_only]
+        else:
+            raise ValueError("the workspace is remote, so prefix every other root with its host: too")
+    if any(root_host != primary for root_host, _path in read_only):
+        raise ValueError("read_only_workspaces must be on the same host as workspace")
+    values["read_only_workspaces"] = tuple(path for _root_host, path in read_only)
+    values["additional_workspaces"] = tuple(path for root_host, path in additional if root_host == primary)
+    others: dict[str, list[PurePath]] = {}
+    for root_host, path in additional:
+        if root_host != primary:
+            others.setdefault(root_host, []).append(path)
+    tables = values.pop("resources", None)
+    per_host: dict[str, dict] = {}
+    if tables is not None:
+        if not isinstance(tables, dict):
+            raise ValueError("resources must be a [resources] table or [resources.<host>] tables")
+        if tables and all(isinstance(table, dict) for table in tables.values()):
+            per_host = dict(tables)
+            known = {primary or LOCAL, *others}
+            for name in per_host:
+                if name not in known:
+                    raise ValueError(f"[resources.{name}] names a host that has no workspace roots; known hosts: "
+                                     + ", ".join(sorted(known)))
+        else:
+            per_host = {primary or LOCAL: tables}
+    def resources_for(name: str) -> Resources:
+        table = per_host.get(name, {})
         if not isinstance(table, dict) or set(table) - set(Resources.__dataclass_fields__):
-            raise ValueError("[resources] accepts cpus, gpus, gpu_type, memory_gb, and notes")
-        values["resources"] = Resources(**table)
+            raise ValueError(f"[resources{'' if name == (primary or LOCAL) else '.' + name}] accepts cpus, gpus, gpu_type, memory_gb, notes, and gpu_access")
+        return Resources(**table)
+    values["resources"] = resources_for(primary or LOCAL)
+    values["remote_hosts"] = tuple(Host(name, tuple(paths), resources_for(name)) for name, paths in others.items())
     domains = values.get("allowed_domains", [])
     if not isinstance(domains, list):
         raise ValueError("allowed_domains must be a list of host names")
@@ -360,9 +458,10 @@ workspace_id = "T_REPLACE"
 channels = ["C_REPLACE"]
 workspace = "~/projects/your-project"
 # A working folder on another machine over SSH: "dart9:/mnt/your-project", where dart9
-# is an alias from ~/.ssh/config that connects without a prompt. Every agent run then
-# happens on that host, which needs the backend CLI installed and signed in. All roots
-# must carry the same host: prefix; file_access is local-only.
+# is an alias from ~/.ssh/config that connects without a prompt. Every per-turn run then
+# happens on that host, which needs the backend CLI installed and signed in.
+# Roots on other hosts, such as "dart9:/mnt/data1/projects", make those hosts available
+# for heavy tasks only, each confined to its own roots. file_access is local-only.
 additional_workspaces = []
 # Use scoped file operations instead of the agent's native workspace tools.
 file_access = false
@@ -395,11 +494,14 @@ heavy_tasks = false
 # process exits (it is resumed by thread when the next job arrives).
 heavy_task_timeout = 14400
 heavy_task_idle = 1800
-# Hardware on the working host that heavy tasks may use. The agent sees these values
-# as data; the worker runs with matching OMP_NUM_THREADS and CUDA_VISIBLE_DEVICES.
-# Declaring gpus makes the heavy worker run outside the filesystem sandbox (the
-# sandbox hides GPU devices); set gpu_access = false to keep the sandbox instead.
-[resources]
+# Hardware heavy tasks may use, per host: [resources.local] for this machine and
+# [resources.<alias>] for each SSH host among the roots (a plain [resources] table
+# describes the workspace's host). The agent sees these values as data and picks the
+# host for a job; the worker runs with matching OMP_NUM_THREADS and CUDA_VISIBLE_DEVICES.
+# Declaring gpus runs the worker inside Fridica's own bubblewrap (the backend sandbox
+# hides GPU devices): full /dev, writes only to that host's roots; needs bwrap there.
+# Set gpu_access = false to keep the backend sandbox and forgo the GPUs.
+# [resources.dart9]
 # cpus = 8
 # gpus = [0, 1]
 # gpu_type = "NVIDIA A100 80GB"

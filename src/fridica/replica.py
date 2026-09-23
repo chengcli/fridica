@@ -350,28 +350,31 @@ class Replica:
     # ----- heavy tasks -----
 
     def _escalate(self, message: Message, result: AgentResult) -> None:
-        """Hand a delivered reply's brief to the thread's persistent worker, unless one is already running."""
+        """Hand a delivered reply's brief to the thread's persistent worker on the chosen host, unless one is running."""
         brief = getattr(result, "escalate", "")
         if not brief or not self.config.heavy_tasks or self.agent is None:
             return
+        host = getattr(result, "escalate_host", "") or self.config.primary.name
         task = self.store.task(message)
         if task is None or task["worker_state"] == "running":
             logger.info("Thread %s already has a heavy task running; brief ignored", message.thread_id)
             return
-        self.store.save_worker(message, "running", task["worker_thread"])
-        if self._spawn(self._heavy(message, brief)) is None:
-            self.store.save_worker(message, task["worker_state"], task["worker_thread"])
+        # A worker thread only continues on the host that created it.
+        thread = task["worker_thread"] if task["worker_host"] in (None, host) else None
+        self.store.save_worker(message, "running", thread, host)
+        if self._spawn(self._heavy(message, brief, host)) is None:
+            self.store.save_worker(message, task["worker_state"], task["worker_thread"], task["worker_host"])
             return
-        logger.info("Thread %s: heavy task started", message.thread_id)
+        logger.info("Thread %s: heavy task started on %s", message.thread_id, host)
 
-    async def _heavy(self, message: Message, brief: str) -> None:
+    async def _heavy(self, message: Message, brief: str, host: str) -> None:
         """Run one escalated job outside the pipeline lock, then post its report in the thread."""
         task = self.store.task(message)
         context = replace(self._thread_context(message, task), worker=self.store.worker(message))
         thread = task["worker_thread"]
         try:
             try:
-                report, thread = await self.agent.work(brief, context, task["worker_thread"])
+                report, thread = await self.agent.work(brief, context, task["worker_thread"], host)
                 if not isinstance(report, str) or not report.strip() or len(report) > REPLY_LIMIT:
                     raise ValueError("invalid heavy-task report")
                 text, state = format_reply(report, message, context), "done"
@@ -381,10 +384,10 @@ class Replica:
                 logger.error("Heavy task for thread %s failed (%s): %s", message.thread_id, type(error).__name__, error or "no detail")
                 text, state = HEAVY_FAILED_NOTICE, "failed"
             async with self._lock:
-                self.store.save_worker(message, state, thread)
+                self.store.save_worker(message, state, thread, host)
                 await self._post_notice(message, text, task["task_id"], task["turns"])
         except asyncio.CancelledError:
-            self.store.save_worker(message, "interrupted", thread)
+            self.store.save_worker(message, "interrupted", thread, host)
             raise
 
     async def _post_notice(self, message: Message, text: str, task_id: str, turn: int) -> None:
@@ -407,7 +410,7 @@ class Replica:
             task = self.store.task(message)
             if task is None or message.channel_id not in self.config.channels:
                 continue
-            self.store.save_worker(message, "failed", task["worker_thread"])
+            self.store.save_worker(message, "failed", task["worker_thread"], task["worker_host"])
             await self._post_notice(message, HEAVY_INTERRUPTED_NOTICE, task["task_id"], task["turns"])
 
     async def _follow_up(self, message: Message, result: AgentResult) -> None:
