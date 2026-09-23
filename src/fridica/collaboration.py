@@ -5,15 +5,20 @@ from copy import deepcopy
 from dataclasses import replace
 import hashlib
 import json
+import logging
 import re
 import time
 
 from .repos import load_repos
 
+logger = logging.getLogger(__name__)
 FIELDS = ('repo', 'assignee', 'next_step', 'blocker', 'unblock_when')
 UPDATE_FIELDS = (*FIELDS, 'claim', 'source_event', 'corrects', 'kind')
 KINDS = ('result', 'question', 'correction', 'status', 'ack')
+LONG_FIELDS = ('claim', 'next_step', 'blocker', 'unblock_when')
 LIMIT = 3
+MEMBER_ID = re.compile(r'[UW][A-Z0-9]+')
+MENTION = re.compile(r'<@([UW][A-Z0-9]+)(?:\|[^>]*)?>')
 
 
 def initialize(db):
@@ -64,11 +69,109 @@ def validate(update):
     if not isinstance(update, dict) or set(update) - set(UPDATE_FIELDS):
         raise ValueError('Invalid task update')
     for field, value in update.items():
-        if not isinstance(value, str) or len(value) > (1000 if field in ('claim', 'next_step', 'blocker', 'unblock_when') else 200):
+        if not isinstance(value, str) or len(value) > (1000 if field in LONG_FIELDS else 200):
             raise ValueError('Task update is too long or invalid')
     if update.get('kind', 'result') not in KINDS:
         raise ValueError('Invalid reply kind')
     return {field: value.strip() for field, value in update.items()}
+
+
+def known_member(db, config, channel, identifier):
+    """The owner, or anyone whose message Fridica has stored for this channel."""
+    if identifier == config.owner_id:
+        return True
+    return db.execute("SELECT 1 FROM events WHERE workspace=? AND channel=? AND json_extract(payload,'$.sender_id')=? LIMIT 1",
+                      (config.workspace_id, channel, identifier)).fetchone() is not None
+
+
+def resolve_assignee(db, config, channel, value):
+    """Turn what the model wrote into a known Slack member ID, or None.
+
+    Accepts a bare ID, a ``<@ID>`` or ``<@ID|name>`` mention, or a display name that
+    the dashboard's name cache maps to exactly one member. The model sees people
+    sign messages with display names, so names are the common mistake; they are
+    resolved when unambiguous and dropped otherwise, never guessed.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    mention = MENTION.fullmatch(value)
+    identifier = mention.group(1) if mention else value if MEMBER_ID.fullmatch(value) else None
+    if identifier is None:
+        from .dashboard_control import metadata
+        wanted = ' '.join(value.casefold().split())
+        matches = {member for member, name in metadata(config)['names'].items()
+                   if isinstance(name, str) and ' '.join(name.casefold().split()) == wanted}
+        if len(matches) != 1:
+            return None
+        identifier = matches.pop()
+    return identifier if known_member(db, config, channel, identifier) else None
+
+
+def sanitize(db, config, message, update):
+    """Coerce a model-produced update into one ``record`` accepts; drop what cannot be salvaged.
+
+    Returns the cleaned update and a list of human-readable notes about every field
+    that was altered or removed, for the local log. A note is metadata about a reply;
+    a defect in it must never cost the reply itself.
+    """
+    problems = []
+    if not isinstance(update, dict):
+        return {}, ['update was not an object']
+    clean = {}
+    for field, value in update.items():
+        if field not in UPDATE_FIELDS:
+            problems.append(f'unknown field {field!r} dropped')
+            continue
+        if not isinstance(value, str):
+            problems.append(f'{field} was not text; dropped')
+            continue
+        limit = 1000 if field in LONG_FIELDS else 200
+        if len(value) > limit:
+            problems.append(f'{field} truncated to {limit} characters')
+            value = value[:limit]
+        clean[field] = value.strip()
+    if clean.get('kind') and clean['kind'] not in KINDS:
+        problems.append(f"kind {clean['kind']!r} replaced with result")
+        clean['kind'] = 'result'
+    if clean.get('repo'):
+        names = {repo.name for repo in load_repos(config.repos)}
+        if clean['repo'] not in names:
+            folded = {name.casefold(): name for name in names}
+            if clean['repo'].casefold() in folded:
+                clean['repo'] = folded[clean['repo'].casefold()]
+            else:
+                problems.append(f"repo {clean['repo']!r} is not in the shared list; dropped")
+                clean['repo'] = ''
+    if clean.get('assignee'):
+        resolved = resolve_assignee(db, config, message.channel_id, clean['assignee'])
+        if resolved is None:
+            problems.append(f"assignee {clean['assignee']!r} is not a known Slack member ID; dropped")
+            clean['assignee'] = ''
+        else:
+            if resolved != clean['assignee']:
+                problems.append(f"assignee {clean['assignee']!r} resolved to {resolved}")
+            clean['assignee'] = resolved
+    if clean.get('claim'):
+        row = db.execute('SELECT payload FROM events WHERE event_id=? AND workspace=? AND channel=?',
+                         (clean.get('source_event'), config.workspace_id, message.channel_id)).fetchone()
+        payload = json.loads(row['payload']) if row else None
+        problem = None
+        if payload is None:
+            problem = 'claim had no valid source_event; dropped'
+        elif clean['claim'] not in payload.get('text', ''):
+            problem = 'claim was not an exact excerpt of its source message; dropped'
+        elif payload.get('sender_id') == config.owner_id and payload.get('generated'):
+            problem = 'claim quoted an own generated reply; dropped'
+        if problem:
+            problems.append(problem)
+            clean['claim'] = clean['corrects'] = ''
+    if clean.get('corrects'):
+        current = snapshot(db, config, message.channel_id, message.thread_id)['data'].get('claims', [])
+        if not any(claim['id'] == clean['corrects'] for claim in current):
+            problems.append(f"corrects {clean['corrects']!r} is not a claim in this task; dropped")
+            clean['corrects'] = ''
+    return {field: value for field, value in clean.items() if value != ''}, problems
 
 
 def record(db, config, message, update):
@@ -127,9 +230,17 @@ def prepare(db, config, message, result, *, file_operation=False):
     """Persist notes and suppress acknowledgments before a reply enters the outbox."""
     scope = key(db, config, message.channel_id, message.thread_id)
     before = snapshot(db, config, message.channel_id, message.thread_id)
-    update = validate(result.update or {})
+    update, problems = sanitize(db, config, message, result.update) if result.update is not None else ({}, [])
+    for problem in problems:
+        logger.warning('Task note for event %s: %s', message.event_id, problem)
     with db:
-        new_evidence = record(db, config, message, update) if result.update is not None else False
+        new_evidence = False
+        if result.update is not None:
+            try:
+                new_evidence = record(db, config, message, update)
+            except ValueError as error:
+                # Notes are bookkeeping; a rejected note must never suppress or block the reply.
+                logger.warning('Task notes for event %s were not recorded (%s); the reply is unaffected', message.event_id, error)
         normalized = ' '.join(result.text.casefold().split())
         digest = hashlib.sha256(normalized.encode()).hexdigest() if normalized else ''
         duplicate = bool(digest and digest == before['last_reply'])

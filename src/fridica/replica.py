@@ -151,8 +151,9 @@ class Replica:
             try:
                 file_operation = self.store.connection.execute('SELECT 1 FROM file_requests WHERE event_id=?', (message.event_id,)).fetchone() is not None
                 result = collaboration.prepare(self.store.connection, self.config, message, result, file_operation=file_operation)
-            except ValueError:
-                result = AgentResult('The task update could not be validated. Please inspect it locally; partial changes may exist.', 'blocked')
+            except ValueError as error:
+                # Only a missing task row or channel can get here; the reply itself is still good.
+                logger.error("Task notes could not be prepared for event %s (%s); replying without notes", message.event_id, error)
             if not result.send:
                 status = 'blocked' if result.status == 'blocked' else task['status'] if task else 'complete'
                 with self.store.connection:
