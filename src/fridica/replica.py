@@ -162,7 +162,8 @@ class Replica:
                 task=collaboration.snapshot(self.store.connection, self.config, message.channel_id, message.thread_id)["data"] if task else {},
                 worker=self.store.worker(message), linked=await self._linked(message, history),
             )
-            mentioned = self._mentions_owner(message)
+            # A message the owner replayed by resuming the thread is answered like a mention.
+            mentioned = self._mentions_owner(message) or row["decision"] == "resumed"
             if mentioned and not message.generated and task and task['status'] not in OPEN_STATUSES:
                 noticed = self.store.connection.execute("SELECT 1 FROM events WHERE workspace=? AND channel=? AND thread=? AND reply_only=1 AND state IN ('sent','ready','sending','ambiguous') LIMIT 1", self.store._key(message)).fetchone()
                 if not noticed:

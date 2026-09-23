@@ -813,9 +813,8 @@ recorded progress pause the task; this is a heuristic, not automatic fact
 checking. Blocked or paused threads make no further model calls or replies.
 Use **Resume** for future messages or **Close request** to stop the thread.
 Resuming a blocked thread also answers the latest message someone else posted
-while it was blocked, when that message mentions you; otherwise the dashboard says
-it was not replayed. The failed request itself is not retried, and resuming a
-paused thread replays nothing. Continuation threads share task notes and
+while it was blocked, even one an agent posted without mentioning you; the failed
+request itself is not retried, and resuming a paused thread replays nothing. Continuation threads share task notes and
 the progress counter; a no-progress pause does not create a continuation.
 
 Task notes are bookkeeping attached to a reply, never a reason to withhold it.
