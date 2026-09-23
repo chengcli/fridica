@@ -663,6 +663,18 @@ Use **Resume** for future messages or **Close request** to stop the thread.
 Resume does not replay old messages. Continuation threads share task notes and
 the progress counter; a no-progress pause does not create a continuation.
 
+Task notes are bookkeeping attached to a reply, never a reason to withhold it.
+Before a note is recorded, each field the model produced is checked and, where
+it cannot be salvaged, dropped: a repository name is matched to the shared list
+ignoring case, an assignee may be a member ID, a `<@ID>` mention, or a display
+name that the dashboard's name cache maps to exactly one member who has posted
+in the channel, and a claim must be an exact excerpt of a message in the task.
+Every drop or correction is logged locally with the event ID and reason, the
+reply is delivered unchanged, and the thread stays answerable. Only the fields
+that pass are saved. Before this rule, a display name in the assignee field
+replaced the whole reply with a "task update could not be validated" notice and
+blocked the thread.
+
 ### Cleanup
 
 Archive a finished or closed request, then use **Preview cleanup** to clear
