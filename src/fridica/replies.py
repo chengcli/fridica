@@ -7,6 +7,8 @@ from .models import ConversationContext, Message
 # A Slack message permalink: https://<team>.slack.com/archives/<channel>/p<ts without the dot>[?thread_ts=<root>&...]
 PERMALINK = re.compile(r"https://[A-Za-z0-9.-]+\.slack\.com/archives/([CG][A-Z0-9]{2,})/p(\d+)(\d{6})(?:\?([^\s|>]*))?")
 LINK_LIMIT = 3
+CONTINUED = "\n\n_The full reply is in the attached details file._"
+ATTACHED = "The reply is in the attached details file."
 
 
 def permalinks(text: str) -> list[tuple[str, str, str, str | None]]:
@@ -30,6 +32,21 @@ def split_message(text: str, limit: int) -> list[str]:
         parts.append(rest[:cut].rstrip())
         rest = rest[cut:].lstrip()
     return [*parts, rest] if rest else parts
+
+
+def fit_reply(text: str, details: str, limit: int) -> tuple[str, str]:
+    """``text`` and ``details`` with a reply that is too long for one message moved into the details file.
+
+    The thread gets the opening of the reply and a pointer; the full reply heads the details. A reply
+    that is empty but has details gets a pointer to them, so there is always something to post.
+    """
+    text = text.strip()
+    if not text and details:
+        return ATTACHED, details
+    if len(text) <= limit:
+        return text, details
+    head = split_message(text, limit - len(CONTINUED))[0]
+    return head + CONTINUED, text + (f"\n\n---\n\n{details}" if details else "")
 
 
 def format_reply(text: str, message: Message, context: ConversationContext) -> str:

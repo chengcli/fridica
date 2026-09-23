@@ -315,8 +315,9 @@ restart. Two headings are required:
 Prose before the first heading is for people and is never sent to the model.
 Fridica appends only the conversation data (owner, profile, task, bounded thread
 history, and the new message) plus a one-line note when a thread's session is
-being resumed. Rules that the code enforces regardless of the contract: replies
-are limited to 3500 characters, the status must be `complete`, `waiting`, or
+being resumed. Rules that the code enforces regardless of the contract: a reply
+over 7000 characters is posted in part with the full text attached as its details
+file, the status must be `complete`, `waiting`, or
 `blocked`, the sandbox and workspace roots come from `config.toml`, and Slack
 tokens never reach the agent. A contract that is missing either heading, has an
 empty section, or exceeds 64 KiB fails `fridica doctor`, and until it is fixed

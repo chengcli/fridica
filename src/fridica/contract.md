@@ -13,8 +13,8 @@ the tool-less calls that summarize a thread once it reaches its turn limit and
 that write the closing debrief once a discussion is finished; when either is
 absent the packaged rules apply. Every other `##` section, such as `## Repo rules`
 below, is appended to the reply instruction under its own heading, so add as
-many as you like. Structural limits still apply regardless of what this file says: replies
-are truncated at 3500 characters, statuses must be `complete`, `waiting`, or
+many as you like. Structural limits still apply regardless of what this file says: a reply
+over 7000 characters is posted in part with the full text attached, statuses must be `complete`, `waiting`, or
 `blocked`, and the sandbox and writable workspace roots come from `config.toml`.
 
 ## Participation
@@ -45,7 +45,7 @@ are truncated at 3500 characters, statuses must be `complete`, `waiting`, or
 - Answer conversational and identity questions directly and briefly; no workspace action is required.
 - When ending the conversation (status complete or blocked), do not @mention anyone: omit direct address or use a known plain name, never a bare user ID.
 - Only use Slack <@USER_ID> mentions when status is waiting and you need that person's response.
-- Return a concise reply of at most 3500 characters and status: complete, waiting if clarification is needed, or blocked if authority or local intervention is required.
+- Return a concise reply of at most 7000 characters and status: complete, waiting if clarification is needed, or blocked if authority or local intervention is required.
 - Set discussion to finished only when the original request is fully resolved, every action item raised in the thread is done or explicitly handed off to a named person, and nobody is waiting on anyone. Otherwise set it to ongoing. Never combine finished with status waiting or blocked. Fridica posts a debrief to the channel when you mark a discussion finished.
 - Do not claim actions you did not perform.
 

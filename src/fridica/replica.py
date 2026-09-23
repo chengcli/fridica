@@ -22,7 +22,7 @@ from .config import Config
 from . import attachments
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message, Transport
 from .prompts import REPLY_LIMIT, REPORT_LIMIT
-from .replies import format_reply, permalinks, split_message
+from .replies import fit_reply, format_reply, permalinks, split_message
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -329,7 +329,7 @@ class Replica:
 
     @staticmethod
     def _format(result: AgentResult, message: Message, context: ConversationContext) -> AgentResult:
-        """Bound the text, address the sender when waiting, and render known IDs as mentions."""
+        """Address the sender when waiting, render known IDs as mentions, and move overflow into the details file."""
         text = result.text
         if type(result.send) is not bool:
             raise ValueError("invalid send decision")
@@ -337,14 +337,17 @@ class Replica:
             if not isinstance(text, str) or len(text) > REPLY_LIMIT:
                 raise ValueError("invalid silent response")
             return replace(result, text="", session=None, finished=False)
-        if not isinstance(text, str) or not text.strip() or len(text) > REPLY_LIMIT:
-            raise ValueError(f"agent response must contain 1 to {REPLY_LIMIT} characters")
-        if result.status == "waiting" and f"<@{message.sender_id}>" not in text:
-            text = f"<@{message.sender_id}> {text}"
-        text = format_reply(text, message, context)
-        if not text.strip() or len(text) > REPLY_LIMIT:
-            raise ValueError(f"formatted response must contain 1 to {REPLY_LIMIT} characters")
-        return replace(result, text=text, session=None, finished=bool(result.finished) and result.status == "complete")
+        if not isinstance(text, str) or not isinstance(result.details, str):
+            raise ValueError("invalid agent response")
+        mention, waiting = f"<@{message.sender_id}>", result.status == "waiting"
+        limit = REPLY_LIMIT - (len(mention) + 1 if waiting else 0)
+        text, details = fit_reply(format_reply(text, message, context), result.details, limit)
+        if not text:
+            raise ValueError("agent response is empty")
+        if waiting and mention not in text:
+            text = f"{mention} {text}"
+        return replace(result, text=text, details=details, session=None,
+                       finished=bool(result.finished) and result.status == "complete")
 
     # ----- delivery and follow-through -----
 
