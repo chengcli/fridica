@@ -109,7 +109,8 @@ def save_metadata(config, value):
 
 
 def bind_project(config, root, repository):
-    roots = {str(p.resolve()) for p in (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)}
+    roots = {config.root_label(p if config.remote else p.resolve())
+             for p in (config.workspace, *config.additional_workspaces, *config.read_only_workspaces)}
     if root not in roots:
         raise ValueError('Choose an already configured directory. This page cannot expand file access.')
     if not isinstance(repository, str) or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
@@ -217,6 +218,8 @@ def thread_action(config, channel, thread, action, expected, cleanup_revision=No
             db.execute("UPDATE file_requests SET content='',before_content=NULL,path='',error=NULL,result=NULL WHERE event_id IN (SELECT event_id FROM events WHERE workspace=? AND channel=? AND thread=?)", args)
             db.execute("UPDATE events SET payload=json_set(payload,'$.text',''),result=NULL,decision='cleaned',reply_only=1 WHERE workspace=? AND channel=? AND thread=?", args)
             db.execute("UPDATE tasks SET control_state='cleaned',pause_reason=NULL,session=NULL WHERE workspace=? AND channel=? AND thread=?", args)
+            if {'worker_thread', 'worker_state', 'worker_since'} <= {row[1] for row in db.execute('PRAGMA table_info(tasks)')}:
+                db.execute("UPDATE tasks SET worker_thread=NULL,worker_state=NULL,worker_since=NULL WHERE workspace=? AND channel=? AND thread=?", args)
         else:
             raise ValueError('This action is not available for the current request state')
         db.execute('UPDATE tasks SET control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=?', args)

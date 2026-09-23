@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 import logging
-from pathlib import Path
+from pathlib import Path, PurePath
 import re
 import shutil  # noqa: F401  (patched by tests through this module)
 import subprocess  # noqa: F401
@@ -23,10 +23,13 @@ from .config import Config
 from .contract import Contract, load_contract
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message
 from .repos import Repo, load_repos
-from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, FILE_PLAN_SCHEMA, REPLY_LIMIT, RESPONSE_SCHEMA,
-                      SUMMARY_SCHEMA, conversation_prompt, digest_prompt, plan_prompt, truncate)
+from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, ESCALATE_LIMIT, FILE_PLAN_SCHEMA, REPLY_LIMIT,
+                      RESPONSE_SCHEMA, SUMMARY_SCHEMA, conversation_prompt, digest_prompt, plan_prompt, truncate,
+                      worker_prompt)
+from . import remote
 from .runner import OUTPUT_LIMIT, BackendError, SessionUnavailable
 from .runner import run as _run  # module attribute so tests can substitute the subprocess runner
+from .worker import ClaudeWorker, CodexWorker, Workers
 
 logger = logging.getLogger(__name__)
 SESSION_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{7,63}")
@@ -57,8 +60,11 @@ def _describe_denials(denials: object) -> str:
 class CLIBackend:
     """Shared control flow for CLI-backed agents; subclasses supply the command line and parsing."""
 
+    worker_type = None  # the persistent heavy-task worker class for this CLI
+
     def __init__(self, config: Config):
         self.config = config
+        self.workers = Workers(config, self.worker_type)
 
     def contract(self) -> Contract:
         """Reload the owner's contract so edits apply to the next run."""
@@ -82,14 +88,15 @@ class CLIBackend:
         try:
             contract, repositories = self.contract(), self.repositories()
             session = context.session if self.config.resume_sessions else None
+            options = {"heavy": self.config.heavy_tasks, "resources": self.config.resources.payload()}
             try:
-                prompt = conversation_prompt(message, context, False, contract, repositories)
+                prompt = conversation_prompt(message, context, False, contract, repositories, **options)
                 result, session = await self._invoke(prompt, False, session)
             except SessionUnavailable:
                 if session is None:
                     raise
                 logger.info("Session for task %s is no longer available; starting a new one", context.task_id)
-                fresh = conversation_prompt(message, replace(context, session=None), False, contract, repositories)
+                fresh = conversation_prompt(message, replace(context, session=None), False, contract, repositories, **options)
                 result, session = await self._invoke(fresh, False, None)
             return self._result(result, session)
         except FAILURES as error:
@@ -110,10 +117,22 @@ class CLIBackend:
         result, _session = await self._invoke(prompt, True, schema=FILE_PLAN_SCHEMA)
         return result
 
+    async def work(self, brief: str, context: ConversationContext, resume: str | None) -> tuple[str, str | None]:
+        """Run an escalated brief on this thread's persistent worker and return its report and thread id.
+
+        Failures propagate as ``BackendError`` (or ``TimeoutError``) so the replica can
+        tell the thread that the job did not finish; nothing is retried.
+        """
+        prompt = worker_prompt(brief, context, self.contract(), self.repositories(), self.config.resources.payload())
+        report, thread = await self.workers.get(context.task_id).run(prompt, resume)
+        return truncate(report, REPLY_LIMIT), thread
+
+    async def close(self) -> None:
+        await self.workers.close()
+
     # ----- shared mechanics -----
 
-    @staticmethod
-    def _result(result: dict, session: str | None) -> AgentResult:
+    def _result(self, result: dict, session: str | None) -> AgentResult:
         """Validate a structured reply and turn it into an ``AgentResult``."""
         text = result.get("text")
         send = result.get("send", True)
@@ -126,7 +145,14 @@ class CLIBackend:
         if result.get("status") not in {"complete", "waiting", "blocked"}:
             raise BackendError("Agent returned an invalid status.")
         finished = result.get("discussion") == "finished" and result["status"] == "complete"
-        return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send, update=update)
+        escalate = result.get("escalate", "")
+        if not isinstance(escalate, str) or len(escalate) > ESCALATE_LIMIT:
+            raise BackendError("Agent returned an invalid heavy-task brief.")
+        if escalate.strip() and not self.config.heavy_tasks:
+            logger.warning("Agent asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief")
+            escalate = ""
+        return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send,
+                           update=update, escalate=escalate.strip())
 
     async def _digest(self, context: ConversationContext, instruction: str, schema: dict, key: str) -> str:
         result, _session = await self._invoke(digest_prompt(context, instruction), True, schema=schema)
@@ -150,23 +176,36 @@ class CLIBackend:
         resume = persist and session is not None
         if persist and not resume:
             session = str(uuid.uuid4())
-        with tempfile.TemporaryDirectory(prefix="fridica-agent-") as temporary:
-            directory = Path(temporary)
-            schema_path = directory / "schema.json"
-            schema_path.write_text(json.dumps(schema or (CLASSIFICATION_SCHEMA if classify else RESPONSE_SCHEMA)))
-            command = self.command(directory, schema_path, classify, session if persist else None, resume)
-            output = await _run(command, prompt, directory if classify else self.config.workspace, self.config)
-            if classify:
-                self.verify_stateless(output)
-            return self.parse(output, directory), (self.session_id(output) if persist else None)
+        schema_text = json.dumps(schema or (CLASSIFICATION_SCHEMA if classify else RESPONSE_SCHEMA))
+        if self.config.remote:
+            # The scratch directory and schema file are created on the SSH host by the
+            # wrapper script; nothing about the run touches the local filesystem.
+            directory = remote.remote_directory()
+            command = self.command(directory, schema_text, classify, session if persist else None, resume)
+            argv, cwd = remote.launch(self.config, command, directory if classify else self.config.workspace,
+                                      files={"schema.json": schema_text}, directory=directory,
+                                      timeout=self.config.timeout)
+            output = await _run(argv, prompt, cwd, self.config)
+        else:
+            with tempfile.TemporaryDirectory(prefix="fridica-agent-") as temporary:
+                directory = Path(temporary)
+                (directory / "schema.json").write_text(schema_text)
+                command = self.command(directory, schema_text, classify, session if persist else None, resume)
+                output = await _run(command, prompt, directory if classify else self.config.workspace, self.config)
+        if classify:
+            self.verify_stateless(output)
+        return self.parse(output), (self.session_id(output) if persist else None)
 
     # ----- backend-specific hooks -----
 
-    def command(self, directory: Path, schema_path: Path, classify: bool,
+    def command(self, directory: PurePath, schema: str, classify: bool,
                 session: str | None = None, resume: bool = False) -> list[str]:
+        """The CLI argv for one run. ``directory`` is the run's scratch directory (which holds
+        ``schema.json`` with the text ``schema``) on the host where the CLI runs."""
         raise NotImplementedError
 
-    def parse(self, output: str, directory: Path) -> dict:
+    def parse(self, output: str) -> dict:
+        """The structured result of a completed run, read from its stdout."""
         raise NotImplementedError
 
     def session_id(self, output: str) -> str | None:
@@ -178,6 +217,7 @@ class CLIBackend:
 
 
 class CodexBackend(CLIBackend):
+    worker_type = CodexWorker
     FEATURES_OFF = [
         'approval_policy="never"', 'web_search="disabled"', "allow_login_shell=false",
         "features.apps=false", "features.plugins=false", "features.hooks=false",
@@ -190,10 +230,12 @@ class CodexBackend(CLIBackend):
     TOOLS_OFF = ["features.shell_tool=false", "features.unified_exec=false",
                  "features.view_image=false", "project_doc_max_bytes=0"]
 
-    def command(self, directory: Path, schema_path: Path, classify: bool,
+    def command(self, directory: PurePath, schema: str, classify: bool,
                 session: str | None = None, resume: bool = False) -> list[str]:
         persist = not classify and session is not None
-        outputs = ["--output-schema", str(schema_path), "--output-last-message", str(directory / "result.json"), "--json"]
+        # The structured reply is the final agent_message in the --json stream, so no
+        # result file needs to be read back from the host that ran the command.
+        outputs = ["--output-schema", str(directory / "schema.json"), "--json"]
         if persist and resume:
             # `codex exec resume` lacks --sandbox, --add-dir, and --color; the equivalent
             # settings are supplied through -c so the resumed turn keeps the same policy.
@@ -240,11 +282,18 @@ class CodexBackend(CLIBackend):
                 command += ["--add-dir", str(workspace)]
         return command + ["-"]
 
-    def parse(self, output: str, directory: Path) -> dict:
-        result_path = directory / "result.json"
-        if not result_path.is_file() or result_path.stat().st_size > OUTPUT_LIMIT:
+    def parse(self, output: str) -> dict:
+        text = None
+        for event in self._events(output):
+            item = event.get("item")
+            if event.get("type") == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message":
+                text = item.get("text")
+        if not isinstance(text, str) or not text or len(text) > OUTPUT_LIMIT:
             raise BackendError("Codex did not return a bounded structured response.")
-        result = json.loads(result_path.read_text())
+        try:
+            result = json.loads(text)
+        except ValueError:
+            raise BackendError("Codex returned an invalid response.") from None
         if not isinstance(result, dict):
             raise BackendError("Codex returned an invalid response.")
         return result
@@ -273,22 +322,28 @@ class CodexBackend(CLIBackend):
 
 
 class ClaudeBackend(CLIBackend):
-    def command(self, directory: Path, schema_path: Path, classify: bool,
-                session: str | None = None, resume: bool = False) -> list[str]:
-        settings = {
+    worker_type = ClaudeWorker
+
+    @staticmethod
+    def settings(config: Config, classify: bool) -> dict:
+        """The ``--settings`` document: hooks, plugins, connectors and memory off; the sandbox mandatory."""
+        return {
             "disableAllHooks": True, "disableClaudeAiConnectors": True,
             "enabledPlugins": {}, "autoMemoryEnabled": False,
             "sandbox": {
                 "enabled": True, "failIfUnavailable": True,
                 "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
                 "excludedCommands": [],
-                "network": {"allowedDomains": [] if classify else list(self.config.allowed_domains),
+                "network": {"allowedDomains": [] if classify else list(config.allowed_domains),
                             "allowLocalBinding": False},
             },
         }
+
+    def command(self, directory: PurePath, schema: str, classify: bool,
+                session: str | None = None, resume: bool = False) -> list[str]:
         command = [
-            "claude", "-p", "--output-format", "json", "--json-schema", schema_path.read_text(),
-            "--setting-sources", "", "--settings", json.dumps(settings),
+            "claude", "-p", "--output-format", "json", "--json-schema", schema,
+            "--setting-sources", "", "--settings", json.dumps(self.settings(self.config, classify)),
             "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
             "--disable-slash-commands", "--no-chrome",
             "--permission-mode", "dontAsk" if classify else "acceptEdits",
@@ -313,7 +368,7 @@ class ClaudeBackend(CLIBackend):
             return None
         return _valid_session(envelope.get("session_id")) if isinstance(envelope, dict) else None
 
-    def parse(self, output: str, directory: Path) -> dict:
+    def parse(self, output: str) -> dict:
         envelope = json.loads(output)
         if not isinstance(envelope, dict) or envelope.get("is_error"):
             raise BackendError("Claude reported an execution error.")

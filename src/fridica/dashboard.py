@@ -30,8 +30,9 @@ def snapshot(config: Config, *, compact=False) -> dict:
                    'file_access': config.file_access,
                    'allowed_domains': list(config.allowed_domains), 'resume_sessions': config.resume_sessions,
                    'session_timeout': config.session_timeout,
-                   'write_roots': [str(p) for p in (config.workspace, *config.additional_workspaces)],
-                   'read_roots': [str(p) for p in config.read_only_workspaces]},
+                   'ssh_host': config.ssh_host,
+                   'write_roots': [config.root_label(p) for p in (config.workspace, *config.additional_workspaces)],
+                   'read_roots': [config.root_label(p) for p in config.read_only_workspaces]},
     }
     if not config.state_path.exists():
         return data

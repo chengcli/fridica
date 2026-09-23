@@ -117,3 +117,62 @@ def test_allowed_domains_accepts_wildcards(config, tmp_path):
     source.write_text(f'owner_id="UOWNER"\nworkspace_id="TTEAM"\nchannels=["CROOM"]\nworkspace="{config.workspace}"\n'
                       f'state_path="{config.state_path}"\nallowed_domains=["GitHub.com", "*.PyPI.org", "github.com", "*"]\n')
     assert load_config(source).allowed_domains == ("github.com", "*.pypi.org", "*")
+
+
+# ----- remote working folders -----
+
+def write_remote_config(tmp_path, workspace, **extra):
+    lines = ['owner_id="UOWNER"', 'workspace_id="TTEAM"', 'channels=["CROOM"]', f'workspace="{workspace}"',
+             f'state_path="{tmp_path / "state.sqlite3"}"']
+    for key, value in extra.items():
+        rendered = value if isinstance(value, str) and value.startswith(("[", "true", "false")) else f'"{value}"'
+        lines.append(f"{key}={rendered}")
+    source = tmp_path / "remote.toml"
+    source.write_text("\n".join(lines) + "\n")
+    return source
+
+
+def test_parse_root_forms(tmp_path):
+    from pathlib import PurePosixPath
+    from fridica.config import parse_root
+    assert parse_root("dart9:/mnt/xxx") == ("dart9", PurePosixPath("/mnt/xxx"))
+    assert parse_root("cheng@dart9.example.edu:/data/run 1") == ("cheng@dart9.example.edu", PurePosixPath("/data/run 1"))
+    host, path = parse_root(str(tmp_path))
+    assert host is None and path == tmp_path
+    host, path = parse_root("~/projects/x")
+    assert host is None and path.is_absolute()
+    host, path = parse_root("/odd:name/dir")
+    assert host is None and path == Path("/odd:name/dir")
+    for bad in ("dart9:relative/path", "-oProxyCommand=evil:/x", "bad host:/x", "dart9:", ""):
+        with pytest.raises(ValueError):
+            parse_root(bad)
+
+
+def test_remote_workspace_config(tmp_path):
+    from pathlib import PurePosixPath
+    source = write_remote_config(tmp_path, "dart9:/mnt/xxx", additional_workspaces='["dart9:/mnt/data"]')
+    config = load_config(source)
+    assert config.remote and config.ssh_host == "dart9"
+    assert config.workspace == PurePosixPath("/mnt/xxx") and not (tmp_path / "mnt").exists()
+    assert config.additional_workspaces == (PurePosixPath("/mnt/data"),)
+    assert config.root_label(config.workspace) == "dart9:/mnt/xxx"
+    explicit = load_config(write_remote_config(tmp_path, "/mnt/xxx", ssh_host="dart9"))
+    assert explicit.ssh_host == "dart9" and explicit.workspace == PurePosixPath("/mnt/xxx")
+    local = tmp_path / "local"
+    local.mkdir()
+    assert replace(config, ssh_host=None, workspace=local, additional_workspaces=()).root_label(local) == str(local)
+
+
+@pytest.mark.parametrize("workspace,extra,match", [
+    ("dart9:/mnt/xxx", {"additional_workspaces": '["/local/data"]'}, "same host"),
+    ("dart9:/mnt/xxx", {"read_only_workspaces": '["snowy:/data"]'}, "same host"),
+    ("dart9:/mnt/xxx", {"ssh_host": "snowy"}, "disagrees"),
+    ("dart9:/mnt/xxx", {"file_access": "true"}, "file_access requires local"),
+    ("dart9:/", {}, "absolute POSIX"),
+    ("dart9:relative", {}, "absolute path"),
+    ("-evil:/x", {}, "invalid SSH host"),
+    ("/mnt/xxx", {"ssh_host": "bad host"}, "ssh_host must be"),
+])
+def test_remote_workspace_rejections(tmp_path, workspace, extra, match):
+    with pytest.raises(ValueError, match=match):
+        load_config(write_remote_config(tmp_path, workspace, **extra))

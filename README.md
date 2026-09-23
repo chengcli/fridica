@@ -253,6 +253,46 @@ session_timeout = 1209600
 allowed_domains = []
 ```
 
+### Remote working folder over SSH
+
+The working folder can live on another machine. Write the roots as
+`host:/absolute/path`, where `host` is an alias from `~/.ssh/config` (or
+`user@host`):
+
+```toml
+workspace = "dart9:/mnt/data1/projects/my-project"
+additional_workspaces = ["dart9:/mnt/data1/projects/shared-lib"]
+```
+
+Every agent run then happens on that host: the reply, the tool-less classification,
+summaries and debriefs, the environment checks, and the heavy-task worker described
+below. Fridica starts each one as `ssh -T host 'cd /path && codex exec ...'` (or
+`claude -p ...`) with no PTY, feeds the prompt on stdin, and reads the structured
+result from stdout, so SSH itself is the transport and the security boundary;
+nothing listens on a port and no filesystem is mounted. Slack, the state database,
+the dashboard, and the configuration stay on the machine that runs `fridica start`.
+
+Requirements on the remote host:
+
+- `ssh host true` must succeed from this machine without any prompt (key
+  authentication; Fridica uses `BatchMode=yes`). Put the alias, user, and identity
+  file in `~/.ssh/config`. Fridica multiplexes all of its connections through one
+  `ControlMaster` socket (in `$XDG_RUNTIME_DIR/fridica`, or `/tmp/fridica-ssh-<uid>`),
+  so a burst of runs does not trip the server's connection limits.
+- The backend CLI must be installed and signed in **for the remote user's login
+  shell**: `ssh host 'command -v codex && codex login status'` (or
+  `claude auth status`) is what `fridica doctor` runs.
+- For Claude, `bwrap` and `socat` on the remote host (see the sandbox dependencies
+  above); for Codex, a system `bwrap` is used when present.
+- All roots must carry the same `host:` prefix, or none. `file_access` (scoped file
+  access) is local-only and is rejected with a remote working folder.
+
+`fridica doctor` adds an `SSH connection` check that connects, confirms the roots are
+directories, and checks the remote OS, then runs the executable, capability, sandbox,
+and sign-in checks on the host. A run that cannot reach the host is logged as an SSH
+failure (status 255) rather than an agent error. The remote agent is bounded by
+`timeout` when the host has it, so a dropped connection cannot leave it running.
+
 ### Agent contract
 
 `~/.config/fridica/contract.md` holds the rules that every agent run must read
@@ -516,6 +556,65 @@ with `resume_sessions`, resumes only sessions it created; existing desktop
 conversations are not imported. The optional `model` setting
 is passed to the selected provider. No model name or paid API key is required by
 Fridica itself; each CLI uses its own authentication and billing.
+
+### Heavy tasks
+
+Per-turn replies are one short CLI run each. With `heavy_tasks = true`, the reply
+agent may decide that a request needs long-running or hardware-heavy work (a full
+build, a long test suite, a GPU or multi-core job) and hand it to a **persistent
+worker** instead of doing it in the turn: it returns a self-contained brief in the
+structured reply's `escalate` field and tells the requester that the job has started.
+Fridica then runs the brief on the working host, locally or over SSH, and posts the
+worker's report as a follow-up message in the same Slack thread when it finishes.
+
+- With Codex the worker is `codex app-server`, a long-lived process speaking JSON-RPC
+  over JSONL on stdin/stdout (OpenAI marks the command experimental). Fridica sends
+  `initialize`, `thread/start` (or `thread/resume` for a thread it created earlier),
+  and one `turn/start` per job, and reads the final agent message when the turn
+  completes. With Claude it is `claude -p --input-format stream-json --output-format
+  stream-json` with the same sandbox, permission, and tool flags as task runs.
+- The worker keeps the per-turn policy: workspace-write sandbox, network access only
+  when `allowed_domains` lists hosts, and no approvals. Fridica has no approval UI, so
+  any approval request from the agent is declined and logged. One difference for
+  Codex: `codex app-server` has no `--ignore-user-config`, so the owner's
+  `~/.codex/config.toml` on the working host, including any MCP servers it defines,
+  applies to heavy jobs (the feature switches Fridica passes still turn off apps,
+  plugins, hooks, browser and computer use). Keep that file minimal on a host that
+  runs heavy tasks.
+- One worker per Slack thread. The process stays alive between jobs and exits after
+  `heavy_task_idle` seconds without work (default `1800`); the backend thread it
+  created is remembered in the state database, so the next job in that Slack thread
+  resumes it in a fresh process. A job is bounded by `heavy_task_timeout` seconds
+  (default `14400`, four hours). While a job runs, the reply agent sees
+  `worker.state = "running"` in its data and answers progress questions itself; a
+  second brief is ignored until the first finishes.
+- A failed or timed-out job posts a short notice in the thread and is not retried. A
+  job cut off by restarting Fridica is reported as interrupted on the next start and
+  is not resumed automatically.
+- Anyone in an allowed channel can trigger hours of compute this way, which is why
+  the setting is off by default. `fridica doctor` checks that the backend provides
+  `codex app-server` or `--input-format stream-json`.
+
+Declare the hardware heavy tasks may use in a `[resources]` table:
+
+```toml
+[resources]
+cpus = 8                          # sets OMP_NUM_THREADS for the worker
+gpus = [0, 1]                     # device indices; sets CUDA_VISIBLE_DEVICES ([] = no GPU)
+gpu_type = "NVIDIA A100 80GB"
+memory_gb = 128
+notes = "Jobs longer than 10 minutes go through Slurm: srun --gres=gpu:1."
+```
+
+The table is sent to the reply agent and to the worker as data, so the agent can
+judge what a request needs, and the worker process is started with matching
+`OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES` (exported through SSH for a remote
+host). Nothing is measured or enforced beyond those variables; the notes are the
+place for site rules such as a batch scheduler. Note that the backend's sandbox
+still applies inside the worker: Codex's bubblewrap sandbox mounts a minimal `/dev`,
+so on some hosts GPU devices are not visible to commands the worker runs directly
+(`nvidia-smi` fails). Ask for a quick `nvidia-smi` as a first heavy task to find out,
+and use `notes` to route GPU jobs through a scheduler such as Slurm when needed.
 
 ### Network access
 

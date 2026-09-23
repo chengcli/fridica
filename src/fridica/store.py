@@ -100,7 +100,8 @@ class Store:
             self.connection.execute("ALTER TABLE tasks ADD COLUMN session TEXT")
         for name, definition in {"control_state": "TEXT NOT NULL DEFAULT 'active'", "pause_reason": "TEXT",
                                  "reset_at": "REAL NOT NULL DEFAULT 0", "control_revision": "INTEGER NOT NULL DEFAULT 0",
-                                 "root_thread": "TEXT", "continuation": "TEXT", "digest_pending": "INTEGER NOT NULL DEFAULT 0", "debriefed_turn": "INTEGER NOT NULL DEFAULT 0"}.items():
+                                 "root_thread": "TEXT", "continuation": "TEXT", "digest_pending": "INTEGER NOT NULL DEFAULT 0", "debriefed_turn": "INTEGER NOT NULL DEFAULT 0",
+                                 "worker_thread": "TEXT", "worker_state": "TEXT", "worker_since": "REAL"}.items():
             if name not in columns:
                 self.connection.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
         self.connection.execute("CREATE TABLE IF NOT EXISTS thread_decisions (workspace TEXT, channel TEXT, thread TEXT, action TEXT, decided_at REAL)")
@@ -112,6 +113,7 @@ class Store:
                 self.connection.execute("UPDATE tasks SET digest_pending=0")
                 self.connection.execute("UPDATE tasks SET continuation='failed' WHERE continuation='pending'")
                 self.connection.execute("UPDATE events SET state='interrupted' WHERE state='running'")
+                self.connection.execute("UPDATE tasks SET worker_state='interrupted' WHERE worker_state='running'")
                 self.connection.execute("UPDATE events SET state='ambiguous' WHERE state='sending'")
                 self.connection.execute("UPDATE file_requests SET status='interrupted' WHERE status='applying'")
 
@@ -345,6 +347,29 @@ class Store:
                 "UPDATE tasks SET session=? WHERE workspace=? AND channel=? AND thread=?",
                 (session, *self._key(message)),
             )
+
+    def worker(self, message: Message) -> dict | None:
+        """This thread's heavy-task worker state for the agent (``state`` and ``since``), or None."""
+        task = self.task(message)
+        if task is None or not task["worker_state"]:
+            return None
+        return {"state": task["worker_state"], "since": task["worker_since"]}
+
+    def save_worker(self, message: Message, state: str | None, thread: str | None) -> None:
+        """Record the heavy-task worker's state and the backend thread that continues its work."""
+        with self.connection:
+            self.connection.execute(
+                "UPDATE tasks SET worker_state=?,worker_thread=?,worker_since=? WHERE workspace=? AND channel=? AND thread=?",
+                (state, thread, time.time() if state else None, *self._key(message)),
+            )
+
+    def interrupted_workers(self, workspace: str) -> list[Message]:
+        """Threads whose heavy job was running when the previous daemon stopped."""
+        rows = self.connection.execute(
+            "SELECT payload FROM events WHERE (workspace,channel,thread) IN "
+            "(SELECT workspace,channel,thread FROM tasks WHERE workspace=? AND worker_state='interrupted') "
+            "GROUP BY workspace,channel,thread", (workspace,)).fetchall()
+        return [Message(**json.loads(row["payload"])) for row in rows]
 
     def save_result(self, message: Message, result: AgentResult) -> None:
         with self.connection:

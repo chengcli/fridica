@@ -51,10 +51,15 @@ RESPONSE_SCHEMA = {
             "type": "string", "enum": ["ongoing", "finished"],
             "description": "finished only when the request is fully resolved, every action item raised in the thread is done or explicitly handed off, and nobody is waiting on anyone; otherwise ongoing.",
         },
+        "escalate": {
+            "type": "string",
+            "description": "Normally empty. When heavy_tasks is enabled and the request needs long-running or hardware-heavy work on the working host, a complete self-contained brief for the persistent worker that will do it.",
+        },
     },
-    "required": ["text", "status", "discussion", "send", "update"],
+    "required": ["text", "status", "discussion", "send", "update", "escalate"],
     "additionalProperties": False,
 }
+ESCALATE_LIMIT = 4000
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {"summary": {"type": "string", "description": "A plain-text summary of the thread for people continuing it."}},
@@ -83,6 +88,24 @@ REPLY_LIMIT = 3500
 DIGEST_LIMIT = 2500
 SUMMARY_LIMIT = DIGEST_LIMIT
 
+HEAVY_NOTE = """
+Heavy tasks are enabled. Answer conversational and quick requests yourself. When the request needs long-running or
+hardware-heavy work on the working host (full builds, long test suites, GPU or multi-core jobs, large data processing),
+do not run it in this turn: put a complete, self-contained brief in escalate (goal, repository or paths, commands to
+run, how to judge success, what to report), tell the requester in text that the job has started and that the result
+will be posted in this thread, and use status complete. The resources field of the conversation data lists the
+hardware the worker may use. Never escalate while worker.state is running; report that the job is still in progress
+instead. Leave escalate empty in every other case.
+"""
+WORKER_NOTE = """
+
+You are the persistent heavy-task worker for this Slack thread. Carry out the brief below inside the workspace roots
+using your tools; take the time the job needs. The resources field lists the hardware you may use; stay within it.
+Your final message is posted to the Slack thread verbatim, so make it a plain-text report of at most 3500 characters
+in the owner's voice: what was run, the outcome with the key numbers, what failed or remains, and no file paths,
+hostnames, tool transcripts, or headings. It is prose, not a structured reply: do not include status, discussion,
+escalate, or other field names from the reply rules.
+"""
 CONTINUATION_NOTE = (
     "\n\nThis is a continuation of your earlier session for the same Slack thread; the history field repeats "
     "the thread for reference, and only the message field is new."
@@ -105,15 +128,20 @@ FILE_ACCESS_NOTE = (
 
 
 def conversation_prompt(message: Message, context: ConversationContext, classify: bool,
-                        contract: Contract | None = None, repositories: tuple[Repo, ...] = ()) -> str:
+                        contract: Contract | None = None, repositories: tuple[Repo, ...] = (), *,
+                        heavy: bool = False, resources: dict | None = None) -> str:
     """The contract section for a classification or reply call, followed by the conversation data.
 
     ``repositories`` is the owner's list from ``repos.toml``; it travels inside the data
     payload so the model treats it as facts to match against, not as instructions.
+    ``heavy`` adds the escalation rules for reply calls, and ``resources`` describes the
+    working host's hardware.
     """
     contract = contract or load_contract(None)
     instruction = contract.participation if classify else contract.replies + COLLABORATION_NOTE
     instruction += TASK_CONTEXT_NOTE
+    if not classify and heavy:
+        instruction += HEAVY_NOTE
     if not classify and context.session:
         instruction += CONTINUATION_NOTE
     payload = {
@@ -124,7 +152,24 @@ def conversation_prompt(message: Message, context: ConversationContext, classify
         "history": [{"event_id": item.event_id, "sender": item.sender_id, "text": item.text} for item in context.messages],
         "message": {"event_id": message.event_id, "sender": message.sender_id, "text": message.text},
     }
+    if not classify:
+        payload["worker"] = context.worker or {}
+        payload["resources"] = resources or {}
     return instruction + "\n\nConversation data:\n" + json.dumps(payload)
+
+
+def worker_prompt(brief: str, context: ConversationContext, contract: Contract | None = None,
+                  repositories: tuple[Repo, ...] = (), resources: dict | None = None) -> str:
+    """The reply contract plus the worker framing, followed by the brief and the thread it came from."""
+    contract = contract or load_contract(None)
+    payload = {
+        "owner_id": context.owner_id, "profile": context.profile, "task_id": context.task_id,
+        "repositories": [repo.payload() for repo in repositories],
+        "current_task": context.task or {}, "resources": resources or {},
+        "thread": [{"sender": item.sender_id, "generated": item.generated, "text": item.text} for item in context.messages],
+        "brief": brief,
+    }
+    return contract.replies + TASK_CONTEXT_NOTE + WORKER_NOTE + "\n\nJob data:\n" + json.dumps(payload)
 
 
 def digest_prompt(context: ConversationContext, instruction: str) -> str:

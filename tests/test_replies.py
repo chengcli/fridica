@@ -75,10 +75,9 @@ def test_legacy_signature_removed(config, message):
 def test_only_structured_final_answer(config, message, monkeypatch, backend_type):
     async def run(command, prompt, cwd, config):
         result = {"text": "Hello UALICE", "status": "complete"}
-        if "--output-last-message" in command:
-            from pathlib import Path
-            Path(command[command.index("--output-last-message") + 1]).write_text(json.dumps(result))
-            return json.dumps({"item": {"type": "reasoning", "text": "PRIVATE DIAGNOSTIC"}})
+        if "--output-schema" in command:
+            return "\n".join([json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": "PRIVATE DIAGNOSTIC"}}),
+                              json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(result)}})])
         return json.dumps({"structured_output": result, "result": "PRIVATE DIAGNOSTIC", "tool_output": "PRIVATE TOOL"})
 
     monkeypatch.setattr("fridica.agents._run", run)

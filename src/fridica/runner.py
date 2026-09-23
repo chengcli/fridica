@@ -14,6 +14,8 @@ import signal
 
 from .config import Config
 
+SSH_FAILURE = 255
+
 OUTPUT_LIMIT = 4 * 1024 * 1024
 DIAGNOSTIC_LIMIT = 500
 RESUME_FAILURES = ("No conversation found with session ID", "no rollout found for thread id")
@@ -71,12 +73,13 @@ async def _terminate(process: asyncio.subprocess.Process) -> None:
     await process.wait()
 
 
-async def run(command: list[str], prompt: str, cwd: Path, config: Config) -> str:
+async def run(command: list[str], prompt: str, cwd: Path | None, config: Config) -> str:
     """Run ``command`` with ``prompt`` on stdin and return its stdout.
 
-    Raises ``SessionUnavailable`` when the CLI reports that a session to resume no
-    longer exists, and ``BackendError`` for any other non-zero exit, with a bounded
-    stderr tail in the message.
+    ``cwd`` is None when ``command`` is an ``ssh`` invocation that changes directory on
+    the remote host itself. Raises ``SessionUnavailable`` when the CLI reports that a
+    session to resume no longer exists, and ``BackendError`` for any other non-zero
+    exit, with a bounded stderr tail in the message.
     """
     try:
         process = await asyncio.create_subprocess_exec(
@@ -113,8 +116,15 @@ async def run(command: list[str], prompt: str, cwd: Path, config: Config) -> str
         detail = diagnostic(diagnostics)
         if any(marker in detail for marker in RESUME_FAILURES):
             raise SessionUnavailable(f"Agent could not resume its session: {detail}")
-        raise BackendError(
-            f"Agent exited with status {process.returncode}; check local authentication and sandbox support."
-            + (f" Agent stderr: {detail}" if detail else "")
-        )
+        raise BackendError(failure(process.returncode, detail, config))
     return output.decode("utf-8")
+
+
+def failure(status: int, detail: str, config: Config) -> str:
+    """The log message for an agent process that exited with ``status``."""
+    if config.remote and status == SSH_FAILURE:
+        return (f"Could not reach {config.ssh_host} over SSH (status 255); check that ssh {config.ssh_host} "
+                f"connects without a prompt." + (f" ssh stderr: {detail}" if detail else ""))
+    where = f"on {config.ssh_host}" if config.remote else "locally"
+    return (f"Agent exited with status {status}; check authentication and sandbox support {where}."
+            + (f" Agent stderr: {detail}" if detail else ""))
