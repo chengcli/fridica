@@ -44,6 +44,7 @@ class Transport:
         self.error = error
         self.sent = []
         self.announced = []
+        self.uploads = []
 
     async def send(self, message, result, task_id, turn):
         self.sent.append((message, result, task_id, turn))
@@ -54,6 +55,12 @@ class Transport:
     async def announce(self, message, text, task_id):
         self.announced.append((message, text, task_id))
         return f"{500 + len(self.announced)}.000009"
+
+    async def upload(self, message, data, filename):
+        self.uploads.append((message.thread_id, data, filename))
+
+    async def fetch(self, channel, timestamp, thread):
+        return []
 
 
 def process(replica, message):
@@ -430,3 +437,62 @@ def test_finished_at_turn_limit_debriefs_instead_of_continuing(config, store, me
     assert len(transport.announced) == 1 and transport.announced[0][1].startswith("Debrief:")
     assert not getattr(agent, "summarized", []) and len(transport.sent) == 1
     assert store.task(first)["continuation"] == "debriefed"
+
+
+class LinkTransport(Transport):
+    def __init__(self, messages=None, error=None):
+        super().__init__()
+        self.messages = messages or {}
+        self.fetch_error = error
+        self.fetched = []
+
+    async def fetch(self, channel, timestamp, thread):
+        self.fetched.append((channel, timestamp, thread))
+        if self.fetch_error:
+            raise self.fetch_error
+        return self.messages.get(timestamp, [])
+
+
+def test_linked_messages_in_other_threads_reach_the_agent(config, store, message):
+    from fridica.prompts import conversation_prompt
+    spec = [{"sender": "UBOB", "text": "Spec: run level 0 with snapy", "timestamp": "90.000001"},
+            {"sender": "UBOB", "text": "Level 1 adds coupling", "timestamp": "90.000002"}]
+    transport = LinkTransport({"90.000001": spec})
+    agent = Agent()
+    text = ("<@UOWNER> pick up <https://team.slack.com/archives/CROOM/p90000001|the spec>, "
+            "<https://team.slack.com/archives/COTHER/p80000001>, and <https://team.slack.com/archives/CROOM/p70000009?thread_ts=70.000001&cid=CROOM|reply>")
+    process(Replica(config, store, agent, transport), message(text=text))
+    # Only links into configured channels are fetched.
+    assert transport.fetched == [("CROOM", "90.000001", None), ("CROOM", "70.000009", "70.000001")]
+    context = agent.responded[0][1]
+    link = "https://team.slack.com/archives/CROOM/p90000001"
+    assert context.linked == (
+        {"link": link, "sender": "UBOB", "text": "Spec: run level 0 with snapy"},
+        {"link": link, "sender": "UBOB", "text": "Level 1 adds coupling"},
+        {"link": "https://team.slack.com/archives/COTHER/p80000001", "error": "not in a channel I watch"},
+        {"link": "https://team.slack.com/archives/CROOM/p70000009", "error": "not found"},
+    )
+    prompt = conversation_prompt(agent.responded[0][0], context, False)
+    assert "Spec: run level 0 with snapy" in prompt and "linked holds" in prompt
+    assert "linked holds" not in conversation_prompt(agent.responded[0][0], replace(context, linked=()), False)
+
+
+def test_links_from_earlier_turns_and_fetch_failures(config, store, message, caplog):
+    transport = LinkTransport(error=RuntimeError("slack down"))
+    agent = Agent(results=[AgentResult("Which spec?", "waiting"), AgentResult("ok")])
+    replica = Replica(config, store, agent, transport)
+    process(replica, message(text="<@UOWNER> see https://team.slack.com/archives/CROOM/p90000001 "
+                                  "(this thread: https://team.slack.com/archives/CROOM/p100000001)"))
+    assert transport.fetched == [("CROOM", "90.000001", None)]
+    assert agent.responded[0][1].linked == ({"link": "https://team.slack.com/archives/CROOM/p90000001", "error": "could not be fetched"},)
+    assert "could not be fetched (RuntimeError)" in caplog.text
+    transport.fetch_error = None
+    transport.messages = {"90.000001": [{"sender": "UBOB", "text": "Spec", "timestamp": "90.000001"}]}
+    process(replica, message("event2", text="<@UOWNER> go ahead", timestamp="100.000003", thread_id="100.000001"))
+    assert agent.responded[1][1].linked[0]["text"] == "Spec"
+
+
+def test_message_without_links_fetches_nothing(config, store, message):
+    agent, transport = Agent(), LinkTransport()
+    process(Replica(config, store, agent, transport), message(text="<@UOWNER> no links here"))
+    assert agent.responded[0][1].linked == () and transport.fetched == []

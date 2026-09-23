@@ -23,8 +23,8 @@ from .config import Config
 from .contract import Contract, load_contract
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message
 from .repos import Repo, load_repos
-from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, ESCALATE_LIMIT, FILE_PLAN_SCHEMA, REPLY_LIMIT,
-                      RESPONSE_SCHEMA, SUMMARY_SCHEMA, conversation_prompt, digest_prompt, plan_prompt, truncate,
+from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, ESCALATE_LIMIT, FILE_PLAN_SCHEMA, REPLY_LIMIT, REPORT_LIMIT,
+                      RESPONSE_SCHEMA, SUMMARY_SCHEMA, checked_details, conversation_prompt, digest_prompt, plan_prompt, truncate,
                       worker_prompt)
 from . import remote
 from .runner import OUTPUT_LIMIT, BackendError, SessionUnavailable
@@ -128,7 +128,7 @@ class CLIBackend:
         target = self.config.host(host) if host else self.config.heavy_hosts[0]
         prompt = worker_prompt(brief, context, self.contract(), self.repositories(), target.resources.payload(), target.payload())
         report, thread = await self.workers.get(context.task_id, target).run(prompt, resume)
-        return truncate(report, REPLY_LIMIT), thread
+        return truncate(report, REPORT_LIMIT), thread
 
     async def close(self) -> None:
         await self.workers.close()
@@ -152,18 +152,13 @@ class CLIBackend:
         host = result.get("escalate_host", "")
         if not isinstance(escalate, str) or len(escalate) > ESCALATE_LIMIT or not isinstance(host, str):
             raise BackendError("Agent returned an invalid heavy-task brief.")
-        escalate, host = escalate.strip(), host.strip()
-        if escalate and not self.config.heavy_tasks:
-            logger.warning("Agent asked to escalate a heavy task while heavy_tasks is disabled; ignoring the brief")
-            escalate = ""
-        if escalate and host and host not in {candidate.name for candidate in self.config.heavy_hosts}:
-            logger.warning("Agent asked to escalate to unknown host %r; running the job on %s instead",
-                           host[:80], self.config.heavy_hosts[0].name)
-            host = ""
-        if self.config.heavy_hosts and host == self.config.heavy_hosts[0].name:
-            host = ""
+        escalate, host = self.config.route_escalation(escalate, host)
+        try:
+            details = checked_details(result.get("details", ""))
+        except ValueError:
+            raise BackendError("Agent returned invalid details.") from None
         return AgentResult(text=text, status=result["status"], session=session, finished=finished and send, send=send,
-                           update=update, escalate=escalate, escalate_host=host if escalate else "")
+                           update=update, escalate=escalate, escalate_host=host, details=details)
 
     async def _digest(self, context: ConversationContext, instruction: str, schema: dict, key: str) -> str:
         result, _session = await self._invoke(digest_prompt(context, instruction), True, schema=schema)
