@@ -9,7 +9,7 @@ A ``repos`` path in ``config.toml`` overrides the shared list for local testing.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from importlib.resources import files
 from pathlib import Path
 import re

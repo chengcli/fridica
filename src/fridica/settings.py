@@ -43,8 +43,9 @@ def read_settings(base, path):
         raise ValueError('Start the monitor with a configuration file to edit settings.')
     current, revision = configured_snapshot(base, path)
     values = {name: getattr(current, name) for name in EDITABLE}
-    values.update(workspace=str(current.workspace), additional_workspaces=list(map(str,current.additional_workspaces)),
-                  read_only_workspaces=list(map(str,current.read_only_workspaces)))
+    values.update(workspace=current.root_label(current.workspace),
+                  additional_workspaces=current.root_labels()[1:],
+                  read_only_workspaces=[current.root_label(p) for p in current.read_only_workspaces])
     result = {'values': values, 'revision': revision, 'applied_revision': None, 'applied_pid': None}
     with database(base) as db:
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='configuration_runtime'").fetchone():

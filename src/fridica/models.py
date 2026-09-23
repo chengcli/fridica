@@ -35,6 +35,8 @@ class ConversationContext:
     turn: int
     session: str | None = None
     task: dict | None = None
+    worker: dict | None = None
+    """State of this thread's heavy-task worker (``state``, ``since``), or None when none was started."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,10 @@ class AgentResult:
     """The agent judged the whole discussion finished: request resolved, every action item done or handed off."""
     send: bool = True
     update: dict | None = None
+    escalate: str = ""
+    """A self-contained brief for the persistent heavy-task worker; empty when the reply is the whole answer."""
+    escalate_host: str = ""
+    """The configured host the brief should run on; empty means the workspace's own host."""
 
 
 class AgentBackend(Protocol):
@@ -56,6 +62,14 @@ class AgentBackend(Protocol):
     async def summarize(self, context: ConversationContext) -> str: ...
 
     async def debrief(self, context: ConversationContext) -> str: ...
+
+    async def work(self, brief: str, context: ConversationContext, resume: str | None, host: str) -> tuple[str, str | None]:
+        """Run ``brief`` on ``host``'s persistent heavy-task worker; return the report and the worker thread to resume later."""
+        ...
+
+    async def close(self) -> None:
+        """Stop any persistent worker processes."""
+        ...
 
 
 class Transport(Protocol):

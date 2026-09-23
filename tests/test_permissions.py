@@ -8,7 +8,7 @@ import time
 import pytest
 
 from fridica.cli import main
-from fridica.models import AgentResult, ConversationContext, Message
+from fridica.models import ConversationContext, Message
 from fridica.replica import RateLimited, Replica
 from fridica.store import Store
 
@@ -343,8 +343,8 @@ def test_file_planner_uses_stateless_toolless_cli(managed, message, monkeypatch,
             assert 'features.shell_tool=false' in command
             assert 'features.unified_exec=false' in command
             schema = json.loads(Path(command[command.index('--output-schema') + 1]).read_text())
-            Path(command[command.index('--output-last-message') + 1]).write_text(json.dumps(action('read', target)))
-            output = json.dumps({'type': 'thread.started'})
+            output = json.dumps({'type': 'thread.started'}) + '\n' + json.dumps(
+                {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(action('read', target))}})
         else:
             assert command[command.index('--tools') + 1] == ''
             schema = json.loads(command[command.index('--json-schema') + 1])

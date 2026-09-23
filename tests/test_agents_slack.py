@@ -134,8 +134,7 @@ def test_delivery_error_code_sanitized(code, expected):
 @pytest.mark.parametrize("backend_type", [ClaudeBackend, CodexBackend])
 def test_backend_permission_flags(config, tmp_path, backend_type):
     backend = backend_type(config)
-    schema = tmp_path / "schema.json"
-    schema.write_text('{}')
+    schema = '{}'
     classify = backend.command(tmp_path, schema, True)
     execute = backend.command(tmp_path, schema, False)
     assert not any("bypass" in part or "dangerously" in part for part in execute)
@@ -164,11 +163,18 @@ def test_backend_permission_flags(config, tmp_path, backend_type):
 def test_parsers_fail_closed(config, tmp_path):
     claude = ClaudeBackend(config)
     with pytest.raises(BackendError):
-        claude.parse(json.dumps({"is_error": True, "structured_output": {"text": "done"}}), tmp_path)
+        claude.parse(json.dumps({"is_error": True, "structured_output": {"text": "done"}}))
     with pytest.raises(BackendError):
-        claude.parse('{"structured_output": []}', tmp_path)
+        claude.parse('{"structured_output": []}')
     with pytest.raises(BackendError):
-        CodexBackend(config).parse("", tmp_path)
+        CodexBackend(config).parse("")
+    with pytest.raises(BackendError):
+        CodexBackend(config).parse(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "[]"}}))
+    assert CodexBackend(config).parse("\n".join([
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps({"text": "draft"})}}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps({"text": "final"})}}),
+        json.dumps({"type": "turn.completed"}),
+    ])) == {"text": "final"}
 
 
 @pytest.mark.parametrize("backend_type,name", [(ClaudeBackend, "claude"), (CodexBackend, "codex")])
@@ -192,9 +198,10 @@ if classification:
 else:
     assert arguments[arguments.index("--add-dir") + 1] == os.environ["EXPECTED_ADDITIONAL_WORKSPACE"]
 result = {"decision": "respond"} if classification else {"text": "Finished safely", "status": "complete"}
-if "--output-last-message" in arguments:
-    pathlib.Path(arguments[arguments.index("--output-last-message") + 1]).write_text(json.dumps(result))
+if "--output-schema" in arguments:
+    assert pathlib.Path(arguments[arguments.index("--output-schema") + 1]).is_file()
     print(json.dumps({"type": "thread.started", "diagnostic": "PRIVATE PROGRESS"}))
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(result)}}))
 else:
     print(json.dumps({"structured_output": result, "result": "PRIVATE PROGRESS"}))
 ''')
@@ -214,8 +221,7 @@ else:
 
 @pytest.mark.parametrize("backend_type", [ClaudeBackend, CodexBackend])
 def test_session_flags(config, tmp_path, backend_type):
-    schema = tmp_path / "schema.json"
-    schema.write_text("{}")
+    schema = "{}"
     extra = tmp_path / "extra"
     extra.mkdir()
     config = replace(config, additional_workspaces=(extra,))
@@ -252,8 +258,10 @@ def test_codex_classifier_distinguishes_diagnostics_from_tools(config, monkeypat
     from fridica import agents
 
     async def run(command, prompt, cwd, settings):
-        (cwd / "result.json").write_text(json.dumps({"decision": "respond"}))
-        return json.dumps({"type": "item.completed", "item": {"type": item_type, "message": "Code mode is disabled."}})
+        return "\n".join([
+            json.dumps({"type": "item.completed", "item": {"type": item_type, "message": "Code mode is disabled."}}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps({"decision": "respond"})}}),
+        ])
 
     monkeypatch.setattr(agents, "_run", run)
     backend = CodexBackend(replace(config, backend="codex"))
@@ -272,7 +280,7 @@ def test_denied_tool_calls_are_logged_not_fatal(config, tmp_path, caplog):
         "garbage",
     ]}
     with caplog.at_level(logging.WARNING, logger="fridica.agents"):
-        assert ClaudeBackend(config).parse(json.dumps(envelope), tmp_path) == envelope["structured_output"]
+        assert ClaudeBackend(config).parse(json.dumps(envelope)) == envelope["structured_output"]
     assert "denied 3 tool call(s)" in caplog.text
     assert "Bash(git)" in caplog.text
     assert "Write(/tmp/claude/report.sh)" in caplog.text
@@ -281,8 +289,7 @@ def test_denied_tool_calls_are_logged_not_fatal(config, tmp_path, caplog):
 
 @pytest.mark.parametrize("backend_type", [ClaudeBackend, CodexBackend])
 def test_allowed_domains_open_network_for_tasks_only(config, tmp_path, backend_type):
-    schema = tmp_path / "schema.json"
-    schema.write_text("{}")
+    schema = "{}"
     closed = backend_type(config)
     open_ = backend_type(replace(config, allowed_domains=("github.com", "*.pypi.org")))
     session = "2b1f0d2e-6a8e-4c39-9a33-0d8c9a0f1b22"
@@ -319,9 +326,8 @@ else:
 schema = json.loads(arguments[arguments.index("--json-schema") + 1]) if "--json-schema" in arguments else json.loads(pathlib.Path(arguments[arguments.index("--output-schema") + 1]).read_text())
 assert list(schema["required"]) == ["summary"]
 result = {"summary": "  Asked for a plan; agreed on two PRs. " + "x" * 3000}
-if "--output-last-message" in arguments:
-    pathlib.Path(arguments[arguments.index("--output-last-message") + 1]).write_text(json.dumps(result))
-    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message"}}))
+if "--output-schema" in arguments:
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(result)}}))
 else:
     print(json.dumps({"structured_output": result}))
 ''')
@@ -389,9 +395,9 @@ if resume_id == "11111111-1111-4111-8111-111111111111":
     sys.exit(1)
 session = resume_id or ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" if "--session-id" not in arguments else arguments[arguments.index("--session-id") + 1])
 result = {"text": "continued" if resume_id else "started", "status": "complete"}
-if "--output-last-message" in arguments:
-    pathlib.Path(arguments[arguments.index("--output-last-message") + 1]).write_text(json.dumps(result))
+if "--output-schema" in arguments:
     print(json.dumps({"type": "thread.started", "thread_id": session}))
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": json.dumps(result)}}))
     print(json.dumps({"type": "turn.completed"}))
 else:
     print(json.dumps({"structured_output": result, "session_id": session}))
@@ -496,8 +502,7 @@ def test_subprocess_timeout_and_cancellation(config, tmp_path):
 def test_codex_host_enabled_only_for_native_tasks(config, tmp_path):
     native = CodexBackend(replace(config, backend='codex'))
     managed = CodexBackend(replace(config, backend='codex', file_access=True))
-    schema = tmp_path / 'schema.json'
-    schema.write_text('{}')
+    schema = '{}'
     for resume in (False, True):
         command = native.command(tmp_path, schema, False, 'session-1234', resume)
         assert 'features.code_mode_host=false' not in command

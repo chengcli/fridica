@@ -38,6 +38,8 @@ STOP_NOTICE_NO_SUMMARY = ("This thread has reached its turn limit, so I'm stoppi
 SUMMARY_HEADER = "Continuing from a thread that reached its turn limit. Summary of the discussion so far:\n\n"
 SUMMARY_FOOTER = "\n\nReply in this thread to continue."
 DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
+HEAVY_FAILED_NOTICE = "The longer job I started for this thread did not finish. Please check locally before asking again."
+HEAVY_INTERRUPTED_NOTICE = "The longer job I started for this thread was interrupted by a restart and was not resumed."
 
 
 class RateLimited(Exception):
@@ -63,6 +65,8 @@ class Replica:
         self.transport = transport
         self.observe_only = observe_only
         self._lock = asyncio.Lock()
+        self._background: set[asyncio.Task] = set()
+        self._recovered = False
         self.store.bind(config.owner_id, config.workspace_id)
         if not observe_only:
             # Threads that were waiting for information when the daemon stopped may already be looping.
@@ -87,8 +91,9 @@ class Replica:
             return
         if current != self.config:
             from .agents import create_backend
-            self.agent = None if self.observe_only else create_backend(current)
+            previous, self.agent = self.agent, (None if self.observe_only else create_backend(current))
             self.config = current
+            self._spawn(self._close_agent(previous))
             if current.file_access:
                 from .permissions import Permissions
                 self.permissions = Permissions(current, self.store, self.agent)
@@ -96,6 +101,26 @@ class Replica:
             self.store.connection.execute('CREATE TABLE IF NOT EXISTS configuration_runtime (id INTEGER PRIMARY KEY,revision TEXT,pid INTEGER)')
             self.store.connection.execute('INSERT OR REPLACE INTO configuration_runtime VALUES(1,?,?)', (revision, os.getpid()))
         self.config_revision = revision
+
+    def _spawn(self, coroutine) -> asyncio.Task | None:
+        """Run ``coroutine`` in the background and keep a reference so ``run`` can cancel it on shutdown."""
+        try:
+            task = asyncio.get_running_loop().create_task(coroutine)
+        except RuntimeError:
+            coroutine.close()
+            return None
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return task
+
+    @staticmethod
+    async def _close_agent(agent) -> None:
+        close = getattr(agent, "close", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception as error:
+                logger.warning("Heavy-task workers did not stop cleanly (%s)", type(error).__name__)
 
     # ----- intake -----
 
@@ -132,6 +157,7 @@ class Replica:
                 self.store.context(message, self.config.context_limit), self.config.owner_id, self.config.profile,
                 task_id, turn, session=self._session(message, task),
                 task=collaboration.snapshot(self.store.connection, self.config, message.channel_id, message.thread_id)["data"] if task else {},
+                worker=self.store.worker(message),
             )
             mentioned = self._mentions_owner(message)
             if mentioned and not message.generated and task and task['status'] not in OPEN_STATUSES:
@@ -318,7 +344,76 @@ class Replica:
             self.store.pause_loop(message, self.config.max_turns, self.config.max_wait_replies)
         if not row["reply_only"]:
             collaboration.pause_stalled(self.store.connection, self.config, message)
+            self._escalate(message, result)
             await self._follow_up(message, result)
+
+    # ----- heavy tasks -----
+
+    def _escalate(self, message: Message, result: AgentResult) -> None:
+        """Hand a delivered reply's brief to the thread's persistent worker on the chosen host, unless one is running."""
+        brief = getattr(result, "escalate", "")
+        if not brief or not self.config.heavy_tasks or self.agent is None:
+            return
+        host = getattr(result, "escalate_host", "") or self.config.primary.name
+        task = self.store.task(message)
+        if task is None or task["worker_state"] == "running":
+            logger.info("Thread %s already has a heavy task running; brief ignored", message.thread_id)
+            return
+        # A worker thread only continues on the host that created it; rows written before hosts
+        # were recorded came from the workspace's own host.
+        previous = task["worker_host"] or self.config.primary.name
+        thread = task["worker_thread"] if previous == host else None
+        self.store.save_worker(message, "running", thread, host)
+        if self._spawn(self._heavy(message, brief, host)) is None:
+            self.store.save_worker(message, task["worker_state"], task["worker_thread"], task["worker_host"])
+            return
+        logger.info("Thread %s: heavy task started on %s", message.thread_id, host)
+
+    async def _heavy(self, message: Message, brief: str, host: str) -> None:
+        """Run one escalated job outside the pipeline lock, then post its report in the thread."""
+        task = self.store.task(message)
+        context = replace(self._thread_context(message, task), worker=self.store.worker(message))
+        thread = task["worker_thread"]
+        try:
+            try:
+                report, thread = await self.agent.work(brief, context, task["worker_thread"], host)
+                if not isinstance(report, str) or not report.strip() or len(report) > REPLY_LIMIT:
+                    raise ValueError("invalid heavy-task report")
+                text, state = format_reply(report, message, context), "done"
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error("Heavy task for thread %s failed (%s): %s", message.thread_id, type(error).__name__, error or "no detail")
+                text, state = HEAVY_FAILED_NOTICE, "failed"
+            async with self._lock:
+                self.store.save_worker(message, state, thread, host)
+                await self._post_notice(message, text, task["task_id"], task["turns"])
+        except asyncio.CancelledError:
+            self.store.save_worker(message, "interrupted", thread, host)
+            raise
+
+    async def _post_notice(self, message: Message, text: str, task_id: str, turn: int) -> None:
+        """Post ``text`` in the thread and record it as our own message; failures are logged, never retried."""
+        try:
+            timestamp = await self.transport.send(message, AgentResult(text, "complete"), task_id, turn)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error("Could not post to thread %s (%s)", message.thread_id, type(error).__name__)
+            return
+        self._record_outgoing(message, text, timestamp, thread=message.thread_id, task_id=task_id, turn=turn, status="complete")
+
+    async def _recover_workers(self) -> None:
+        """Tell threads whose heavy job was cut off by a restart; the job is not resumed automatically."""
+        self._recovered = True
+        if self.observe_only:
+            return
+        for message in self.store.interrupted_workers(self.config.workspace_id):
+            task = self.store.task(message)
+            if task is None or message.channel_id not in self.config.channels:
+                continue
+            self.store.save_worker(message, "failed", task["worker_thread"], task["worker_host"])
+            await self._post_notice(message, HEAVY_INTERRUPTED_NOTICE, task["task_id"], task["turns"])
 
     async def _follow_up(self, message: Message, result: AgentResult) -> None:
         """After a delivered reply: debrief a finished discussion, or wrap up a thread at its turn limit."""
@@ -448,17 +543,31 @@ class Replica:
     # ----- main loop -----
 
     async def run(self) -> None:
-        while True:
-            try:
-                async with self._lock:
-                    self.reload_config(idle=True)
-            except (ValueError, OSError):
-                logger.error('Configuration could not be loaded; processing is paused until it is repaired.')
-                await asyncio.sleep(5)
-                continue
-            if self.permissions and not self.observe_only:
-                async with self._lock:
-                    await self.permissions.process_approved(self)
-            for row in self.store.pending():
-                await self.process(Message(**json.loads(row["payload"])))
-            await asyncio.sleep(0.25)
+        try:
+            while True:
+                try:
+                    async with self._lock:
+                        self.reload_config(idle=True)
+                except (ValueError, OSError):
+                    logger.error('Configuration could not be loaded; processing is paused until it is repaired.')
+                    await asyncio.sleep(5)
+                    continue
+                if not self._recovered:
+                    async with self._lock:
+                        await self._recover_workers()
+                if self.permissions and not self.observe_only:
+                    async with self._lock:
+                        await self.permissions.process_approved(self)
+                for row in self.store.pending():
+                    await self.process(Message(**json.loads(row["payload"])))
+                await asyncio.sleep(0.25)
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self) -> None:
+        """Stop background heavy tasks and their worker processes."""
+        for task in list(self._background):
+            task.cancel()
+        if self._background:
+            await asyncio.gather(*self._background, return_exceptions=True)
+        await self._close_agent(self.agent)
