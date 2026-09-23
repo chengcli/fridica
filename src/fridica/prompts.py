@@ -150,9 +150,10 @@ Files you write inside your host's roots can be attached to the thread: end the 
 ATTACH: <absolute path>
 for at most {MAX_ATTACHMENTS} .png, .pdf or .md files, in the order they should appear. Those lines are removed from the report
 and the files are uploaded after it, so never say you cannot attach files. The response depth rules decide which files
-to produce. To build the PDF of a sophisticated report, write the .rst files and an index.rst that pulls them in with
-.. include:: directives, then run rst2pdf index.rst -o <name>.pdf. If rst2pdf is missing, create a virtual environment
-inside your roots and pip install rst2pdf "matplotlib<3.10" there (newer matplotlib breaks rst2pdf's math rendering).
+to produce. Use the existing Python environment the login shell activates; never create a virtual environment.
+To build the PDF of a sophisticated report, write the .rst files and an index.rst that pulls them in with
+.. include:: directives, then run rst2pdf index.rst -o <name>.pdf (rst2pdf is installed in that environment). If
+the math directive fails to render, draw each equation to a PNG with matplotlib mathtext and include it as an image.
 Render figures with matplotlib at dpi 150 or more.
 """
 CONTINUATION_NOTE = (
