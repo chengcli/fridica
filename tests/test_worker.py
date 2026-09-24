@@ -292,6 +292,44 @@ def test_codex_worker_over_ssh(heavy_config, fake_worker_cli, tmp_path, monkeypa
     assert call["host"] == "dart9" and "codex app-server" in call["script"] and "export OMP_NUM_THREADS=4" in call["script"]
 
 
+def test_lost_session_retry_starts_a_fresh_process_before_the_exit_is_recorded(heavy_config, monkeypatch):
+    """The failed process can reach EOF before asyncio records its return code; the retry must not reuse it."""
+    from fridica import worker as module
+
+    class Process:
+        returncode = None
+        stdin = None
+
+    async def terminate(process):
+        process.returncode = 1
+
+    class Stale(ClaudeWorker):
+        started = []
+
+        async def start(self):
+            self.process = Process()
+            Stale.started.append((self.resume, self.process))
+
+        async def job(self, prompt):
+            if self.resume is not None:
+                # Still "alive": the exit has not been recorded when the error surfaces.
+                raise BackendError(f"Heavy-task worker exited (status None). No conversation found with session ID: {self.resume}")
+            return "fresh"
+
+    monkeypatch.setattr(module, "_terminate", terminate)
+
+    async def scenario():
+        worker = Stale(heavy_config)
+        report, _thread = await worker.run("Run", "lost-session")
+        await worker.close()
+        return report
+
+    assert asyncio.run(scenario()) == "fresh"
+    (first_resume, first), (second_resume, second) = Stale.started
+    assert first_resume == "lost-session" and second_resume is None and second is not first
+    assert first.returncode == 1
+
+
 def test_claude_worker_recovers_from_lost_session(heavy_config, fake_worker_cli, tmp_path, monkeypatch):
     """A stale session id is retried once on a fresh session instead of failing every later job."""
     executable = tmp_path / "bin" / "claude"

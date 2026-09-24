@@ -180,6 +180,9 @@ class Worker:
                     if resume is None or not any(marker in str(error) for marker in RESUME_FAILURES):
                         raise
                     logger.info("Heavy-task worker could not resume %s; starting a new thread", resume)
+                    # The failed process may not have a return code yet, so ``alive`` could still
+                    # report it running; close it so the retry always starts a fresh one.
+                    await self.close()
                     report = await self._attempt(prompt, None)
             except BaseException:
                 await self.close()
