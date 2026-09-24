@@ -142,11 +142,44 @@ def test_rate_limited_notice_defers_next_mention(config, store, message):
     assert store.task(entry)["turns"] == config.max_turns - 1
 
 
-@pytest.mark.parametrize("result", [RuntimeError("SECRET"), AgentResult("UALICE " * 499)])
-def test_failure_and_formatted_overflow_send_safe_reply(config, store, message, result, caplog):
+def test_failure_sends_safe_reply(config, store, message, caplog):
     transport = Transport()
-    process(Replica(config, store, Agent(result), transport), message())
+    process(Replica(config, store, Agent(RuntimeError("SECRET")), transport), message())
     assert len(transport.sent) == 1
     assert transport.sent[0].status == "blocked"
     assert "SECRET" not in transport.sent[0].text + caplog.text
-    assert len(transport.sent[0].text) <= 3500
+
+
+class UploadingTransport(Transport):
+    def __init__(self):
+        super().__init__()
+        self.uploads = []
+
+    async def upload(self, message, data, filename):
+        self.uploads.append((filename, data.decode("utf-8")))
+
+
+@pytest.mark.parametrize("status", ["complete", "waiting"])
+@pytest.mark.parametrize("text,details", [
+    ("\n\n".join(f"Section {index}: " + "word " * 150 for index in range(12)), ""),
+    ("UALICE " * 999, "# Notes"),
+], ids=["paragraphs", "mentions-with-details"])
+def test_overflowing_reply_is_posted_with_the_full_text_attached(config, store, message, status, text, details):
+    from fridica.replies import CONTINUED
+    transport = UploadingTransport()
+    process(Replica(config, store, Agent(AgentResult(text, status, details=details)), transport), message())
+    full = format_reply(text, message(), ConversationContext([], config.owner_id, "", "task", 1)).strip()
+    [sent] = transport.sent
+    assert sent.status == status and len(sent.text) <= 7000 and sent.text.endswith(CONTINUED)
+    assert "<@UALICE>" in sent.text if status == "waiting" else sent.text.startswith(full[:20])
+    [(name, attached)] = transport.uploads
+    assert name.startswith("details-") and attached == sent.details
+    assert attached.startswith(full) and attached.endswith(details)
+    assert sent.text.removesuffix(CONTINUED).removeprefix("<@UALICE> ") in attached
+
+
+def test_empty_reply_with_details_points_to_them(config, store, message):
+    from fridica.replies import ATTACHED
+    transport = UploadingTransport()
+    process(Replica(config, store, Agent(AgentResult("  ", details="# Report")), transport), message())
+    assert transport.sent[0].text == ATTACHED and transport.uploads[0][1] == "# Report"

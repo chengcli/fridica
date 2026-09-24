@@ -485,7 +485,6 @@ def test_escalate_hands_brief_to_remote_host(managed, store, message, caplog):
     ("", "Started.", "content, which holds the brief, is empty; put the brief in content, not in details"),
     ("x" * 40001, "Started.", "content is 40001 characters; the limit is 40000"),
     ("job", "", "text, the reply telling the requester the job has started, is empty"),
-    ("job", "y" * 3501, "text is 3501 characters; the limit is 3500"),
 ])
 def test_invalid_escalation_is_corrected_once_then_blocks_with_reason(managed, store, message, caplog, content, text, reason):
     import logging
@@ -508,6 +507,44 @@ def test_invalid_escalation_is_corrected_once_then_blocks_with_reason(managed, s
         result = respond(manager, message("event-bad", timestamp="200.000001"))
     assert result.status == "blocked" and result.text == ESCALATION_FAILED and "local access" not in result.text
     assert f"File plan for event event-bad was rejected (InvalidBrief): Invalid heavy-task brief: {reason}" in caplog.text
+
+
+@pytest.mark.parametrize("operation", ["reply", "clarify"])
+def test_empty_reply_is_corrected_once_then_blocks_with_reason(managed, store, message, caplog, operation):
+    import logging
+    from fridica.permissions import REPLY_FAILED
+    reason = "text is empty; put the reply in text"
+    # A long reply, or an empty one with details, is accepted and fitted when it is sent.
+    manager = policy(managed, store, [action(operation, text="z" * 9000)])
+    assert respond(manager, message("event-long", timestamp="50.000001")).text == "z" * 9000
+    manager = policy(managed, store, [dict(action(operation), details="# Write-up")])
+    assert respond(manager, message("event-details", timestamp="60.000001")).details == "# Write-up"
+    # The model is told why its reply was rejected and may supply one.
+    bad = action(operation, text="   ")
+    manager = policy(managed, store, [bad, dict(action(operation, text="Summary."), details="# Long write-up")])
+    with caplog.at_level(logging.WARNING, logger="fridica.permissions"):
+        result = respond(manager, message())
+    assert result.text == "Summary." and result.details == "# Long write-up"
+    assert result.status == ("waiting" if operation == "clarify" else "complete")
+    assert manager.agent.feedback[0] == "" and reason in manager.agent.feedback[1]
+    assert f"asking for a correction: Invalid reply: {reason}" in caplog.text
+    # A second invalid reply blocks with a reply-specific message, not a file-access one, and logs why.
+    caplog.clear()
+    manager = policy(managed, store, [bad, bad])
+    with caplog.at_level(logging.WARNING, logger="fridica.permissions"):
+        result = respond(manager, message("event-bad", timestamp="200.000001"))
+    assert result.status == "blocked" and result.text == REPLY_FAILED and "local access" not in result.text
+    assert f"File plan for event event-bad was rejected (InvalidReply): Invalid reply: {reason}" in caplog.text
+
+
+def test_one_correction_round_is_shared_across_reply_and_escalation(managed, store, message):
+    from pathlib import PurePosixPath
+    from fridica.config import Host
+    from fridica.permissions import REPLY_FAILED
+    heavy = replace(managed, heavy_tasks=True, remote_hosts=(Host("dart9", (PurePosixPath("/mnt/a"),)),))
+    manager = policy(heavy, store, [action("escalate", "dart9", "", "Started."), action("reply", text=" ")])
+    assert respond(manager, message()).text == REPLY_FAILED
+    assert len(manager.agent.feedback) == 2
 
 
 def test_plan_prompt_carries_rejection_feedback(managed, message):

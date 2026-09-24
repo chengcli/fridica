@@ -186,6 +186,48 @@ def test_resuming_blocked_thread_answers_latest_unanswered_message(config, store
     assert store.get('event1')['state'] == 'sent'
 
 
+def test_resume_answers_a_turned_away_agent_message_without_a_mention(config, store, message):
+    from fridica.dashboard_control import thread_action
+    from fridica.models import AgentResult
+    from fridica.replica import Replica
+
+    class Agent:
+        calls = 0
+
+        async def respond(self, message, context):
+            Agent.calls += 1
+            return AgentResult('Picking the merge plan back up.')
+
+    class Transport:
+        sent = []
+
+        async def send(self, message, result, task_id, turn):
+            Transport.sent.append(result.text)
+            return f'300.{len(Transport.sent):06d}'
+
+    first = blocked_thread(config, store, message)
+    # Another owner's agent follows up without mentioning this owner, while the thread is blocked.
+    later = message('event2', timestamp='200.000001', sender_id='UXI', text='Thanks, this matches what I have.',
+                    generated=True, task_status='blocked')
+    replica = Replica(config, store, Agent(), Transport())
+    replica.receive(later)
+    asyncio.run(replica.process(later))
+    assert store.get('event2')['decision'] == 'blocked' and Agent.calls == 0
+    # Resuming replays it, and it is answered once although it is generated and carries no mention.
+    assert thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])['replayed']
+    assert store.get('event2')['decision'] == 'resumed'
+    asyncio.run(replica.process(later))
+    assert Agent.calls == 1 and Transport.sent == ['Picking the merge plan back up.']
+    assert store.get('event2')['state'] == 'sent'
+    # The same message delivered again is not answered twice, and later unaddressed agent messages stay ignored.
+    asyncio.run(replica.process(later))
+    after = message('event3', timestamp='400.000001', sender_id='UXI', text='One more note.', generated=True,
+                    task_status='complete')
+    replica.receive(after)
+    asyncio.run(replica.process(after))
+    assert Agent.calls == 1 and store.get('event3')['decision'] == 'ignore'
+
+
 def test_resume_does_not_replay_answered_or_paused_threads(config, store, message):
     from fridica.dashboard_control import thread_action
     first = blocked_thread(config, store, message)
@@ -201,21 +243,6 @@ def test_resume_does_not_replay_answered_or_paused_threads(config, store, messag
         store.connection.execute("UPDATE tasks SET control_state='paused',pause_reason='loop' WHERE thread=?", (first.thread_id,))
     result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
     assert result['replayed'] is False and store.pending() == []
-
-
-@pytest.mark.parametrize('changes', [
-    {'generated': True, 'task_status': 'complete', 'text': 'Report: all checks passed.'},
-    {'text': 'any update on this?'},
-])
-def test_resume_reports_when_latest_message_cannot_get_a_reply(config, store, message, changes):
-    """A message without a mention (such as a peer's completed report) would be ignored or only observed after Resume."""
-    from fridica.dashboard_control import REPLAY_UNMENTIONED, thread_action
-    first = blocked_thread(config, store, message)
-    store.add(message('event2', timestamp='200.000001', **changes))
-    store.mark('event2', 'observed', 'blocked')
-    result = thread_action(config, 'CROOM', first.thread_id, 'resume', store.task(first)['control_revision'])
-    assert result['replayed'] is False and result['note'] == REPLAY_UNMENTIONED
-    assert store.pending() == [] and store.task(first)['reset_at'] > 200
 
 
 def test_replayed_mention_gets_exactly_one_reply(config, store, message):

@@ -407,12 +407,12 @@ def test_long_report_is_split_and_figure_attached(heavy_config, store, message, 
     figure = heavy_config.workspace / "out" / "summary.png"
     figure.parent.mkdir()
     figure.write_bytes(PNG_BYTES)
-    report = "\n\n".join(f"Paragraph {index}: " + "result " * 120 for index in range(8)) + f"\n\nFIGURE: {figure}\n"
+    report = "\n\n".join(f"Paragraph {index}: " + "result " * 120 for index in range(10)) + f"\n\nFIGURE: {figure}\n"
     agent = HeavyAgent([AgentResult("Started.", escalate="Run it.")], reports=[report])
     transport = Transport()
     run(Replica(heavy_config, store, agent, transport), message())
     parts = [sent[1].text for sent in transport.sent[1:]]
-    assert len(parts) > 1 and all(len(part) <= 3500 for part in parts)
+    assert len(parts) > 1 and all(len(part) <= 7000 for part in parts)
     assert parts[0].startswith("Paragraph 0:") and parts[-1].rstrip().endswith("result")
     assert "FIGURE" not in "".join(parts)
     assert " ".join(" ".join(parts).split()) == " ".join(report.split("FIGURE:")[0].split())

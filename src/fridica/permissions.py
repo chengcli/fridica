@@ -14,7 +14,7 @@ import uuid
 
 from .config import within_casefold
 from .models import AgentResult, Message
-from .prompts import ESCALATE_LIMIT, REPLY_LIMIT, checked_details
+from .prompts import ESCALATE_LIMIT, checked_details
 
 
 logger = logging.getLogger(__name__)
@@ -22,10 +22,25 @@ logger = logging.getLogger(__name__)
 FILE_LIMIT = 65536
 PROTECTED = {'.git', '.codex', '.claude', '.ssh', '.env'}
 ESCALATION_FAILED = "I couldn't start the heavy task because its job brief failed validation. Nothing was run or changed."
+REPLY_FAILED = "I couldn't put together a reply to this message. No change was applied."
 
 
-class InvalidBrief(ValueError):
-    """An escalate plan the controller rejected; the message says which field to correct."""
+class PlanRejected(ValueError):
+    """A plan the controller rejected for a reason the model can fix; the message says which field to correct."""
+
+
+class InvalidBrief(PlanRejected):
+    """An escalate plan the controller rejected."""
+
+
+class InvalidReply(PlanRejected):
+    """A reply or clarify plan with nothing to post."""
+
+
+def checked_reply(text: str, details: str) -> None:
+    """InvalidReply when a reply has neither text nor details; a long reply is fitted when it is sent."""
+    if not text.strip() and not details:
+        raise InvalidReply('Invalid reply: text is empty; put the reply in text')
 
 
 class Files:
@@ -186,22 +201,21 @@ class Permissions:
                 operation = plan['operation']
                 if operation == 'observe':
                     return AgentResult('', send=False, update=update)
-                if operation in {'reply', 'clarify'}:
-                    if not plan['text'].strip() or len(plan['text']) > REPLY_LIMIT:
-                        raise ValueError('Invalid reply')
-                    return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete', update=update,
-                                       details=details)
-                if operation == 'escalate':
-                    try:
+                try:
+                    if operation in {'reply', 'clarify'}:
+                        checked_reply(plan['text'], details)
+                        return AgentResult(plan['text'], 'waiting' if operation == 'clarify' else 'complete',
+                                           update=update, details=details)
+                    if operation == 'escalate':
                         return self._escalation(plan, update)
-                    except InvalidBrief as error:
-                        # One correction round: the model sees why the plan was rejected and may fix it.
-                        if corrected:
-                            raise
-                        logger.warning('Escalation plan for event %s was rejected; asking for a correction: %s',
-                                       message.event_id, error)
-                        feedback, corrected = str(error), True
-                        continue
+                except PlanRejected as error:
+                    # One correction round: the model sees why the plan was rejected and may fix it.
+                    if corrected:
+                        raise
+                    logger.warning('File plan for event %s was rejected; asking for a correction: %s',
+                                   message.event_id, error)
+                    feedback, corrected = str(error), True
+                    continue
                 if operation == 'read':
                     files[plan['path']] = self.files.read(plan['path'])
                     continue
@@ -230,6 +244,8 @@ class Permissions:
             logger.warning('File plan for event %s was rejected (%s): %s', message.event_id, type(error).__name__, error)
             if isinstance(error, InvalidBrief):
                 return AgentResult(ESCALATION_FAILED, 'blocked')
+            if isinstance(error, InvalidReply):
+                return AgentResult(REPLY_FAILED, 'blocked')
             return AgentResult('The file request could not pass the local access checks. No change was applied.', 'blocked')
 
     def _escalation(self, plan: dict, update) -> AgentResult:
@@ -237,8 +253,6 @@ class Permissions:
         brief, text = plan['content'].strip(), plan['text']
         if not text.strip():
             raise InvalidBrief('Invalid heavy-task brief: text, the reply telling the requester the job has started, is empty')
-        if len(text) > REPLY_LIMIT:
-            raise InvalidBrief(f'Invalid heavy-task brief: text is {len(text)} characters; the limit is {REPLY_LIMIT}')
         if not brief:
             raise InvalidBrief('Invalid heavy-task brief: content, which holds the brief, is empty; '
                                'put the brief in content, not in details')

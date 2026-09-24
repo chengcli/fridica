@@ -23,7 +23,7 @@ from .config import Config
 from .contract import Contract, load_contract
 from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message
 from .repos import Repo, load_repos
-from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, ESCALATE_LIMIT, FILE_PLAN_SCHEMA, REPLY_LIMIT, REPORT_LIMIT,
+from .prompts import (CLASSIFICATION_SCHEMA, DEBRIEF_SCHEMA, ESCALATE_LIMIT, FILE_PLAN_SCHEMA, REPORT_LIMIT,
                       RESPONSE_SCHEMA, SUMMARY_SCHEMA, checked_details, conversation_prompt, digest_prompt, plan_prompt, truncate,
                       worker_prompt)
 from . import remote
@@ -143,7 +143,7 @@ class CLIBackend:
         """Validate a structured reply and turn it into an ``AgentResult``."""
         text = result.get("text")
         send = result.get("send", True)
-        if type(send) is not bool or not isinstance(text, str) or (send and not text.strip()) or len(text) > REPLY_LIMIT:
+        if type(send) is not bool or not isinstance(text, str) or (send and not text.strip() and not result.get("details")):
             raise BackendError("Agent returned an invalid response.")
         from .collaboration import validate
         update = result.get("update")

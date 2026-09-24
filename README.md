@@ -315,8 +315,9 @@ restart. Two headings are required:
 Prose before the first heading is for people and is never sent to the model.
 Fridica appends only the conversation data (owner, profile, task, bounded thread
 history, and the new message) plus a one-line note when a thread's session is
-being resumed. Rules that the code enforces regardless of the contract: replies
-are limited to 3500 characters, the status must be `complete`, `waiting`, or
+being resumed. Rules that the code enforces regardless of the contract: a reply
+over 7000 characters is posted in part with the full text attached as its details
+file, the status must be `complete`, `waiting`, or
 `blocked`, the sandbox and workspace roots come from `config.toml`, and Slack
 tokens never reach the agent. A contract that is missing either heading, has an
 empty section, or exceeds 64 KiB fails `fridica doctor`, and until it is fixed
@@ -812,9 +813,8 @@ recorded progress pause the task; this is a heuristic, not automatic fact
 checking. Blocked or paused threads make no further model calls or replies.
 Use **Resume** for future messages or **Close request** to stop the thread.
 Resuming a blocked thread also answers the latest message someone else posted
-while it was blocked, when that message mentions you; otherwise the dashboard says
-it was not replayed. The failed request itself is not retried, and resuming a
-paused thread replays nothing. Continuation threads share task notes and
+while it was blocked, even one an agent posted without mentioning you; the failed
+request itself is not retried, and resuming a paused thread replays nothing. Continuation threads share task notes and
 the progress counter; a no-progress pause does not create a continuation.
 
 Task notes are bookkeeping attached to a reply, never a reason to withhold it.

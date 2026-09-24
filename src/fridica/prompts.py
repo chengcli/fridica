@@ -46,7 +46,7 @@ Keep credentials, file contents and private diagnostics out of dashboard notes.
 """
 # Character limits on what the model returns. A heavy-task report may be longer than one Slack
 # message; it is posted as several consecutive thread messages.
-REPLY_LIMIT = 3500
+REPLY_LIMIT = 7000
 REPORT_LIMIT = 12000
 ESCALATE_LIMIT = 40000
 DETAILS_LIMIT = 40000
@@ -71,7 +71,7 @@ RESPONSE_SCHEMA = {
     "properties": {
         "send": {"type": "boolean"},
         "update": TASK_UPDATE_SCHEMA,
-        "text": {"type": "string", "description": "Only the final user-facing Slack answer, never internal deliberation, tool transcripts, or operational diagnostics."},
+        "text": {"type": "string", "description": f"Only the final user-facing Slack answer, never internal deliberation, tool transcripts, or operational diagnostics; at most {REPLY_LIMIT} characters. Put a longer elaboration in details."},
         "status": {"type": "string", "enum": ["complete", "waiting", "blocked"]},
         "discussion": {
             "type": "string", "enum": ["ongoing", "finished"],
@@ -109,7 +109,7 @@ FILE_PLAN_SCHEMA = {
         "operation": {"type": "string", "enum": ["read", "write", "delete", "reply", "clarify", "escalate", "unsupported", "observe"]},
         "path": {"type": "string"},
         "content": {"type": "string"},
-        "text": {"type": "string"},
+        "text": {"type": "string", "description": f"The Slack reply for reply, clarify and escalate; at most {REPLY_LIMIT} characters. Put a longer elaboration in details."},
         "details": DETAILS_FIELD,
     },
     "required": ["operation", "path", "content", "text", "update", "details"],

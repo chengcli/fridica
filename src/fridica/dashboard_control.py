@@ -160,19 +160,14 @@ def _idle(db, config, channel, thread, *, files=True):
 REPLAY_MARGIN = 0.001
 
 
-REPLAY_UNMENTIONED = ("The latest message in this thread does not mention you, so Resume cannot guarantee a reply "
-                      "to it and did not replay it. Ask in the thread to continue.")
-
-
 def _unanswered(db, config, args):
     """The thread's latest message from someone else, when a blocked task turned it away; else None.
 
     Such a message was recorded without an agent run (``blocked`` or ``before_resume``) or answered
     only with the inspection notice. The owner's own messages never trigger a reply.
     """
-    row = db.execute("SELECT event_id,timestamp,state,decision,reply_only,json_extract(payload,'$.text') AS text FROM events "
-                     "WHERE workspace=? AND channel=? AND thread=? AND json_extract(payload,'$.sender_id')!=? "
-                     "ORDER BY timestamp DESC LIMIT 1", (*args, config.owner_id)).fetchone()
+    row = db.execute("SELECT event_id,timestamp,state,decision,reply_only FROM events WHERE workspace=? AND channel=? AND thread=? "
+                     "AND json_extract(payload,'$.sender_id')!=? ORDER BY timestamp DESC LIMIT 1", (*args, config.owner_id)).fetchone()
     if row is None:
         return None
     if row['state'] == 'observed' and row['decision'] in ('blocked', 'before_resume') or row['state'] == 'sent' and row['reply_only']:
@@ -213,19 +208,17 @@ def thread_action(config, channel, thread, action, expected, cleanup_revision=No
             raise ValueError('Request controls changed. Refresh before deciding.')
         args = (config.workspace_id, channel, thread)
         current = task['control_state']
-        replayed, note = False, None
+        replayed = False
         if action == 'resume' and (current == 'paused' or current == 'active' and task['status'] == 'blocked'):
             _idle(db, config, channel, thread, files=False)
             reset_at = time.time()
-            # Resuming a blocked task answers the latest message it turned away while blocked; a paused
-            # task (loop protection) only accepts future messages. Only a mention is replayed: after the
-            # reset it always gets a reply, while other messages may be observed or ignored.
+            # Resuming a blocked task answers the latest message it turned away while blocked, marked
+            # 'resumed' so it is answered even when an agent posted it without a mention; a paused
+            # task (loop protection) only accepts future messages.
             unanswered = _unanswered(db, config, args) if current == 'active' else None
-            if unanswered is not None and f"<@{config.owner_id}>" not in (unanswered['text'] or ''):
-                unanswered, note = None, REPLAY_UNMENTIONED
             if unanswered is not None:
                 reset_at = min(reset_at, unanswered['timestamp'] - REPLAY_MARGIN)
-                db.execute("UPDATE events SET state='pending',decision=NULL,result=NULL,reply_only=0,retry_at=0,attempts=0 WHERE event_id=?",
+                db.execute("UPDATE events SET state='pending',decision='resumed',result=NULL,reply_only=0,retry_at=0,attempts=0 WHERE event_id=?",
                            (unanswered['event_id'],))
                 replayed = True
             # A resumed thread gets a fresh budget and may be wrapped up again when it reaches the limit.
@@ -262,4 +255,4 @@ def thread_action(config, channel, thread, action, expected, cleanup_revision=No
         db.execute('UPDATE tasks SET control_revision=control_revision+1 WHERE workspace=? AND channel=? AND thread=?', args)
         db.execute('INSERT INTO thread_decisions VALUES(?,?,?,?,?)', (*args, action, time.time()))
         db.commit()
-    return {'saved': True, 'action': action, 'replayed': replayed, 'note': note}
+    return {'saved': True, 'action': action, 'replayed': replayed}
