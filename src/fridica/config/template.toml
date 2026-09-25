@@ -44,10 +44,10 @@ auto_approve = []                 # command prefixes approved without asking, e.
 transport = "local"
 backends = ["claude", "codex"]
 # max_workers = 4                 # live worker processes on this machine (default 4)
-# max_jobs = 2                    # jobs running at the same time on this machine (default 2)
+# max_jobs = 2                    # jobs running at the same time (default 2); each slot gets its share of the GPUs
 
 [machines.local.workspaces]
-project = "~/project"             # an existing directory; not your home directory
+project = "~/project"             # an existing directory; each job slot works in project/worker1, worker2, …
 
 # [machines.snowy]
 # transport = "ssh"
@@ -61,6 +61,7 @@ project = "~/project"             # an existing directory; not your home directo
 # [machines.snowy.workspaces]
 # exocubed = "~/scix/repos/exocubed"
 # scratch = { path = "/data/scratch", policy = { mode = "full" } }
+# canoe = { path = "~/repos/canoe", subfolders = false }   # a single checkout: jobs share it, no worker1/worker2
 
 # [machines.dart9]
 # transport = "ssh"

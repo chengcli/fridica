@@ -214,7 +214,11 @@ V2 = """
 ALTER TABLE thread_inbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
 """
 
-MIGRATIONS: tuple[str, ...] = (V1, V2)
+V3 = """
+ALTER TABLE workers ADD COLUMN slot INTEGER NOT NULL DEFAULT 0;
+"""
+
+MIGRATIONS: tuple[str, ...] = (V1, V2, V3)
 
 
 def version(connection: sqlite3.Connection) -> int:

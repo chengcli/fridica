@@ -14,9 +14,9 @@ class Workers:
     def add(self, worker: WorkerRecord, now: float) -> WorkerRecord:
         self.db.execute(
             "INSERT INTO workers (id, session_id, machine, workspace, backend, role, ephemeral, backend_session_id,"
-            " status, summary, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " status, summary, slot, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (worker.id, worker.session_id, worker.machine, worker.workspace, worker.backend, worker.role,
-             int(worker.ephemeral), worker.backend_session_id, worker.status, worker.summary, now, now),
+             int(worker.ephemeral), worker.backend_session_id, worker.status, worker.summary, worker.slot, now, now),
         )
         return self.get(worker.id)
 
@@ -37,6 +37,9 @@ class Workers:
 
     def set_status(self, worker_id: str, status: str, now: float) -> None:
         self.db.execute("UPDATE workers SET status=?, updated=? WHERE id=?", (status, now, worker_id))
+
+    def set_slot(self, worker_id: str, slot: int) -> None:
+        self.db.execute("UPDATE workers SET slot=? WHERE id=?", (slot, worker_id))
 
     def record_result(self, worker_id: str, result: WorkerResult | None, backend_session_id: str, status: str,
                       now: float) -> None:

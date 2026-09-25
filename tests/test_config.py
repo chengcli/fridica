@@ -230,3 +230,24 @@ def test_machine_concurrency_defaults(write_config):
     """))
     box = config.machines["box"]
     assert (box.max_workers, box.max_jobs) == (4, 2)
+
+
+def test_workspace_subfolders_option(write_config):
+    config = load_config(write_config(machines="""
+        [machines.gpu]
+        host = "gpu"
+        [machines.gpu.workspaces]
+        shared = "/data/ai"
+        repo = { path = "/data/repo", subfolders = false }
+        docs = { path = "/data/docs", policy = { mode = "read-only" } }
+    """))
+    gpu = config.machines["gpu"]
+    assert gpu.workspace("shared").subfolders  # on by default for writable workspaces
+    assert not gpu.workspace("repo").subfolders and not gpu.workspace("docs").subfolders
+    with pytest.raises(ConfigError, match="subfolders need a writable"):
+        load_config(write_config(machines="""
+            [machines.gpu]
+            host = "gpu"
+            [machines.gpu.workspaces]
+            shared = { path = "/data/ai", subfolders = true, policy = { mode = "read-only" } }
+        """))

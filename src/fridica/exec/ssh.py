@@ -55,7 +55,7 @@ def quoted_path(path: PurePath) -> str:
 
 
 def remote_script(command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,
-                  timeout: float | None = None, prefix: str = "", prepare: str = "") -> str:
+                  timeout: float | None = None, prefix: str = "", prepare: str = "", create: bool = False) -> str:
     """One ``sh -c`` line: export env, cd (exit 98 if missing), and exec the command, bounded by ``timeout``.
 
     Handing a single quoted string to ``sh -c`` means the remote login shell only has
@@ -67,6 +67,8 @@ def remote_script(command: list[str], cwd: PurePath, *, env: dict[str, str] | No
         lines.append(f"export {name}={shlex.quote(value)}")
     if prepare:
         lines.append(prepare)
+    if create:
+        lines.append(f"mkdir -p -- {quoted_path(cwd)} || exit {WORKSPACE_MISSING}")
     lines.append(f"{cd(cwd)} || exit {WORKSPACE_MISSING}")
     agent = (prefix + " " if prefix else "") + shlex.join(command)
     if timeout is not None:
@@ -95,9 +97,11 @@ def watchdog(agent: str) -> list[str]:
     # "kill -SIG -PGID" without "--": dash's kill builtin rejects "--".
     stop = ('kill -{signal} -"$FRIDICA_AGENT" 2>/dev/null || kill -{signal} "$FRIDICA_AGENT" 2>/dev/null')
     return [
-        'FRIDICA_IN="${TMPDIR:-/tmp}/fridica-$$.in"',
+        'FRIDICA_IN="${TMPDIR:-/tmp}/fridica-$$.in"; FRIDICA_AGENT=',
         'rm -f "$FRIDICA_IN"; mkfifo -m 600 "$FRIDICA_IN" || exit 97',
         "trap 'rm -f \"$FRIDICA_IN\"' EXIT",
+        # A signal to the wrapper (sh runs no EXIT trap then) also stops the agent and removes the FIFO.
+        "trap '" + stop.format(signal="TERM").replace("'", "") + "; rm -f \"$FRIDICA_IN\"; exit 143' TERM INT HUP",
         f'if command -v setsid >/dev/null 2>&1; then setsid {agent} < "$FRIDICA_IN" & '
         f'else {agent} < "$FRIDICA_IN" & fi; FRIDICA_AGENT=$!',
         'exec 3<&0; cat <&3 > "$FRIDICA_IN" & FRIDICA_FEED=$!; exec 3<&-',
@@ -110,10 +114,12 @@ def watchdog(agent: str) -> list[str]:
 
 class SshTransport(Transport):
     def launch(self, command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,
-               timeout: float | None = None, confine: tuple[PurePath, ...] | None = None) -> Launch:
+               timeout: float | None = None, confine: tuple[PurePath, ...] | None = None,
+               create: bool = False) -> Launch:
         prefix = shell_words(confinement(confine, home=None)) if confine is not None else ""
         script = remote_script(command, cwd, env={**self.machine.resources.environment(), **(env or {})},
-                               timeout=timeout, prefix=prefix, prepare=prepare_script() if confine is not None else "")
+                               timeout=timeout, prefix=prefix, prepare=prepare_script() if confine is not None else "",
+                               create=create)
         return Launch(ssh_command(self.machine.host, script), None, process.scrubbed_environment(self.excluded_env))
 
     def failure(self, returncode: int, detail: str) -> str:

@@ -306,6 +306,44 @@ def test_long_lived_remote_agents_die_with_their_channel(tmp_path, shell):
 @pytest.mark.parametrize("shell", ["bash", "sh"])
 def test_a_long_lived_agent_that_exits_passes_its_status(tmp_path, shell):
     script = remote_script(["sh", "-c", "read line; echo done:$line; exit 7"], PurePosixPath(tmp_path))
-    child = subprocess.run([shell, "-c", script], input="x\n", capture_output=True, text=True, timeout=20)
+    child = subprocess.run([shell, "-c", script], input="x\n", capture_output=True, text=True, timeout=20,
+                           env={**os.environ, "TMPDIR": str(tmp_path)})
     assert (child.returncode, child.stdout) == (7, "done:x\n")
-    assert not list(Path(os.environ.get("TMPDIR", "/tmp")).glob("fridica-*.in"))
+    assert not list(tmp_path.glob("fridica-*.in"))
+
+
+@pytest.mark.parametrize("shell", ["bash", "sh"])
+def test_a_signalled_wrapper_stops_its_agent_and_cleans_up(tmp_path, shell):
+    agent_pid = tmp_path / "agent"
+    script = remote_script(["sh", "-c", f"echo $$ > {agent_pid}; sleep 300"], PurePosixPath(tmp_path))
+    child = subprocess.Popen([shell, "-c", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             env={**os.environ, "TMPDIR": str(tmp_path)}, start_new_session=True)
+    try:
+        for _ in range(50):
+            if agent_pid.exists() and agent_pid.read_text().strip():
+                break
+            time.sleep(0.1)
+        child.terminate()
+        child.wait(timeout=20)
+        time.sleep(0.5)
+        assert not list(tmp_path.glob("fridica-*.in"))
+        if Path("/proc").is_dir():
+            assert not _running(agent_pid.read_text().strip())
+    finally:
+        if agent_pid.exists():
+            try:
+                os.kill(int(agent_pid.read_text()), 9)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
+def test_slot_subfolders_are_created_before_the_agent_starts(tmp_path, fake_ssh):
+    local = make_transport(machine("local", "local"))
+    spec = local.launch(["true"], tmp_path / "ws" / "worker2", create=True)
+    assert (tmp_path / "ws" / "worker2").is_dir() and spec.cwd == tmp_path / "ws" / "worker2"
+    target = tmp_path / "remote" / "worker1"
+    completed = asyncio.run(make_transport(machine()).run(["sh", "-c", "pwd"], PurePosixPath(target), timeout=10))
+    assert completed.returncode == 98  # without create the missing folder is an error
+    script = remote_script(["pwd"], PurePosixPath(target), create=True)
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    assert result.stdout.strip() == str(target)

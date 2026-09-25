@@ -237,13 +237,20 @@ def _workspace(machine: str, name: str, value, policy: Policy, transport: str, b
     label = f"machines.{machine}.workspaces.{name}"
     if not NAME.fullmatch(name):
         raise ConfigError(f"{label}: workspace names must be lowercase letters, digits, - or _")
+    subfolders = None
     if isinstance(value, dict):
-        _keys(value, {"path", "policy"}, label)
+        _keys(value, {"path", "policy", "subfolders"}, label)
         text = value.get("path")
         if "policy" in value:
             policy = policy.override(_table(value, "policy"))
+        if "subfolders" in value:
+            subfolders = _bool(value["subfolders"], f"{label}.subfolders")
+            if subfolders and policy.mode == "read-only":
+                raise ConfigError(f"{label}: subfolders need a writable workspace")
     else:
         text = value
+    if subfolders is None:
+        subfolders = policy.mode != "read-only"  # on by default wherever jobs can write
     if not isinstance(text, str) or not text:
         raise ConfigError(f"{label} must be a path")
     if transport == "local":
@@ -255,7 +262,7 @@ def _workspace(machine: str, name: str, value, policy: Policy, transport: str, b
             raise ConfigError(f"{label}: {path} is not an existing directory")
         if path in (Path.home().resolve(), Path("/")):
             raise ConfigError(f"{label}: your home directory or / is too broad for a workspace")
-        return Workspace(name, path, policy)
+        return Workspace(name, path, policy, subfolders)
     if not (text.startswith("/") or text.startswith("~/")):
         raise ConfigError(f"{label}: remote paths must be absolute or start with ~/")
     path = PurePosixPath(text)
@@ -263,7 +270,7 @@ def _workspace(machine: str, name: str, value, policy: Policy, transport: str, b
         raise ConfigError(f"{label}: remote paths may not contain ..")
     if str(path) in ("/", "//", "~"):
         raise ConfigError(f"{label}: the remote home directory or / is too broad for a workspace")
-    return Workspace(name, path, policy)
+    return Workspace(name, path, policy, subfolders)
 
 
 def _confined(policy: Policy, resources: Resources) -> bool:

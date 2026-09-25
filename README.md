@@ -267,7 +267,7 @@ transport = "local"
 backends = ["claude", "codex"]
 [machines.laptop.workspaces]
 notes = { path = "~/notes", policy = { mode = "read-only" } }
-fridica = "~/scix/repos/fridica"
+fridica = { path = "~/scix/repos/fridica", subfolders = false }   # a single checkout: no worker1/worker2 inside it
 
 [machines.snowy]
 transport = "ssh"
@@ -344,6 +344,31 @@ Under the confinement:
 
 `resources` are declarative. They are shown to the parent and enforced as
 `OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES`.
+
+**Job slots, subfolders, and GPUs.** A machine runs up to `max_jobs` jobs at once,
+one per **slot**, and each worker keeps its slot for its whole life. The slots
+split the machine's `resources.gpus`, passed to the job as `CUDA_VISIBLE_DEVICES`:
+
+- 2 GPUs with `max_jobs = 2`: slot 1 gets GPU 0 and slot 2 gets GPU 1;
+- 4 GPUs with 2 slots: 0–1 and 2–3;
+- fewer GPUs than slots: GPUs are shared round robin.
+
+Each slot also works in its own subfolder of a writable workspace, created on
+first use:
+
+```toml
+[machines.dungeon2.workspaces]
+ai = "/data01/ai_workspace"                                  # slot 1: …/worker1, slot 2: …/worker2
+fridica = { path = "~/repos/fridica", subfolders = false }   # a workspace that is itself one checkout
+```
+
+Two concurrent jobs then never share a directory or a GPU. Subfolders are on by
+default for writable workspaces and off for read-only ones. Turn them off for a
+workspace that is a single repository checkout, where `worker1/` inside the repo
+would make no sense; jobs there share the directory. A worker whose slot is
+busy waits rather than moving to another slot, because its session (and, for
+Claude, the ability to resume it) is tied to its directory. Multi-GPU jobs need
+`max_jobs = 1`, so the single slot gets every GPU.
 
 The daemon rereads `config.toml` when it changes. A rejected edit keeps the running
 configuration. Machine changes apply to workers started afterwards.

@@ -35,11 +35,13 @@ class Transport(ABC):
 
     @abstractmethod
     def launch(self, command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,
-               timeout: float | None = None, confine: tuple[PurePath, ...] | None = None) -> Launch:
+               timeout: float | None = None, confine: tuple[PurePath, ...] | None = None,
+               create: bool = False) -> Launch:
         """Wrap ``command`` so it runs in ``cwd`` on this machine.
 
         ``confine`` lists the only directories the process may write, under Fridica's
-        bubblewrap confinement (see ``sandbox``); None runs it unconfined.
+        bubblewrap confinement (see ``sandbox``); None runs it unconfined. ``create`` makes
+        ``cwd`` first if it does not exist (a slot subfolder).
         """
 
     @abstractmethod
@@ -56,8 +58,8 @@ class Transport(ABC):
         return await process.run_once(spec.argv, stdin=stdin, cwd=spec.cwd, env=spec.env, timeout=timeout + 10)
 
     async def spawn(self, command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,
-                    confine: tuple[PurePath, ...] | None = None):
-        spec = self.launch(command, cwd, env=env, confine=confine)
+                    confine: tuple[PurePath, ...] | None = None, create: bool = False):
+        spec = self.launch(command, cwd, env=env, confine=confine, create=create)
         return await process.start(spec.argv, cwd=spec.cwd, env=spec.env)
 
 

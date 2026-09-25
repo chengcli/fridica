@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import uuid
 
@@ -82,6 +82,10 @@ class Supervisor:
         per_machine = Counter(workers[job.worker_id].machine for job in self.store.jobs.running()
                               if job.worker_id in workers)
         busy_workers = {job.worker_id for job in self.store.jobs.running()}
+        # Each running job occupies its worker's slot: its own GPUs and, with subfolders, its own directory.
+        occupied = {(workers[job.worker_id].machine, workers[job.worker_id].slot) for job in self.store.jobs.running()
+                    if job.worker_id in workers}
+        assigned = Counter((record.machine, record.slot) for record in workers.values() if record.status != "stopped")
         total = sum(per_machine.values())
         started = []
         queued = self.store.jobs.queued()
@@ -98,8 +102,21 @@ class Supervisor:
                 continue
             if job.worker_id in busy_workers or per_machine[machine.name] >= machine.max_jobs:
                 continue
+            slot = record.slot if 1 <= record.slot <= machine.max_jobs else 0
+            if slot and (machine.name, slot) in occupied:
+                continue  # its slot is busy with another worker's job; it waits rather than moving
+            if not slot:
+                free = [item for item in range(1, machine.max_jobs + 1) if (machine.name, item) not in occupied]
+                if not free:
+                    continue
+                slot = min(free, key=lambda item: (assigned[(machine.name, item)], item))
             if not self._make_room(machine.name, machine.max_workers, record.id, keep=waiting):
                 continue
+            if slot != record.slot:
+                self.store.workers.set_slot(record.id, slot)
+                assigned[(machine.name, slot)] += 1
+                record = replace(record, slot=slot)
+                workers[record.id] = record
             try:
                 self._worker(record)
             except Exception as error:
@@ -110,6 +127,7 @@ class Supervisor:
                     continue
                 self.store.workers.set_status(record.id, "running", now)
             busy_workers.add(record.id)
+            occupied.add((machine.name, slot))
             per_machine[machine.name] += 1
             total += 1
             # A thread quiet for longer than session_timeout starts its worker fresh.
@@ -149,19 +167,28 @@ class Supervisor:
     # ----- running a job -----
 
     def spec(self, record: WorkerRecord) -> WorkerSpec:
+        """How to start this worker: its machine limited to its slot's GPUs, and its slot's subfolder."""
         machine = self.config.machines[record.machine]
         workspace = machine.workspace(record.workspace)
         if workspace is None:
             raise ValueError(f"workspace {record.workspace} is no longer configured on {machine.name}")
-        return WorkerSpec(worker_id=record.id, machine=machine, workspace=workspace, backend=record.backend,
+        return WorkerSpec(worker_id=record.id, machine=machine.for_slot(record.slot),
+                          workspace=workspace.for_slot(record.slot), backend=record.backend,
                           instructions=self.instructions(record), model="", reasoning_effort="",
                           job_timeout=self.config.limits.job_timeout, idle_timeout=self.config.limits.worker_idle,
-                          excluded_env=(self.config.slack.app_token_env, self.config.slack.user_token_env))
+                          excluded_env=(self.config.slack.app_token_env, self.config.slack.user_token_env),
+                          slot=record.slot)
 
     def _worker(self, record: WorkerRecord) -> Worker:
         worker = self.live.get(record.id)
+        spec = self.spec(record)
+        if worker is not None and (worker.spec.workspace.path, worker.spec.machine.resources) != (
+                spec.workspace.path, spec.machine.resources):
+            # Its slot or the configuration changed: start a process with the new directory and GPUs.
+            self._close_later(self.live.pop(record.id))
+            worker = None
         if worker is None:
-            worker = self.live[record.id] = self.factory(self.spec(record))
+            worker = self.live[record.id] = self.factory(spec)
         return worker
 
     async def _run(self, job_id: str) -> None:

@@ -48,6 +48,13 @@ class WorkerSpec:
     job_timeout: float = 4 * 3600.0
     idle_timeout: float = 1800.0
     excluded_env: tuple[str, ...] = ()
+    slot: int = 0
+
+    @property
+    def create_cwd(self) -> bool:
+        """The workspace is a slot subfolder, created on first use."""
+        return self.slot > 0 and any(item.subfolders for item in self.machine.workspaces
+                                     if item.name == self.workspace.name)
 
     @property
     def confined(self) -> bool:

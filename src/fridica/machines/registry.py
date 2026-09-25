@@ -126,10 +126,33 @@ class Workspace:
     path: PurePath
     policy: Policy
     """Effective policy: the machine's, with this workspace's overrides applied."""
+    subfolders: bool = True
+    """Give each of the machine's job slots its own subfolder: ``<path>/worker1``, ``<path>/worker2``, …
+
+    On by default for writable workspaces (the loader turns it off for read-only ones); turn it off for a
+    workspace that is itself a repository checkout."""
 
     @property
     def writable(self) -> bool:
         return self.policy.mode != "read-only"
+
+    def for_slot(self, slot: int) -> Workspace:
+        """This workspace as seen by a job in ``slot`` (its own subfolder when ``subfolders`` is on)."""
+        return replace(self, path=self.path / f"worker{slot}") if self.subfolders and slot > 0 else self
+
+
+def slot_gpus(gpus: tuple[int, ...] | None, slot: int, slots: int) -> tuple[int, ...] | None:
+    """The GPUs a job in ``slot`` (1-based) of ``slots`` may use.
+
+    GPUs are split into contiguous, equal shares when there are enough (2 GPUs, 2 slots: [0] and [1]; 4 GPUs,
+    2 slots: [0, 1] and [2, 3]); with fewer GPUs than slots they are shared round robin.
+    """
+    if not gpus or slots <= 1 or slot < 1:
+        return gpus
+    if len(gpus) < slots:
+        return (gpus[(slot - 1) % len(gpus)],)
+    share = len(gpus) // slots
+    return tuple(gpus[(slot - 1) * share: slot * share])
 
 
 @dataclass(frozen=True)
@@ -156,7 +179,8 @@ class Machine:
     max_workers: int = 4
     """Live worker processes (running or idle) on this machine."""
     max_jobs: int = 2
-    """Jobs running at the same time on this machine."""
+    """Jobs running at the same time on this machine: its job slots, each with its own GPUs (and subfolder when
+    the workspace has ``subfolders``)."""
     slurm: Slurm | None = None
     description: str = ""
 
@@ -166,6 +190,11 @@ class Machine:
 
     def workspace(self, name: str) -> Workspace | None:
         return next((item for item in self.workspaces if item.name == name), None)
+
+    def for_slot(self, slot: int) -> Machine:
+        """This machine as seen by a job in ``slot``: only that slot's share of the GPUs."""
+        gpus = slot_gpus(self.resources.gpus, slot, self.max_jobs)
+        return self if gpus == self.resources.gpus else replace(self, resources=replace(self.resources, gpus=gpus))
 
     def payload(self, busy: int = 0) -> dict:
         """What the parent sees: names and capabilities, never filesystem paths."""
