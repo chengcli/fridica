@@ -55,6 +55,11 @@ class Threads:
         rows = self.db.all(sql + " ORDER BY updated DESC LIMIT ?", (*parameters, limit))
         return [codec.session(row) for row in rows]
 
+    def needing_attention(self) -> list[ThreadSession]:
+        rows = self.db.all("SELECT * FROM threads WHERE control='paused' OR"
+                           " (control='active' AND status='blocked') ORDER BY updated DESC")
+        return [codec.session(row) for row in rows]
+
     def with_status(self, status: str) -> list[ThreadSession]:
         return [codec.session(row) for row in self.db.all(
             "SELECT * FROM threads WHERE status=? AND control='active'", (status,))]

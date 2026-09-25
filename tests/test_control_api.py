@@ -3,6 +3,7 @@ import pathlib
 import shutil
 import tempfile
 import stat
+from dataclasses import replace
 
 import pytest
 
@@ -52,6 +53,14 @@ class Controls:
     def update_limits(self, changes):
         self.config = editor.update(self.config.path, {"limits": changes})
         return self.config
+
+    def update_parent(self, changes):
+        self.config = editor.update(self.config.path, {"parent": changes})
+        return self.config
+
+    async def instruct_thread(self, session_id, text, client_id):
+        return {"instruction_id": self.store.inbox.add(session_id, "owner_instruction", self.clock.now(),
+                                                        ref=client_id, payload={"text": text}), "queued": True}
 
 
 @pytest.fixture
@@ -151,6 +160,9 @@ def test_outbox_retry_and_machines(api):
     assert retried == {"requeued": True} and store.outbox.get("k1").state == "pending"
     snowy = next(item for item in machines if item["name"] == "snowy")
     assert snowy["busy_jobs"] == 1 and snowy["transport"] == "ssh" and "exocubed" in snowy["workspaces"]
+    assert snowy["workspace_details"][0]["name"] == "exocubed"
+    assert snowy["workspace_details"][0]["path"]
+    assert snowy["workspace_details"][0]["approvals"] in ("auto", "on-request", "untrusted", "never")
 
 
 def test_limits_patch_validates_and_rewrites_the_file(api):
@@ -168,6 +180,74 @@ def test_limits_patch_validates_and_rewrites_the_file(api):
     assert changed["limits"]["max_wait_replies"] == 9 and "max_wait_replies = 9" in controls.config.path.read_text()
     assert invalid.status == 400 and "max_wait_replies" in str(invalid) and forbidden.status == 400
     assert "[owner]" in controls.config.path.read_text()
+
+
+def test_dashboard_config_exposes_safe_settings_and_edits_parent_model(api):
+    controls, socket, _ = api
+
+    async def body(client):
+        before = await client.request("GET", "/config")
+        changed = await client.request("PATCH", "/config/parent", {"backend": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "medium"})
+        after = await client.request("GET", "/config")
+        with pytest.raises(ControlError) as invalid:
+            await client.request("PATCH", "/config/parent", {"reasoning_effort": "extreme"})
+        with pytest.raises(ControlError) as forbidden:
+            await client.request("PATCH", "/config/parent", {"timeout": 10})
+        return before, changed, after, invalid.value.status, forbidden.value.status
+
+    before, changed, after, invalid, forbidden = with_server(controls, socket, body)
+    assert before["parent"]["backend"] == "claude"
+    assert changed["parent"]["model"] == "gpt-5.6-sol"
+    assert changed["parent"]["backend"] == "codex"
+    assert after["parent"]["reasoning_effort"] == "medium"
+    assert "gpt-5.6-sol" in controls.config.path.read_text()
+    assert "app_token_env" not in str(after) and "user_token_env" not in str(after)
+    assert (invalid, forbidden) == (400, 400)
+
+
+def test_dashboard_jobs_lists_active_work_with_thread_links(api):
+    controls, socket, session = api
+    store = controls.store
+    store.jobs.add(Job("j2", "w1", session.id, "finished work"), 2.0)
+    store.jobs.finish("j2", "done", 3.0)
+
+    async def body(client):
+        return await client.request("GET", "/jobs")
+
+    jobs = with_server(controls, socket, body)
+    assert [(job["id"], job["session_id"], job["brief"]) for job in jobs] == [
+        ("j1", session.id, "brief")]
+
+
+def test_attention_threads_include_paused_and_blocked_outside_recent_page(api):
+    controls, socket, session = api
+    controls.store.threads.save(replace(session, control="paused"), 2.0)
+    for index in range(120):
+        controls.store.threads.ensure(ThreadKey("TTEAM", "CROOM", f"{index + 10}.0"), index + 10.0)
+
+    async def body(client):
+        return await client.request("GET", "/attention/threads")
+
+    items = with_server(controls, socket, body)
+    assert [item["id"] for item in items] == [session.id]
+
+
+def test_owner_instruction_validates_text_and_is_visible_in_thread_detail(api):
+    controls, socket, session = api
+
+    async def body(client):
+        created = await client.request("POST", f"/threads/{session.id}/instruct",
+                                       {"text": "Use the existing worker to check the failing test.", "client_id": "instruction-1"})
+        detail = await client.request("GET", f"/threads/{session.id}")
+        with pytest.raises(ControlError) as empty:
+            await client.request("POST", f"/threads/{session.id}/instruct", {"text": " ", "client_id": "instruction-2"})
+        with pytest.raises(ControlError) as missing:
+            await client.request("POST", "/threads/missing/instruct", {"text": "check", "client_id": "instruction-3"})
+        return created, detail, empty.value.status, missing.value.status
+
+    created, detail, empty, missing = with_server(controls, socket, body)
+    assert created["queued"] and detail["instructions"][0]["text"].startswith("Use the existing worker")
+    assert (empty, missing) == (400, 404)
 
 
 def test_client_reports_a_missing_daemon(tmp_path):

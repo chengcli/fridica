@@ -228,7 +228,7 @@ class InboxItem:
     id: int
     session_id: str
     kind: str
-    """message | worker_result | worker_interrupted | approval | control | timer"""
+    """message | worker_result | worker_interrupted | owner_instruction | approval | control | timer"""
     ref: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
     state: str = "pending"

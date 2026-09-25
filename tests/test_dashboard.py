@@ -38,6 +38,8 @@ def test_static_files_and_security_headers(config):
         assert page.status == 200 and "Fridica" in await page.text()
         assert "default-src 'self'" in page.headers["Content-Security-Policy"]
         assert (await http.get("/app.js", headers=local(http))).status == 200
+        logo = await http.get("/fridica-logo.png", headers=local(http))
+        assert logo.status == 200 and logo.content_type == "image/png"
         assert (await http.get("/secrets.txt", headers=local(http))).status == 404
         assert (await http.get("/", headers={"Host": "evil.example"})).status == 403
         assert (await http.get("/", headers=local(http, Origin="http://evil.example"))).status == 403
@@ -50,14 +52,22 @@ def test_api_requires_the_key_and_an_allowed_route(config):
         auth = local(http, Authorization="Bearer secret-key")
         response = await http.get("/api/threads?control=active", headers=auth)
         assert response.status == 200 and (await response.json())["path"] == "/threads?control=active"
+        assert (await http.get("/api/jobs", headers=auth)).status == 200
+        assert (await http.get("/api/attention/threads", headers=auth)).status == 200
+        assert (await http.get("/api/config", headers=auth)).status == 200
+        assert (await http.patch("/api/config/parent", json={"model": "gpt-5.6-sol"}, headers=auth)).status == 200
         assert (await http.get("/api/../../etc", headers=auth)).status == 404
         assert (await http.delete("/api/threads/x", headers=auth)).status == 404
         post = await http.post("/api/approvals/a1", json={"decision": "once"},
                                headers={**auth, "Origin": f"http://127.0.0.1:{http.port}"})
         assert post.status == 200
+        instruction = await http.post("/api/threads/t1/instruct", json={"text": "Check the build", "client_id": "instruction-1"}, headers=auth)
+        assert instruction.status == 200
         assert (await http.post("/api/approvals/a1", data="x", headers=auth)).status == 415
     fake = scenario(config, body)
     assert ("POST", "/approvals/a1", {"decision": "once"}) in fake.calls
+    assert ("POST", "/threads/t1/instruct", {"text": "Check the build", "client_id": "instruction-1"}) in fake.calls
+    assert ("PATCH", "/config/parent", {"model": "gpt-5.6-sol"}) in fake.calls
 
 
 def test_daemon_errors_are_passed_through(config):

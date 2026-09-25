@@ -90,6 +90,36 @@ def test_clarification_loop_pauses_after_three_questions(config, store):
     assert store.messages.verdict(store.messages.thread(session.key)[-1].event_id).startswith("observe")
 
 
+def test_local_owner_instruction_reopens_paused_thread_and_delegates_once(config, store):
+    harness = Harness(config, store, decide(
+        action("Which branch?", status="waiting"),
+        action("Running a focused check.", delegate=[delegation("Run focused checks", machine="local", workspace="project")]),
+    ))
+
+    async def body():
+        root = harness.message("<@UOWNER> check the build")
+        await harness.settle()
+        await harness.daemon.thread_action(root.key.id, "pause", "UOWNER")
+        await harness.settle()
+        first = await harness.daemon.instruct_thread(root.key.id, "Use the feature branch and run focused checks.", "instruction-1")
+        again = await harness.daemon.instruct_thread(root.key.id, "Use the feature branch and run focused checks.", "instruction-1")
+        assert first == again
+        await harness.settle()
+        assert store.threads.get(root.key.id).control == "active"
+        assert store.inbox.instructions(root.key.id)[0]["state"] == "done"
+        await harness.daemon.thread_action(root.key.id, "close", "UOWNER")
+        await harness.settle()
+        await harness.daemon.thread_action(root.key.id, "clean", "UOWNER")
+        await harness.settle()
+        assert store.inbox.instructions(root.key.id)[0]["text"] == ""
+
+    run(harness, body)
+    triggers = [data["trigger"] for kind, data in harness.llm.calls if kind == "decide"]
+    assert [item["kind"] for item in triggers].count("owner_instruction") == 1
+    assert triggers[1]["text"] == "Use the feature branch and run focused checks."
+    assert len(harness.jobs_seen) == 1 and harness.jobs_seen[0]["brief"].endswith("Run focused checks")
+
+
 def test_peer_agents_and_the_owner_do_not_trigger_replies(config, store):
     harness = Harness(config, store, decide(action("ok"), action("Answering the peer.", status="complete")))
 

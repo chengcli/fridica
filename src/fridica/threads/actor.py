@@ -106,7 +106,8 @@ class ThreadActor:
 
     async def handle(self, item: InboxItem) -> None:
         handler = {"message": self.on_message, "worker_result": self.on_worker, "worker_interrupted": self.on_worker,
-                   "control": self.on_control, "debrief": self.on_debrief}.get(item.kind)
+                   "control": self.on_control, "owner_instruction": self.on_owner_instruction,
+                   "debrief": self.on_debrief}.get(item.kind)
         if handler is None:
             self.store.inbox.finish(item.id, "dropped")
             return
@@ -144,6 +145,7 @@ class ThreadActor:
                 self.store.inbox.add(self.session_id, kind, now, ref=ref, payload=payload)
             if outcome.wipe:
                 self.store.messages.wipe(outcome.session.key)
+                self.store.inbox.wipe_instructions(self.session_id)
             session = self.store.threads.save(outcome.session, now)
             self.store.inbox.finish(item.id)
         if outcome.posts:
@@ -373,6 +375,21 @@ class ThreadActor:
                                   calls=tuple(ledger)))
 
     # ----- owner controls -----
+
+    async def on_owner_instruction(self, item: InboxItem) -> None:
+        session = self.store.threads.get(self.session_id)
+        if (session is None or session.control in ("closed", "archived", "cleaned")
+                or session.key.channel not in self.config.slack.channels
+                or self.rt.observe_only):
+            self.store.inbox.finish(item.id, "dropped")
+            return
+        session = replace(session, control="active", pause_reason="", wait_streak=0, no_progress=0,
+                          status="complete" if session.status == "blocked" else session.status)
+        trigger = {"kind": "owner_instruction", "text": item.payload["text"]}
+        ledger: list[dict] = []
+        action = await self.decide(self.context(session, trigger), session, ledger)
+        self.apply(item, session, action, turn=session.turns + 1,
+                   requester=self.config.owner.slack_user, ledger=ledger)
 
     async def on_control(self, item: InboxItem) -> None:
         session = self.store.threads.get(self.session_id)
