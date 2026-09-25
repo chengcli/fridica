@@ -43,8 +43,8 @@ auto_approve = []                 # command prefixes approved without asking, e.
 [machines.local]
 transport = "local"
 backends = ["claude", "codex"]
-max_workers = 2
-max_jobs = 1
+# max_workers = 4                 # live worker processes on this machine (default 4)
+# max_jobs = 2                    # jobs running at the same time on this machine (default 2)
 
 [machines.local.workspaces]
 project = "~/project"             # an existing directory; not your home directory

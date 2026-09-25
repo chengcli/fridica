@@ -153,8 +153,10 @@ class Machine:
     """SSH destination (an ~/.ssh/config alias or user@host); for slurm, the login host."""
     tags: tuple[str, ...] = ()
     resources: Resources = Resources()
-    max_workers: int = 2
-    max_jobs: int = 1
+    max_workers: int = 4
+    """Live worker processes (running or idle) on this machine."""
+    max_jobs: int = 2
+    """Jobs running at the same time on this machine."""
     slurm: Slurm | None = None
     description: str = ""
 

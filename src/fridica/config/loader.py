@@ -25,6 +25,7 @@ CHANNEL_ID = re.compile(r"[CG][A-Z0-9]+")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SOCKET_PATH_LIMIT = 100
 TOP_LEVEL = {"owner", "slack", "parent", "limits", "policy", "machines", "state"}
+MACHINE_DEFAULTS = {field.name: field.default for field in fields(Machine)}
 MACHINE_KEYS = {"transport", "host", "tags", "backends", "default_backend", "max_workers", "max_jobs", "policy",
                 "resources", "slurm", "description", "workspaces"}
 
@@ -194,8 +195,8 @@ def _machine(name: str, data: dict, default_policy: Policy, parent_backend: str,
     default_backend = data.get("default_backend", backends[0])
     if default_backend not in backends:
         raise ConfigError(f"{label} default_backend must be one of its backends")
-    max_workers = _integer(data.get("max_workers", 2), f"{label} max_workers", minimum=1)
-    max_jobs = _integer(data.get("max_jobs", 1), f"{label} max_jobs", minimum=1)
+    max_workers = _integer(data.get("max_workers", MACHINE_DEFAULTS["max_workers"]), f"{label} max_workers", minimum=1)
+    max_jobs = _integer(data.get("max_jobs", MACHINE_DEFAULTS["max_jobs"]), f"{label} max_jobs", minimum=1)
     if max_jobs > max_workers:
         raise ConfigError(f"{label} max_jobs cannot exceed max_workers")
     policy = default_policy.override(_table(data, "policy")) if "policy" in data else default_policy

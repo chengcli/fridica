@@ -274,8 +274,8 @@ transport = "ssh"
 host = "snowy"                       # an ~/.ssh/config alias; `ssh snowy` must work without a prompt
 tags = ["cuda", "rtx5090"]
 backends = ["codex", "claude"]       # the first is the default
-max_workers = 3                      # live worker processes on this machine
-max_jobs = 2                         # running jobs on this machine
+max_workers = 3                      # live worker processes on this machine (default 4)
+max_jobs = 2                         # running jobs on this machine (default 2)
 resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }   # GPUs turn on gpu_confine
 [machines.snowy.workspaces]
 exocubed = "~/scix/repos/exocubed"

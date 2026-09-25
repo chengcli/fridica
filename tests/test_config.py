@@ -219,3 +219,14 @@ def test_global_opt_out_of_gpu_confine(write_config, workspace, tmp_path):
         work = "/work"
     """) + "\n[policy]\ngpu_confine = false\n"
     assert load_config(write_config(text)).machines["gpu"].workspace("work").policy.gpu_confine is False
+
+
+def test_machine_concurrency_defaults(write_config):
+    config = load_config(write_config(machines="""
+        [machines.box]
+        host = "box"
+        [machines.box.workspaces]
+        work = "/work"
+    """))
+    box = config.machines["box"]
+    assert (box.max_workers, box.max_jobs) == (4, 2)
