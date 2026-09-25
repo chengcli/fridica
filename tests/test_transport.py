@@ -199,3 +199,17 @@ def test_remote_read_works_with_bsd_realpath(fake_ssh, tmp_path, monkeypatch):
     assert asyncio.run(transport.read_file(PurePosixPath(root / "notes.md"), roots=roots)) == b"# hi"
     with pytest.raises(ValueError):
         asyncio.run(transport.read_file(PurePosixPath(root / "missing.md"), roots=roots))
+
+
+def test_terminate_survives_eperm_from_killpg(tmp_path, monkeypatch):
+    """macOS returns EPERM for a process group that exited but was not reaped yet."""
+    def eperm(pid, sig):
+        raise PermissionError(1, "Operation not permitted")
+
+    async def scenario():
+        child = await process.start(["sh", "-c", "sleep 30"], cwd=tmp_path, env=dict(os.environ))
+        monkeypatch.setattr(process.os, "killpg", eperm)
+        await asyncio.wait_for(process.terminate(child, grace=0.5), 5)
+        return child.returncode
+
+    assert asyncio.run(scenario()) is not None

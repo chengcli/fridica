@@ -44,6 +44,13 @@ async def terminate(process: asyncio.subprocess.Process, grace: float = 1.0) -> 
             os.killpg(process.pid, sig)
         except ProcessLookupError:
             break
+        except PermissionError:
+            # macOS reports EPERM, not ESRCH, for a group whose members exited but were not reaped yet.
+            # Signal the child directly as a fallback; if it is gone too, just reap it.
+            try:
+                process.send_signal(sig)
+            except (ProcessLookupError, PermissionError):
+                break
         try:
             await asyncio.wait_for(process.wait(), wait)
             break
