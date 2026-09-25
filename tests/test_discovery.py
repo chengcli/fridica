@@ -4,9 +4,10 @@ import tomllib
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from fridica.cli import main
-from fridica.config import TEMPLATE
-from fridica.discovery import discover, discover_from_config, select_channels
+from importlib.resources import files
+
+from fridica.cli.main import main
+from fridica.config.discovery import discover, discover_from_config, select_channels
 
 
 class Client:
@@ -78,6 +79,9 @@ def test_channel_selection(monkeypatch):
         select_channels(channels, ["missing"])
 
 
+TEMPLATE = files("fridica.config").joinpath("template.toml").read_text()
+
+
 def test_discovery_reads_custom_token_without_valid_full_config(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
     path.write_text(TEMPLATE + '\nuser_token_env_extra = "ignored"\n')
@@ -88,7 +92,7 @@ def test_discovery_reads_custom_token_without_valid_full_config(tmp_path, monkey
         assert kwargs["token"] == "xoxp-test"
         return Client()
 
-    monkeypatch.setattr("fridica.discovery.AsyncWebClient", client_factory)
+    monkeypatch.setattr("fridica.config.discovery.AsyncWebClient", client_factory)
     assert asyncio.run(discover_from_config(path))[0] == "UOWNER"
 
 
@@ -99,14 +103,14 @@ def test_detect_cli_saves_ids_only_after_selection(tmp_path, monkeypatch):
     async def fake_discover(config_path):
         return "UOWNER", "TTEAM", [{"id": "CROOM", "name": "general"}], []
 
-    monkeypatch.setattr("fridica.discovery.discover_from_config", fake_discover)
-    assert main(["configure", "--config", str(path), "--detect", "--channel-name", "missing"]) == 1
+    monkeypatch.setattr("fridica.config.discovery.discover_from_config", fake_discover)
+    assert main(["configure", "--config", str(path), "--detect", "--channel-name", "missing"]) == 2
     assert path.read_text() == TEMPLATE
     assert main(["configure", "--config", str(path), "--detect", "--channel-name", "general"]) == 0
     values = tomllib.loads(path.read_text())
-    assert (values["owner_id"], values["workspace_id"], values["channels"]) == ("UOWNER", "TTEAM", ["CROOM"])
+    assert (values["owner"]["slack_user"], values["slack"]["workspace"], values["slack"]["channels"]) == ("UOWNER", "TTEAM", ["CROOM"])
 
 
 def test_detect_conflicting_options(tmp_path):
-    assert main(["configure", "--detect", "--owner-id", "UOWNER"]) == 1
-    assert main(["configure", "--channel-name", "general"]) == 1
+    assert main(["configure", "--detect", "--owner-id", "UOWNER"]) == 2
+    assert main(["configure", "--channel-name", "general"]) == 2

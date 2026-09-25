@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fridica"
 dynamic = ["version"]
-description = "A local personal agent connecting Slack to Claude Code and Codex"
+description = "Your Slack presence: a parent agent per person, a session per thread, and Claude Code / Codex workers on your machines"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["slack-sdk>=3.33,<4", "aiohttp>=3.10,<4", "tomlkit>=0.13,<1"]
@@ -21,7 +21,7 @@ tag-pattern = '^v(?P<version>\d+\.\d+\.\d+)$'
 git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
 
 [project.scripts]
-fridica = "fridica.cli:main"
+fridica = "fridica.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fridica"]
@@ -31,6 +31,8 @@ packages = ["src/fridica"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+pythonpath = ["tests"]
 
 [tool.ruff]
 # The pre-commit hook lints with ruff's default rules only (pyflakes and the

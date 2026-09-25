@@ -1,11 +1,8 @@
-"""Local personal agents for Slack."""
+"""Fridica: a person's Slack presence backed by Claude Code and Codex workers."""
 
 from importlib.metadata import PackageNotFoundError, version
-
-from .models import AgentBackend, AgentResult, ConversationContext, Decision, Message
 
 try:
     __version__ = version("fridica")
 except PackageNotFoundError:
     __version__ = "0+unknown"
-__all__ = ["AgentBackend", "AgentResult", "ConversationContext", "Decision", "Message"]

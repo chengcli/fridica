@@ -58,9 +58,11 @@ def make_artifacts(directory, wheel_name="fridica", source_name="fridica",
         if manifest:
             archive.writestr("fridica/manifest.yaml", "display_information: {}\n")
         if contract:
-            archive.writestr("fridica/contract.md", "## Participation\n\n## Replies\n")
+            archive.writestr("fridica/parent/contract.md", "## Participation\n\n## Replies\n")
         if repos:
-            archive.writestr("fridica/repos.toml", "[[repos]]\nname='x'\nurl='https://github.com/a/x'\ncollaborators=['o']\n")
+            archive.writestr("fridica/parent/repos.toml", "[[repos]]\nname='x'\nurl='https://github.com/a/x'\ncollaborators=['o']\n")
+        archive.writestr("fridica/config/template.toml", "")
+        archive.writestr("fridica/dashboard/static/index.html", "")
     with tarfile.open(source, "w:gz") as archive:
         if source_metadata:
             metadata = f"Name: {source_name}\nVersion: {source_version}\n".encode()
@@ -78,7 +80,7 @@ def test_verify_artifacts(tmp_path):
 @pytest.mark.parametrize("changes, error", [
     ({"manifest": False}, "Slack manifest"),
     ({"contract": False}, "agent contract"),
-    ({"repos": False}, "repository template"),
+    ({"repos": False}, "repository list"),
     ({"wheel_metadata": False}, "wheel metadata"),
     ({"source_metadata": False}, "source distribution metadata"),
     ({"wheel_name": "other"}, "name/version"),

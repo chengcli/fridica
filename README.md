@@ -1,29 +1,74 @@
 # Fridica
 
-Fridica is a local persona that connects your Slack identity to Claude Code
-or Codex. It listens in channels you choose, decides when to participate, works in
-configured project directories, and replies in Slack threads as you. Replies use
-your first-person voice, without a Fridica introduction or visible signature.
-Machine-readable metadata remains for loop protection; legacy signed messages
-are still recognized. Your own messages never trigger your agent.
+Fridica is your Slack presence. It listens in the channels you choose, as you,
+with your user token. It decides when to take part and replies in threads in your
+first-person voice. When a request needs real work, it delegates that work to
+Claude Code or Codex **workers** running on your machines: your laptop, a GPU box
+over SSH, and later a Slurm cluster.
 
-This first release runs one owner per daemon and one Slack app per owner. Anyone
-in an allowed channel can trigger workspace actions. It includes both CLI
-backends, SQLite context and task storage, clarification conversations, and loop
-limits. It does not include a shared relay, browser OAuth onboarding, MCP server,
-or automation of the Claude/Codex desktop UI.
+| Slack / infrastructure | Fridica |
+| --- | --- |
+| Workspace | **Parent agent**: your representative, one per daemon |
+| Channel | Social and routing namespace; never tied to a machine |
+| Thread | **Thread session**: goal, summary, decisions, sticky machine, repo, and branch, and its workers |
+| Delegated job | **Worker**: a Claude Code or Codex session bound to one machine and one workspace |
+| Machine | An entry in the **machine registry**: how to reach it, its capabilities, workspaces, and policy |
+
+```text
+                     Slack (Socket Mode, your user token)
+                                   │
+                         ┌─────────┴─────────┐
+                         │   parent agent    │  tool-less: triage, reply, delegate
+                         └─────────┬─────────┘
+             ┌─────────────────────┼─────────────────────┐
+        thread 1720.01        thread 1720.44         thread 1721.09     one serial actor per thread
+        ┌────┴────┐                │
+     worker A   worker B        worker C                                 compact WorkerResults flow up
+        │          │               │
+   ssh: snowy  ssh: dart9        local                                   agents run on the machine itself
+   codex app-  claude -p         codex app-server
+   server      stream-json
+```
+
+- **The thread is the unit of state.** A reply in a thread reaches that thread's
+  session, and follow-ups need not repeat "on snowy, in exocubed": the session
+  remembers.
+- **Machine state and conversation state are separate.** "Also try it on dart9"
+  adds a second worker. The snowy worker keeps its own context, files, and backend
+  session. "Fix snowy and rerun" goes only to the snowy worker.
+- **Context compaction by hierarchy.** A worker may read a hundred files and run
+  dozens of commands. It returns a small structured `WorkerResult` (summary, files
+  changed, validation, artifacts, machine state, open questions, and a Slack-ready
+  report). The parent never sees raw shell output, and Slack sees about 300 tokens.
+- **One level of delegation.** You, the parent, then workers. Workers never spawn
+  workers.
+- **Agents never construct SSH commands.** The parent names a machine, or capability
+  tags such as `cuda` or `rtx5090`, plus a workspace. The registry in `config.toml`
+  says how to reach it and what workers there may do.
+
+One daemon serves one owner with one Slack app. Anyone in a configured channel can
+talk to your Fridica. Only channels you list in `delegate_channels` (default: all
+configured channels) can start work on your machines.
 
 ## Install
 
-Use macOS or Linux with Python 3.11 or newer. Install and authenticate either
-[Claude Code](https://code.claude.com/docs/en/setup) or
-[Codex CLI](https://developers.openai.com/codex/cli) before you install fridica.
+Use macOS or Linux with Python 3.11 or newer. On the machine that runs the daemon,
+install and sign in to the CLI the parent uses:
+[Claude Code](https://code.claude.com/docs/en/setup) (default) or
+[Codex CLI](https://developers.openai.com/codex/cli). On every machine that runs
+workers, install and sign in to the backends you list for it there, on the login
+shell's `PATH`.
 
+```bash
+pip install fridica              # or: git clone … && pip install -e '.[dev]'
+fridica init                     # ~/.config/fridica/config.toml, contract.md, manifest.yaml
+```
 
 ### Sandbox dependencies on Linux
 
 Both backends run agent commands inside a [bubblewrap](https://github.com/containers/bubblewrap)
 sandbox on Linux; macOS uses the built-in `sandbox-exec` and needs nothing extra.
+Install these on **every Linux machine that runs workers**, not only the one running the daemon.
 
 | Backend | `bubblewrap` | `socat` | Notes |
 | --- | --- | --- | --- |
@@ -73,42 +118,18 @@ Codex uses the same system `bwrap`, so the profile fixes both backends.
 **3. Verify.**
 
 ```bash
-fridica doctor   # expect: PASS AI sandbox
+fridica doctor   # expect: PASS   sandbox … (bubblewrap user namespaces)
 ```
 
-`doctor` checks that the packages are present and then runs `/bin/true` inside a
-bubblewrap user namespace, so it fails with the exact `bwrap:` error when either
-step above is incomplete. `start` runs the same check and refuses to launch on
-failure. Without it, a running daemon would return the generic "I couldn't
-complete this request" reply within seconds for any request that needs a
-command. The local log records the agent's exit status and a bounded tail of its
-stderr; that diagnostic text is never sent to Slack.
-
-`init` creates `~/.config/fridica/config.toml`, without overwriting existing
-configuration, and copies two editable files beside it: `manifest.yaml` for the
-Slack app and `contract.md`, the rulebook every agent run reads (see
-[Agent contract](#agent-contract)). The repository list is shared and ships with
-the package (see [Repository list](#repository-list)). For a different location, use
-`fridica init --config /path/config.toml`.
-
-### Install via pypi
-```bash
-pip install fridica
-fridica init
-```
-
-### Install locally to an existing python virtual environment
-```bash
-git clone https://github.com/chengcli/fridica
-pip install -e .
-fridica init
-```
+`doctor` checks, on every configured machine, that the packages are present and
+then runs `/bin/true` inside a bubblewrap user namespace, so it fails with the
+exact `bwrap:` error when either step above is incomplete.
 
 ## Configure Slack
 
 Use **one Slack app per person**, with a user token for that person's account.
 Do not share tokens. Other channel members need no installation to interact with
-your running Fridica; anyone in an allowed channel can request workspace actions.
+your running Fridica; members of `delegate_channels` can start jobs on your machines.
 Separate owners must not share an app: multiple Socket Mode connections divide
 events rather than broadcasting them to every connection. See
 [Slack's Socket Mode documentation](https://docs.slack.dev/apis/events-api/using-socket-mode/).
@@ -129,11 +150,11 @@ Verify these settings before installation:
 | OAuth & Permissions → User Token Scopes | Public-channel messages | `channels:history` |
 | OAuth & Permissions → User Token Scopes | Channel information and membership checks | `channels:read` |
 | OAuth & Permissions → User Token Scopes | Send replies as your account | `chat:write` |
-| OAuth & Permissions → User Token Scopes | User-profile access included in the manifest | `users:read` |
+| OAuth & Permissions → User Token Scopes | Upload details files, figures, and PDFs to threads | `files:write` |
+| OAuth & Permissions → User Token Scopes | Display names (included in the manifest; optional) | `users:read` |
 
-`users:read` is included for user-profile access, but current mention rendering
-does not require a profile lookup. **Bot Token Scopes and bot event subscriptions
-are not used.** You do not need a public Request URL with Socket Mode.
+**Bot Token Scopes and bot event subscriptions are not used.** You do not need a
+public Request URL with Socket Mode.
 
 For **private channels**, also add these before installation:
 
@@ -151,9 +172,9 @@ Event subscriptions and their corresponding scopes are both necessary; see
 **Do not add unrelated scopes:**
 - `links:read` and `links:write` are for shared-link events and custom unfurls;
   ordinary replies containing URLs need only `chat:write`. Fridica disables unfurls.
-- File upload/download, reactions, channel administration, email, and bot mention
-  scopes are not needed for current functionality. Local workspace file access
-  is controlled by the agent, not Slack scopes.
+- File *download*, reactions, channel administration, email, and bot mention
+  scopes are not needed. What workers may touch on your machines is decided by
+  machine policies in `config.toml`, not by Slack scopes.
 - `metadata.message:read` was listed in older manifests, but Slack documents it
   as a **bot/legacy-bot scope**, not a user-token scope. Do not add a bot token just
   for this scope. Fridica still attempts to attach metadata to outgoing replies;
@@ -185,814 +206,320 @@ After changing scopes, **reinstall the app**, update the exported user token if
 Slack replaces it, and restart Fridica. Save event-subscription changes as well.
 Never commit tokens to Git or put them in an agent-accessible workspace.
 
-### 3. Configure your local identity and channels
-
-After `fridica init` and exporting your user token, detect your identity and
-choose channels from a numbered list:
+### 3. Set your identity and channels
 
 ```bash
-fridica configure --detect
-```
-
-This gets `owner_id` and `workspace_id` from Slack's
-[`auth.test`](https://docs.slack.dev/reference/methods/auth.test/) and discovers
-joined, non-archived channels using
-[`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/).
-Select channel numbers separated by commas; Fridica saves their IDs automatically.
-It never enables all discovered channels without your selection. Blank input
-cancels without changing the file. Private-channel discovery requires `groups:read`;
-if a channel-type read scope is missing, a warning explains which scope to add.
-Receiving private messages still requires `groups:history` and `message.groups`.
-Detection does not require AI setup or the app-level token and posts no messages.
-
-For noninteractive setup, select by channel **name**, not ID:
-
-```bash
+fridica configure --detect                                  # pick channels from a numbered list
 fridica configure --detect --channel-name general --channel-name my-project
+fridica configure --owner-id U123ABC --workspace-id T123ABC --channel-id C123ABC   # manual
 ```
 
-Names must uniquely match discovered channels. Repeat `--channel-name` to select
-multiple channels. Unknown names or failed discovery leave the file unchanged.
+Detection reads your identity with
+[`auth.test`](https://docs.slack.dev/reference/methods/auth.test/) and your joined
+channels with [`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/),
+using `SLACK_USER_TOKEN` only. It posts nothing. `configure` keeps the comments in
+`config.toml` and only fills in `[owner] slack_user`, `[slack] workspace` and
+`[slack] channels`.
 
-Manual ID options remain available:
+## Configure machines
 
-```bash
-fridica configure --owner-id U123ABC --workspace-id T123ABC --channel-id C123ABC
-fridica configure --channel-id C123ABC --channel-id G456DEF
-```
-
-Each option is optional, but supply at least one. Repeated `--channel-id` options
-**replace the full channel list**; omitted settings and TOML comments are preserved.
-Use `--config /path/config.toml` for a nondefault file. The command validates ID
-formats locally; it does not discover IDs, contact Slack, or change Slack permissions.
-Restart Fridica afterward. Owner/workspace IDs must match the user token, and a
-different identity needs a separate `state_path` rather than reusing old state.
-
-Edit `~/.config/fridica/config.toml`. Set `owner_id` to the member ID of the person
-who authorized the user token, `workspace_id` to the Slack workspace ID, and
-`channels` to the exact channel IDs to monitor. Use an existing local project
-directory. Choose a backend and authenticate its CLI separately from Slack.
-
-Example configuration (replace the IDs and directory):
+`config.toml` has a fixed set of tables, and unknown keys are errors. Defaults live
+in `fridica/config/schema.py`. A complete example:
 
 ```toml
-owner_id = "U123ABC"
-workspace_id = "T123ABC"
-channels = ["C123ABC"]
-workspace = "~/projects/my-project"
-additional_workspaces = []
-backend = "codex"
-profile = "I maintain the simulation package and help diagnose test failures."
-general_messages = true
-context_limit = 50
-timeout = 600
+[owner]
+slack_user = "U123ABC"
+profile = "Planetary atmospheres; maintainer of snapy and kintera."
+
+[slack]
+workspace = "T123ABC"
+channels = ["C0RESEARCH", "C0LAB"]
+delegate_channels = ["C0RESEARCH"]   # who may start jobs on your machines (default: every channel)
+general_messages = true              # consider joining without an @mention (a cheap triage call decides)
 cooldown = 60
-max_turns = 6
-resume_sessions = true
-session_timeout = 1209600
-allowed_domains = ["*"]
+
+[parent]
+backend = "claude"                   # always local and tool-less
+model = ""                           # "" = the CLI's default
+triage_model = ""                    # e.g. a cheaper model for the join-or-not decision
+default_machine = "laptop"
+
+[limits]
+max_wait_replies = 3                 # consecutive clarifying questions before the thread pauses
+max_no_progress = 3                  # acknowledgments or repeats before the thread pauses
+max_delegations_per_turn = 3
+max_workers_per_thread = 4
+max_jobs = 4                         # jobs running at once, across all machines
+job_timeout = 14400
+worker_idle = 1800                   # keep an idle worker process this long for follow-ups
+auto_resume = false                  # rerun jobs a restart interrupted, continuing their sessions
+
+[policy]                             # defaults for every machine; machines and workspaces override
+mode = "write"                       # read-only | write | full
+network = ["github.com", "pypi.org", "files.pythonhosted.org"]
+approvals = "on-request"             # never | on-request | untrusted
+approval_timeout = 1800
+auto_approve = ["pytest", "git status"]    # exact commands or "prefix …"; never with ; | & $() etc.
+auto_deny = ["rm -rf"]
+
+[machines.laptop]
+transport = "local"
+backends = ["claude", "codex"]
+[machines.laptop.workspaces]
+notes = { path = "~/notes", policy = { mode = "read-only" } }
+fridica = "~/scix/repos/fridica"
+
+[machines.snowy]
+transport = "ssh"
+host = "snowy"                       # an ~/.ssh/config alias; `ssh snowy` must work without a prompt
+tags = ["cuda", "rtx5090"]
+backends = ["codex", "claude"]       # the first is the default
+max_workers = 3                      # live worker processes on this machine
+max_jobs = 2                         # running jobs on this machine
+resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }
+policy = { gpu_confine = true }
+[machines.snowy.workspaces]
+exocubed = "~/scix/repos/exocubed"
+canoe = "/home/me/canoe"
+
+[machines.dart9]
+host = "me@dart9"                    # transport defaults to ssh
+tags = ["cuda", "gcc"]
+backends = ["codex"]
+[machines.dart9.workspaces]
+canoe = "~/repos/canoe"
+
+[machines.greatlakes]                # registered, validated, and shown to the parent; jobs fail until Slurm lands
+transport = "slurm"
+host = "greatlakes"
+slurm = { account = "me0", partition = "gpu", gres = "gpu:1", time = "04:00:00" }
+[machines.greatlakes.workspaces]
+scratch = "/scratch/me0/me"
+
+[state]
+path = "~/.local/state/fridica/state.sqlite3"
+# control_socket = "…"               # default: beside the state database, or a short runtime path
 ```
 
-### Remote working folder over SSH
+**How work is placed.** A delegation names a machine, or capability tags, plus a
+workspace and optionally a backend. The order of precedence:
 
-The working folder can live on another machine. Write the roots as
-`host:/absolute/path`, where `host` is an alias from `~/.ssh/config` (or
-`user@host`):
+1. an explicit machine;
+2. tags (preferring the thread's machine, then the least busy);
+3. the thread's sticky machine;
+4. `default_machine`.
 
-```toml
-workspace = "dart9:/mnt/data1/projects/my-project"
-additional_workspaces = ["dart9:/mnt/data1/projects/shared-lib"]
-```
+A workspace that exists on exactly one machine selects that machine. Ambiguity is an
+error listing the candidates, which the parent fixes in one repair round. The parent
+sees machine names, tags, workspace names, and load, never filesystem paths.
 
-Every per-turn run then happens on that host: the reply, the tool-less classification,
-summaries and debriefs, and the environment checks. Roots on *other* hosts, such as
-`additional_workspaces = ["dart9:/mnt/data1/projects"]` next to a local `workspace`,
-do not take part in replies at all: they make that host available to the heavy tasks
-described below, each confined to its own roots (see [Heavy tasks](#heavy-tasks)). Fridica starts each one as `ssh -T host 'cd /path && codex exec ...'` (or
-`claude -p ...`) with no PTY, feeds the prompt on stdin, and reads the structured
-result from stdout, so SSH itself is the transport and the security boundary;
-nothing listens on a port and no filesystem is mounted. Slack, the state database,
-the dashboard, and the configuration stay on the machine that runs `fridica start`.
+**Policy modes:**
 
-Requirements on the remote host:
-
-- `ssh host true` must succeed from this machine without any prompt (key
-  authentication; Fridica uses `BatchMode=yes`). Put the alias, user, and identity
-  file in `~/.ssh/config`. Fridica multiplexes all of its connections through one
-  `ControlMaster` socket (in `$XDG_RUNTIME_DIR/fridica`, or `/tmp/fridica-ssh-<uid>`),
-  so a burst of runs does not trip the server's connection limits.
-- The backend CLI must be installed and signed in **for the remote user's login
-  shell**: `ssh host 'command -v codex && codex login status'` (or
-  `claude auth status`) is what `fridica doctor` runs.
-- For Claude, `bwrap` and `socat` on the remote host (see the sandbox dependencies
-  above); for Codex, a system `bwrap` is used when present.
-- With a remote `workspace`, every other root carries a `host:` prefix too.
-  `read_only_workspaces` stay on the workspace's host. `file_access` (scoped file
-  access) covers local roots only: it is rejected with a remote `workspace`, while
-  remote roots in `additional_workspaces` simply become heavy-task hosts next to it.
-
-`fridica doctor` adds an `SSH connection` check that connects, confirms the roots are
-directories, and checks the remote OS, then runs the executable, capability, sandbox,
-and sign-in checks on the host. Each further heavy-task host gets its own
-`Heavy-task host` check covering the connection, its roots, the backend and its
-sign-in, and `bwrap` when it declares GPUs. A run that cannot reach the host is logged as an SSH
-failure (status 255) rather than an agent error. The remote agent is bounded by
-`timeout` when the host has it, so a dropped connection cannot leave it running.
-
-### Agent contract
-
-`~/.config/fridica/contract.md` holds the rules that every agent run must read
-and obey. `init` copies the packaged default there; edit it freely. The daemon
-reloads the file for each run, so changes apply to the next reply without a
-restart. Two headings are required:
-
-| Section | Sent to | Purpose |
+| `mode` | Codex worker | Claude worker |
 | --- | --- | --- |
-| `## Participation` | the tool-less classification call | when to join a conversation that did not @mention you |
-| `## Replies` | the call that does the work | voice, scope, what may be changed, how to end a thread |
-| any other `##` heading | the call that does the work, after `## Replies` | project or team rules, such as the default's `## Repo rules` |
+| `read-only` | `readOnly` sandbox | only Read, Glob, and Grep |
+| `write` | `workspaceWrite` sandbox in the workspace | edits accepted, Bash sandboxed with `network` as its domain allowlist |
+| `full` | no sandbox | no sandbox (`bypassPermissions` when `approvals = "never"`) |
 
-Prose before the first heading is for people and is never sent to the model.
-Fridica appends only the conversation data (owner, profile, task, bounded thread
-history, and the new message) plus a one-line note when a thread's session is
-being resumed. Rules that the code enforces regardless of the contract: a reply
-over 7000 characters is posted in part with the full text attached as its details
-file, the status must be `complete`, `waiting`, or
-`blocked`, the sandbox and workspace roots come from `config.toml`, and Slack
-tokens never reach the agent. A contract that is missing either heading, has an
-empty section, or exceeds 64 KiB fails `fridica doctor`, and until it is fixed
-replies are refused with the generic "I couldn't complete this request" notice
-while the reason is logged locally.
+Codex supports network access only as all or nothing, so any `network` entry gives
+Codex workers full network access. `gpu_confine = true` runs the backend with its
+own sandbox off, inside Fridica's bubblewrap confinement, which exposes `/dev` for
+CUDA. Under it:
 
-To keep the contract elsewhere, set `contract = "path/to/rules.md"` in
-`config.toml`; relative paths resolve from the config file's directory. Without
-that setting Fridica uses `contract.md` beside `config.toml` when it exists,
-otherwise the packaged default. The default's text is the previous built-in rule
-set, so upgrading without editing changes nothing.
+- only the worker's own workspace is writable;
+- the backends' settings files are bound read-only;
+- the host network is shared, because the CLI must reach its model API.
 
-### Repository list
+It requires `resources.gpus`, and it cannot be combined with `read-only`.
+`resources` are declarative. They are shown to the parent and enforced as
+`OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES`.
 
-Fridica ships one repository list for the whole team: `src/fridica/repos.toml`
-in this repository, installed as `fridica/repos.toml` and read by every agent
-run. It is the same for everyone, so **changes go through a pull request to
-`main`**; the test suite validates the file on every pull request and refuses
-unknown fields, missing names or URLs, non-https URLs, and duplicate names.
-Upgrading Fridica delivers the new list; `init` does not copy it.
+The daemon rereads `config.toml` when it changes. A rejected edit keeps the running
+configuration. Machine changes apply to workers started afterwards.
 
-```toml
-[[repos]]
-name = "snapy-cli"
-url = "https://github.com/chengcli/snapy"
-collaborators = ["Cheng Li", "Tianhao Le", "Xi Zhang"]   # first entry is the owner
-notes = "Hydrodynamic core"
-```
+## Agent contract
 
-`name`, an `https` `url`, and at least one collaborator are required; `notes`
-is optional, and names must be unique. **The first collaborator is the
-repository owner.** The agent treats the owner's word as final for that
-repository: requests from other people get the analysis or preparation they
-ask for, but merging, releasing, or changing conventions is stated as the
-owner's decision, and when a thread carries conflicting instructions the
-owner's are followed. The owner is spelled out as an `owner` field in the data
-the agent receives. Entries deliberately carry no local path:
-each person keeps checkouts wherever they like, and the agent finds the checkout
-for a chosen repository under its workspace roots by matching the git remote
-URL. Listing a repository grants no access; reads and writes still follow the
-workspace roots in `config.toml`.
+`contract.md`, next to `config.toml`, is the rulebook, and it is reread on every call.
+Only text under `##` headings reaches a model:
 
-The list is sent to the agent as data inside every classification and reply
-call, never as instructions. The contract's `## Replies` rule tells the agent
-to resolve which repository a request means by matching names and URLs and the
-requester against the collaborators, to name the chosen repository in its
-reply, and, when more than one entry could match or none does, to ask with
-status `waiting` listing the candidates instead of guessing.
-
-To try a change before opening the pull request, set `repos = "path/to/list.toml"`
-in `config.toml` (relative paths resolve from the config file's directory).
-`doctor` then reports the list as a local override. An invalid file fails
-`doctor` and blocks replies with the generic notice until fixed.
-
-### 4. Verify reception, then replies
-
-1. Run `fridica doctor`. It checks token **format** and local AI setup, not granted
-   Slack scopes. `start` checks Slack identity and channel membership.
-2. Run `fridica start --observe-only`, then send a **new** `test` message in a
-   configured channel. Expect `INFO Observed event ... in ...; no agent or delivery`.
-3. Stop with Ctrl-C and run `fridica start`. Have **another person** @mention you
-   in a new thread. Your own messages never trigger your agent.
-
-| Symptom | Check |
+| Section | Governs |
 | --- | --- |
-| `Listening as ...`, but no observed event | Enable Events, **user** event subscriptions and matching history scopes, saved changes/reinstallation, channel ID and membership, matching tokens, and no competing Socket Mode daemon |
-| Events observed, no reply | Stop observe-only mode; use another person's explicit @mention; check AI setup and local failure logs |
-| Reply says "I couldn't complete this request" within seconds | The agent process exited before doing work. Read the `WARNING Agent response unavailable` log line, which includes the agent's stderr tail, and run `fridica doctor`. See [Sandbox dependencies](#sandbox-dependencies-on-linux) |
-| `missing_scope` when sending | Confirm `chat:write` is a **User Token Scope**, reinstall, refresh the token if changed, and restart |
-| Metadata-related rejection | Inspect the exact error; adding link or unrelated scopes does not fix metadata restrictions |
-| Old event reported as failed/interrupted/ambiguous | Inspect locally; restarting does not replay agent actions or uncertain replies |
+| `## Participation` (required) | the triage call that decides whether to join an unaddressed conversation |
+| `## Replies` (required) | the parent's voice and reply rules |
+| `## Delegation` | when and how the parent delegates, fans out, follows up, and composes results |
+| `## Worker reports` | standing instructions every worker receives |
+| `## Debriefs` | the closing debrief of a finished discussion |
+| any other `##` section | given to both the parent and the workers (the packaged `## Repo rules` is an example) |
 
-Observe-only never invokes AI or sends replies. Messages sent before startup are
-not fetched. Scopes, subscriptions, membership, and workspace policy all affect
-delivery; a successful connection alone does not verify reception.
+Missing optional sections fall back to the packaged ones.
+
+## Repository list
+
+`fridica/parent/repos.toml` ships with the package and is shared by the whole team.
+Change it through a pull request. Each entry has a name, a GitHub URL, and
+collaborators; the first collaborator is the owner, and their word is final. The
+list travels to the parent and to workers as data. Workers find checkouts by git
+remote, because entries never contain local paths. `[parent] repos = "…"` overrides
+the list for local testing.
 
 ## Run
 
 ```bash
-fridica doctor
-fridica start --observe-only
+fridica doctor                      # config, contract, tokens, the parent CLI, and every machine
+fridica start --observe-only        # store messages, call nothing, post nothing
 fridica start
 ```
 
-`doctor` prints a PASS or FAIL for each local check: operating system,
-configuration, the agent contract, the repository list, each Slack token's
-format, AI executable availability, required CLI flags, sandbox dependencies,
-and AI sign-in. It runs `claude auth status` or
-`codex login status` for the configured backend without invoking a model or
-printing account details. The sandbox check confirms that the
-[sandbox dependencies](#sandbox-dependencies-on-linux) are on `PATH` and that
-bubblewrap can create a user namespace; `start` performs the same check and
-refuses to run when it fails.
-Independent checks continue after failures; checks blocked by invalid
-configuration or a missing executable show SKIP. The command exits nonzero if
-any check fails or is skipped. Sign-in status does not guarantee that a later
-model request will succeed or that credits are available. `start` verifies the Slack user
-and workspace identity and channel membership. `--observe-only` records messages
-without invoking either model or posting replies. Stop with Ctrl-C or SIGTERM.
+`doctor` checks the following without calling a model:
 
-### When to restart
+- that each SSH machine is reachable without a prompt;
+- that every workspace exists;
+- that each backend is installed, new enough, and signed in (for Codex, the app-server
+  protocol must include approvals, `turn/interrupt` and `outputSchema`);
+- the bubblewrap and socat sandbox, including user namespaces;
+- a warning when `~/.codex/config.toml` defines MCP servers, because `codex app-server`
+  cannot ignore the user config.
 
-The daemon loads its code and configuration once at startup and re-reads only a
-few files for each agent run, so what changed decides whether a restart is
-needed:
+Slack authorization and channel membership are verified by `start`.
 
-| Change | Restart needed? |
-| --- | --- |
-| `contract.md` (agent rules) | No; re-read for every run, applies to the next reply |
-| `repos.toml` (shared repository list, including an upgrade that delivers a new one) | No; re-read for every run |
-| Settings the dashboard can edit (`model`, `reasoning_effort`, `max_turns`, `max_wait_replies`, directory access) | No; the listener reloads them between requests |
-| Any other `config.toml` key: channels, identity, tokens, backend, `allowed_domains`, `resume_sessions`, `session_timeout` | Yes |
-| Fridica's own code: a `pip install --upgrade`, a `git pull` on an editable install, or any edited `.py`, `.js`, or `.html` file | Yes |
-| Sandbox packages or the AppArmor profile | No; the sandbox is set up for each run. If `start` had refused to launch because of them, simply start it again |
+## In Slack
 
-A merged and pulled branch therefore needs a restart even when the daemon is
-already running the same feature from your working tree: the process still holds
-the old modules in memory. Restart with Ctrl-C in the daemon's terminal or tmux
-pane followed by `fridica start`; no message is lost, because incoming events are
-acknowledged and stored before processing, and undelivered replies resume. The
-startup log lists earlier events that ended blocked or uncertain so you can inspect
-them; it never replays them. Slack occasionally drops a Socket Mode event even
-while connected, so besides the one-hour catch-up at startup the daemon re-reads
-the last 15 minutes of channel and active-thread history every 5 minutes, and
-the full hour again after a failed pass.
-All subcommands accept `--config PATH`; `python -m fridica` is also supported.
-
-Fridica responds to mentions of the owner and follow-ups while a task is waiting
-for clarification. Other messages pass through a separate classification call
-with tools disabled, governed by the `## Participation` section of the
-[agent contract](#agent-contract). Classification failure means silence. Set
-`general_messages = false` to disable unsolicited participation. The owner’s own
-messages supply context but never directly trigger their agent.
-
-An explicit human @mention always requests a threaded reply, even with general
-participation disabled or a cooldown active. If the thread has exhausted its
-action budget or an earlier task needs inspection, Fridica replies with a brief
-explanation without running more actions or retrying old work. This does not
-override observe-only mode, channel restrictions, duplicate suppression, or
-automated-message loop protection. Slack rejection or uncertain delivery can
-still prevent a reply; inspect the local logs rather than automatically resending.
-
-Only the structured final answer is delivered to Slack. The default contract's
-`## Replies` rules exclude internal commentary, unsolicited summaries, and tool
-transcripts from that answer;
-CLI progress and stderr are never used as reply text. Sanitized failure categories
-stay in local logs, while Slack receives a short actionable notice. This output
-boundary does not guarantee that a model will never put unwanted prose in its final
-answer. Known participant IDs in reply prose become Slack mentions, displayed as
-people's names (and potentially notifying them); code and URLs are preserved.
-No additional scopes are required for mention rendering. Closing answers
-(`complete` or `blocked`) are instructed not to @mention anyone; they should omit
-direct address or use plain names. Mentions are reserved for `waiting` replies
-that need someone's response. Built-in blocker notices do not mention anyone.
-
-Replies stay in their original thread. Each thread has a persistent six-turn
-default budget (`max_turns`). When the last allowed reply has been delivered,
-Fridica wraps the thread up: it posts a short stop notice in the thread, asks the
-agent for a summary of the whole discussion (a tool-less call governed by the
-contract's `## Thread summaries` section), posts that summary as a new top-level
-message in the channel, and prepares the new thread with a fresh turn budget and
-the old thread's session so the work continues with full context. The summary
-post @mentions nobody, so the new thread only continues when a person replies
-to it; two agents cannot chain threads indefinitely. The exhausted thread stays
-paused (visible in the dashboard with the reason and the new thread's
-timestamp) and later mentions there are recorded but not answered. If the
-summary cannot be produced or posted, the stop notice says so, the failure is
-logged, and nothing is retried automatically.
-
-Every reply also carries the agent's judgement of whether the discussion is
-finished: the original request resolved, every action item raised in the thread
-done or explicitly handed off, and nobody waiting on anyone. When a delivered
-reply says `finished` (only possible with status `complete`), Fridica asks the
-agent for a debrief (a tool-less call governed by the contract's `## Debriefs`
-section) and posts it as a new top-level channel message headed "Debrief: this
-discussion is finished." It names people plainly and @mentions nobody. A thread
-is debriefed once per finish; if the conversation continues afterwards, a later
-finished reply produces a fresh debrief. A finished thread that is also at its
-turn limit gets the debrief instead of the continuation summary. A failed
-debrief is logged and not retried.
-Generated messages initiate responses only when explicitly addressed or following
-an active task. A per-channel cooldown limits unsolicited replies. Other agents'
-metadata is a loop-control hint, not an authorization credential.
-
-Messages from other people's Fridica instances arrive as that person's own
-messages. If their Slack app also has a bot user, Slack adds a `bot_id` to the
-user-token post; Fridica still accepts it because the `user` field names the
-sender. Only messages without a `user` (true bot posts) and edits, joins, and
-other subtypes are ignored. When an ignored event @mentions you, the daemon logs
-a warning naming the event and the fields that caused the rejection so a missing
-reply can be traced without reading Slack.
-
-### Continuity between turns
-
-With `resume_sessions = true` (the default), each Slack thread maps to one
-backend session. The first reply in a thread starts a session (`claude
---session-id` or a persisted `codex exec` thread) and Fridica stores its
-identifier with the thread's task. Later turns resume it with `claude --resume`
-or `codex exec resume`, so the agent keeps its own reasoning, tool results, and
-file knowledge instead of re-reading the workspace from scratch. The bounded
-Slack history is still sent as reference, with the new message marked as the
-only new input. Classification calls remain stateless.
-
-A stored session is resumed only while the thread stays active. After
-`session_timeout` seconds without a reply in that thread (default `1209600`,
-two weeks), the next turn starts a fresh session and stores its identifier; set
-`0` to never resume. If the backend reports that a stored session no longer
-exists (for example after the provider's session files were removed), Fridica
-logs it and starts a fresh session for that thread. Other failures are not retried. Resumed turns use the
-same sandbox, permission, and workspace settings as new ones; for Codex, the
-`resume` subcommand receives the equivalent `-c` settings because it lacks the
-`--sandbox` and `--add-dir` flags. Set `resume_sessions = false` to return to
-one ephemeral session per reply.
-
-## Workspace authority
-
-By default (`file_access = true`) the agent works on the local roots through scoped
-file operations (see [Scoped file access](#scoped-file-access)); heavy tasks then run
-only on remote hosts. With `file_access = false`, or with a remote `workspace`, the
-selected agent instead reads, edits, and runs commands using its provider-supported
-sandbox in the configured workspace roots. Task-command network access follows
-`allowed_domains`, which defaults to every host (see
-[Network access](#network-access)). Provider API access is still needed to run the model. Claude requires
-its [sandbox dependencies](#sandbox-dependencies-on-linux). Fridica does
-not enable bypass-permission flags or automatically approve broader access.
-Claude enables native Edit and Write tools in `acceptEdits` mode for the workspace
-and `additional_workspaces`, alongside sandboxed Bash for file operations such as
-renaming or deleting files. Classification still has no tools. Codex continues to
-use its `workspace-write` sandbox. No blanket permission-bypass flag is enabled.
-OS file permissions, managed policies, and provider-protected paths still apply;
-this does not grant administrator access or unrestricted writes outside the roots.
-Blocked actions require local intervention; there is no remote approval UI.
-Inside a run, Claude may attempt calls the policy forbids, such as network
-access or a write outside the roots; the CLI denies each one, tells the model,
-and the model continues. The reply is still delivered, the contract requires it
-to say what it could not do, and the local log lists every denied call with its
-tool and target (command or path, never file contents) so you can widen access
-deliberately. Codex enforces the same policy inside its own sandbox.
-
-Only grant access to project directories you intend Slack participants to use.
-The provider sandboxes may permit reads beyond writable project directories and
-use temporary files; Fridica does not claim complete filesystem read isolation.
-Managed provider settings and project instructions remain part of the execution
-environment. Slack tokens are removed from agent subprocess environments, but
-do not store credentials in project files accessible to the agent.
-
-Fridica supplies its own bounded conversation history for each invocation and,
-with `resume_sessions`, resumes only sessions it created; existing desktop
-conversations are not imported. The optional `model` setting
-is passed to the selected provider. No model name or paid API key is required by
-Fridica itself; each CLI uses its own authentication and billing.
-
-### Heavy tasks
-
-Per-turn replies are one short CLI run each. With `heavy_tasks = true`, the reply
-agent may decide that a request needs long-running or hardware-heavy work (a full
-build, a long test suite, a GPU or multi-core job) and hand it to a **persistent
-worker** instead of doing it in the turn: it returns a self-contained brief in the
-structured reply's `escalate` field, names the host in `escalate_host`, and tells the
-requester that the job has started. Fridica then runs the brief on that host, locally
-or over SSH, and posts the worker's report as a follow-up message in the same Slack
-thread when it finishes.
-
-**Hosts.** Every host that owns a root is a candidate: the workspace's own host
-(`local`, or its SSH alias) and every other alias among `additional_workspaces`. With
-`file_access = true` the local roots stay under scoped file access and are not a
-candidate, so at least one remote root is required and the reply agent hands work off
-with the planner's `escalate` operation (host name in `path`, brief in `content`). The
-agent sees each host's roots and `[resources.<host>]` hardware as data and picks the
-one the job needs; a worker on a host can only write inside that host's roots, and it
-starts in the first root listed for that host. With a local `workspace` and
-`additional_workspaces = ["dart9:/mnt/data1/projects"]`, replies run on this machine
-and a GPU job runs on dart9 inside `/mnt/data1/projects`. A host the agent names that
-is not configured falls back to the first candidate: the workspace's own host, or the
-first remote host under `file_access`.
-
-- With Codex the worker is `codex app-server`, a long-lived process speaking JSON-RPC
-  over JSONL on stdin/stdout (OpenAI marks the command experimental). Fridica sends
-  `initialize`, `thread/start` (or `thread/resume` for a thread it created earlier),
-  and one `turn/start` per job, and reads the final agent message when the turn
-  completes. With Claude it is `claude -p --input-format stream-json --output-format
-  stream-json` with the same sandbox, permission, and tool flags as task runs.
-- The worker keeps the per-turn policy: workspace-write sandbox, network access only
-  when `allowed_domains` lists hosts, and no approvals (a host that declares GPUs is
-  confined differently; see GPU access below). Fridica has no approval UI, so
-  any approval request from the agent is declined and logged. One difference for
-  Codex: `codex app-server` has no `--ignore-user-config`, so the owner's
-  `~/.codex/config.toml` on the working host, including any MCP servers it defines,
-  applies to heavy jobs (the feature switches Fridica passes still turn off apps,
-  plugins, hooks, browser and computer use). Keep that file minimal on a host that
-  runs heavy tasks.
-- One worker per Slack thread. The process stays alive between jobs and exits after
-  `heavy_task_idle` seconds without work (default `1800`); the backend thread it
-  created is remembered in the state database, so the next job in that Slack thread
-  resumes it in a fresh process. A job is bounded by `heavy_task_timeout` seconds
-  (default `14400`, four hours). While a job runs, the reply agent sees
-  `worker.state = "running"` in its data and answers progress questions itself; a
-  second brief is ignored until the first finishes.
-- A failed or timed-out job posts a short notice in the thread and is not retried. A
-  job cut off by restarting Fridica is reported as interrupted on the next start and
-  is not resumed automatically.
-- Anyone in an allowed channel can trigger hours of compute this way, which is why
-  the setting is off by default. `fridica doctor` checks that the backend provides
-  `codex app-server` or `--input-format stream-json`.
-
-Declare the hardware heavy tasks may use per host, `[resources.local]` for this
-machine and `[resources.<alias>]` for each SSH host among the roots (a plain
-`[resources]` table describes the workspace's host):
-
-```toml
-[resources.dart9]
-cpus = 8                          # sets OMP_NUM_THREADS for the worker
-gpus = [0, 1]                     # device indices; sets CUDA_VISIBLE_DEVICES ([] = no GPU)
-gpu_type = "NVIDIA A100 80GB"
-memory_gb = 128
-notes = "Jobs longer than 10 minutes go through Slurm: srun --gres=gpu:1."
+```text
+#research
+Alice:   @you compare this branch on snowy and dart9
+  you:   Starting on both machines; I'll post the numbers here.          ← parent delegates two jobs
+  you:   snowy (RTX 5090): 1.82 s/step. dart9: 2.34 s/step. The gap is   ← one reply once both finish
+         the device init path; details attached.
+Alice:   can you fix snowy and rerun?
+  you:   On it.                                                           ← only the snowy worker, same session
+  you:   Fixed the device selection order; 18/18 tests and the 2-GPU run pass.
 ```
 
-The table is sent to the reply agent and to the worker as data, so the agent can
-judge what a request needs, and the worker process is started with matching
-`OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES` (exported through SSH for a remote
-host). Nothing is measured or enforced beyond those variables; the notes are the
-place for site rules such as a batch scheduler.
+- **@mentions** always get a reply. Unaddressed messages go through a cheap triage
+  call when `general_messages` is on, limited by a per-channel cooldown. Follow-ups
+  in a thread you are already part of are triaged too.
+- **Clarification.** A reply with status `waiting` addresses the requester, and
+  their next message is answered without a mention. `max_wait_replies` consecutive
+  questions pause the thread.
+- **Results.** Delegations made in one turn form a group. The parent writes one
+  reply when all of them finish, and says when workers disagree. A single finished
+  job's `report` is posted directly with no second parent call. Figures and PDFs
+  a worker lists are uploaded after the reply. Long replies keep an executive
+  summary in the thread and attach the rest as a Markdown file.
+- **No turn limit.** A thread can go on as long as people keep talking to you.
+  Runaway exchanges are stopped by the loop protections below instead: clarifying
+  questions (`max_wait_replies`) and turns without progress (`max_no_progress`)
+  pause the thread, and the dashboard or `fridica threads ID resume` restarts it.
+- **Debrief.** When the parent marks a discussion finished, a debrief is posted to
+  the channel.
+- **Several owners' Fridicas in one thread.** Every post carries metadata:
+  `{owner, session, turn, status, kind}`, plus `task_id` for older versions. A
+  peer's finished reply or debrief is ignored unless it addresses you, and a
+  thread pauses after repeated questions or turns without progress, so agents
+  cannot talk to each other forever.
+- Your own messages never trigger your agent. The echo of Fridica's own posts is
+  recognized and stored as history.
 
-**GPU access.** Both backends sandbox commands with bubblewrap, whose minimal `/dev`
-hides the GPU device nodes: inside their sandbox `nvidia-smi` cannot reach the driver
-and CUDA finds no device. Declaring `gpus` for a host therefore makes its heavy worker
-run inside **Fridica's own bubblewrap** instead: `/dev` is bound in full so CUDA works,
-the whole filesystem is visible read-only, and writes are allowed only in that host's
-designated roots, a private `/tmp`, and the backend's own state directory (whose
-settings and hook files stay read-only, so a job cannot plant anything that would run
-outside the confinement later). The backend's sandbox is turned off inside (Codex
-threads use `danger-full-access`, Claude runs with its sandbox disabled and Bash
-allowed) because Fridica's wrapper already confines the process. The wrapper shares
-the host's network: the CLI itself must reach the model API, and bubblewrap cannot
-separate that from the commands the job runs, so `allowed_domains` does not restrict a
-GPU worker's commands. Configured roots should be real directories rather than
-symlinks. This needs `bwrap` on that host and Linux; `fridica doctor` checks both. The
-per-turn replies keep their normal sandbox, and the reply agent is told that GPU work
-must be escalated to a GPU host. `CUDA_VISIBLE_DEVICES` still limits the devices. Set
-`gpu_access = false` for a host to keep the backend's sandbox there (and lose GPU
-access), or leave `gpus` out.
+## Approvals
 
-### Network access
-
-By default (`allowed_domains = ["*"]`) commands the agent runs may reach any host.
-With an empty list, `git fetch`, `pip install`, and similar calls are denied inside
-the run, the model is told, and the reply says what it could not do. To allow only
-specific hosts, list them:
-
-```toml
-allowed_domains = ["github.com", "*.pypi.org"]
-```
-
-Entries are host names, optionally with a leading `*.` wildcard, and are
-lower-cased. A single `"*"` entry allows every host, which is full internet
-access for task commands. They apply only to task runs; classification never has network
-access, and the model's own API traffic is unaffected. Restart the daemon after
-changing the list.
-
-| Backend | Effect of a non-empty list |
-| --- | --- |
-| Claude | The sandbox proxy admits outbound requests to the listed hosts only; anything else is denied inside the run. Traffic must pass through the proxy, so HTTPS remotes are the reliable choice; SSH remotes generally do not connect from inside the sandbox. |
-| Codex | Codex cannot filter by host, so any entry enables full network access for Codex task commands (`sandbox_workspace_write.network_access=true`). |
-
-Network access lets a Slack request send workspace contents to the listed hosts
-and fetch code from them. List only hosts you trust, keep credentials out of the
-workspace roots, and remember that anyone in an allowed channel can trigger a
-run. Leave the list empty to keep the previous behavior.
-
-### Scoped file access
-
-`file_access = true` replaces native agent tools with checked file operations on the
-local roots. It is the default whenever `workspace` is local. Remote roots in
-`additional_workspaces` are unaffected: they host heavy tasks with the agent's native
-tools, confined to their own roots. A config that enables `heavy_tasks` without any
-remote root leaves the local roots as the only place to run them, so it either falls
-back to the native tools when `file_access` is left out, or fails when it is set
-explicitly.
-
-```toml
-file_access = true
-workspace = "/absolute/path/project/docs"
-additional_workspaces = []
-read_only_workspaces = ["/absolute/path/project/data"]
-```
-
-`workspace` and `additional_workspaces` are the maximum writable roots.
-All listed roots are readable, including their descendants; read-only roots
-always take precedence. Unlisted paths are refused. Keep the config, contract,
-state database, credentials, and Fridica's installed code outside these roots.
-Symlinks, hard links, special files, parent traversal, and `.git`, `.codex`,
-`.claude`, `.ssh`, and `.env` components are refused. Denials also cover case
-and Unicode normalization aliases, conservatively on case-sensitive systems.
-
-| Level | Operation | Authorization |
-| --- | --- | --- |
-| L0 | Read a listed text file | Automatic |
-| L1 | Create or replace a text file | Local approval, or a matching active sender/channel/path grant |
-| L2 | Delete a text file | New local approval for that exact request, every time |
-
-The model proposes operations with native tools disabled. The controller checks
-paths and permissions, saves the exact change in SQLite, then applies it. An
-existing file must match the content supplied to the model and the content
-reviewed locally. Writes use an atomic replacement; interrupted operations are
-never rerun automatically. Revocation affects operations not yet claimed for
-execution, and does not undo completed changes.
-
-Manage requests from a local terminal or ask your Desktop agent to run these
-commands after reviewing the request. No Slack message can approve or grant
-access. Commands work while the daemon is running and return JSON:
-
-```sh
-fridica permissions status
-fridica permissions status REQUEST_ID       # includes before and proposed contents
-fridica permissions approve REQUEST_ID
-fridica permissions reject REQUEST_ID
-fridica permissions grant --sender U123ABC --channel C123ABC --path /absolute/path/project/docs --ttl 3600
-fridica permissions revoke GRANT_ID
-```
-
-Each command accepts `--config PATH`. Omit `--ttl` for a grant that lasts until
-revoked. A grant permits L1 writes only; it cannot widen the configured roots or
-permit deletion. Approve an already pending request separately after reviewing it.
-Approved changes run when the daemon next processes its local
-queue, and results go back to the original Slack thread. Delivery retries reuse
-the saved result. Root changes require a daemon restart. Desktop remains a
-local control client; this does not attach a CLI session to a Desktop task.
-
-This first version supports UTF-8 text files up to 64 KiB, existing parent
-directories, and one write or deletion per request. It does not execute shell
-commands, tests, merges, deployments, arbitrary sends, or directory operations.
-The model gets up to eight planning calls per message, each stateless; this mode
-does not resume native workspace sessions. With `heavy_tasks`, a planning call may
-instead return `escalate`, which starts a persistent worker on a remote host exactly
-as in the native mode; the local roots are never touched by that worker. File contents passed to the model
-and before/after contents saved in SQLite may be private: only allow projects
-appropriate for the selected channel, and protect the database accordingly.
-
-Codex planning uses a named permissions profile that grants only minimal runtime
-reads and reads of its temporary invocation directory, with no command network
-access. It requires a CLI supporting named permissions and `--strict-config`;
-unsupported configuration fails instead of falling back to workspace mode.
-Claude planning uses its existing empty tool list. The provider CLI and local
-controller remain trusted processes with their normal authentication/runtime
-access; this is not isolation from a compromised CLI or another process running
-as the same OS user. No additional model API or billing fallback is introduced.
-
-## Local dashboard
-
-The optional monitor runs separately from the Slack listener and makes no model
-calls. Start it in another terminal:
-
-```sh
-fridica dashboard --config ~/.config/fridica/config.toml --port 8877
-```
-
-Open http://127.0.0.1:8877. Add `--allow-approvals` to enable local controls.
-The terminal prints the path to a private `.dashboard-key` file; enter its
-contents under **Settings → Local approvals**. The key rotates on restart.
-Keep the monitor local: read-only views expose Slack history and paths, and
-recognized-token masking is not a general secret detector.
-
-- **Inbox / Requests:** review tasks, conversations and file proposals; approve
-  or reject an exact diff in managed file-access mode. The listener applies the
-  decision and reports to Slack. Changed files require a fresh proposal.
-- **Projects & access:** edit managed directories and per-person write grants.
-  Repository labels do not grant access; grants do not permit deletion, Git
-  commands or external actions.
-- **Settings:** edit model, effort and conversation limits. Changes apply between
-  requests. Channel, identity, credentials and backend require a config edit
-  and restart. Configuration editing needs the `--config` path used above.
-- **Activity:** archive older entries by date or restore them. Archiving hides
-  entries from Current; it does not delete history or reclaim disk space.
-
-The page refreshes while visible; auto-refresh can be disabled. Closing a tab
-leaves services running. **Stop monitor** stops only the monitor.
-
-### Task context and corrections
-
-**Task & handoff** shows the repository, assignee, next step and blockers.
-Repositories come from the shared `repos.toml`; changing that list requires a
-PR and package upgrade. Task ownership does not grant access.
-
-Claims link to source messages and remain unverified reports. Under
-**Correct task or conclusion**, record a replacement and its evidence. Local
-corrections take precedence over model updates and keep an audit trail. Saving
-requires the local key, a current revision and no related operation in flight;
-it neither grants permissions nor resumes execution.
-
-Acknowledgments and repeated replies can stay silent. Three turns without
-recorded progress pause the task; this is a heuristic, not automatic fact
-checking. Blocked or paused threads make no further model calls or replies.
-Use **Resume** for future messages or **Close request** to stop the thread.
-Resuming a blocked thread also answers the latest message someone else posted
-while it was blocked, even one an agent posted without mentioning you; the failed
-request itself is not retried, and resuming a paused thread replays nothing. Continuation threads share task notes and
-the progress counter; a no-progress pause does not create a continuation.
-
-Task notes are bookkeeping attached to a reply, never a reason to withhold it.
-Before a note is recorded, each field the model produced is checked and, where
-it cannot be salvaged, dropped: a repository name is matched to the shared list
-ignoring case, an assignee may be a member ID, a `<@ID>` mention, or a display
-name that the dashboard's name cache maps to exactly one member who has posted
-in the channel, and a claim must be an exact excerpt of a message in the task.
-Every drop or correction is logged locally with the event ID and reason, the
-reply is delivered unchanged, and the thread stays answerable. Only the fields
-that pass are saved. Before this rule, a display name in the assignee field
-replaced the whole reply with a "task update could not be validated" notice and
-blocked the thread.
-
-### Cleanup
-
-Archive a finished or closed request, then use **Preview cleanup** to clear
-its stored messages, proposals and shared task notes. Related continuations
-must first be closed or archived. Cleanup is irreversible; deduplication IDs
-and decision records remain. It does not delete project files, Slack messages,
-CLI transcripts or backups, and is not a secure erase of SQLite journals.
-
-## Local state and recovery
-
-State defaults to `~/.local/state/fridica/state.sqlite3`; override `state_path`
-with an absolute path outside agent workspaces. It contains message text,
-task results, and delivery state, so treat it as private local data. A file lock
-prevents two processes from opening the same state database. Context sent to the
-model is bounded; stored history remains until local cleanup. There is no
-historical Slack backfill on startup.
-
-Incoming events are persisted before acknowledgment. Agent runs are serialized,
-and their results are saved before Slack delivery. Rate-limited replies retry
-without rerunning the agent. Interrupted executions and uncertain deliveries
-are not retried automatically because file changes or Slack posts may already
-have occurred. Startup logs their event IDs. Inspect them locally:
+With `approvals = "on-request"` or `"untrusted"`, a worker's request for something
+outside its policy is routed to you. For Codex these are commands, file changes,
+and extra permissions from the app-server protocol. For Claude, they are tool calls
+outside its allowlist, through the stream-json control protocol. The request works
+the same over SSH. While it waits, the job holds its machine slot.
 
 ```bash
-sqlite3 ~/.local/state/fridica/state.sqlite3 \
-  "SELECT event_id,state FROM events WHERE state IN ('interrupted','ambiguous','failed','blocked');"
+fridica approvals                     # pending requests
+fridica approvals a1b2c3 once         # or: session | deny
 ```
 
-Check the workspace and Slack thread before requesting work again in a new
-thread. Restarting cannot guarantee exactly-once execution across an external
-agent, filesystem, and Slack. Raw subprocess output and Slack tokens are not
-logged. Stop the daemon and use a separate state database when changing owner.
+`auto_approve` and `auto_deny` prefixes decide simple commands without asking.
+Anything containing shell control characters always asks. After `approval_timeout`
+the request is denied and the worker continues without it. Interrupting a job
+denies its pending request at once.
 
-When `resume_sessions` is enabled, the providers also keep their own transcripts
-on disk: Claude under `~/.claude/projects/` and Codex under `~/.codex/sessions/`.
-They contain the Slack text Fridica sent and the agent's tool activity, so treat
-them like the state database. Removing them is safe; the next turn in an affected
-thread starts a new session. Setting `resume_sessions = false` stops new
-transcripts from being written.
+## Dashboard and CLI
 
-## Python interfaces
-
-`fridica.models` defines `Message`, `ConversationContext`, `Decision`,
-`AgentResult`, `AgentBackend`, and `Transport`. `fridica.replica.Replica` combines
-configuration, storage, a backend, and a transport and owns the rules of
-engagement. `fridica.agents` holds the Claude and Codex backends; they build on
-`fridica.runner` (bounded subprocess execution with a scrubbed environment),
-`fridica.prompts` (structured-output schemas and prompt composition), and
-`fridica.checks` (the local environment checks used by `doctor` and `start`). Alternative backends implement
-`async classify(message, context)` and `async respond(message, context)`;
-transports implement `async send(message, result, task_id, turn)` and return the
-confirmed message timestamp. Backend responses contain `text` and a status of
-`complete`, `waiting`, or `blocked`. `fridica.contract.load_contract(path)`
-parses an agent contract into its `participation` and `replies` sections;
-custom backends should send the matching section as their instruction.
-
-## Validate
+The daemon serves a control API on a Unix socket that only you can open (mode 0600).
+The CLI and the dashboard both use it and never write the database.
 
 ```bash
-python -m pytest
+fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
+fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
+fridica dashboard --port 8765           # prints http://127.0.0.1:8765/#key=…
+```
+
+The dashboard shows:
+
+- **Overview:** what needs attention.
+- **Threads:** summary, decisions, messages, workers and jobs, plus resume, pause,
+  close, archive and clean.
+- **Workers:** interrupt or stop a worker.
+- **Approvals:** allow once, allow for the session, or deny.
+- **Machines:** load and live processes.
+- **Activity:** the audit log.
+
+It listens on 127.0.0.1 only, rejects cross-origin requests, and requires the
+printed key for every API call.
+
+## State, recovery, and guarantees
+
+The daemon owns a single SQLite database. `fridica/store/schema.py` is the only
+module that runs DDL, and migrations are versioned.
+
+- **Persist before acknowledging.** A Slack event is stored, together with its
+  thread and inbox row, before Socket Mode is acked. A catch-up pass re-reads the
+  last hour at start, and the last 15 minutes every 5 minutes.
+- **One serial actor per thread, threads in parallel.** An inbox item's effects
+  commit in one transaction: posts, jobs, workers, session changes, and parent-call
+  records. A crash either retries the item from scratch or leaves it fully applied.
+- **Every post goes through the outbox**, including notices, reports, debriefs,
+  and uploads. Each has an idempotency key, and posts go out in order
+  within each thread.
+  - A rate limit reschedules the post.
+  - A rejection fails it.
+  - An unknown outcome (5xx, a dropped connection) marks it `ambiguous`, which is
+    never resent automatically.
+  - Posts that depend on a failed one are marked `blocked`, where you can see them.
+- **Restart recovery:**
+  - Jobs that were running become `interrupted`, and their thread is told.
+    `auto_resume` reruns them once, continuing their sessions.
+  - Pending approvals expire.
+  - Posts that may have been sent become `ambiguous`.
+- A second daemon on the same database is refused. The database is bound to one
+  Slack identity.
+
+## Security model
+
+- Slack tokens are removed from every agent's environment. The parent has no tools.
+- Workers run under their backend's sandbox, or Fridica's bubblewrap for
+  `gpu_confine`, with per-workspace policy.
+- A writable local workspace may not contain Fridica itself, `config.toml`, or the
+  contract.
+- Links are followed only into configured channels, so nobody can make Fridica read
+  a channel they cannot read.
+- Workers' artifacts are read only from inside their workspace, with symlinks
+  resolved, and must match their declared type (PNG, PDF, or UTF-8 Markdown).
+- Message text, notes, linked messages, and worker results are passed to models as
+  data, marked untrusted.
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+python -m pytest -q                   # no network; fake Slack, fake claude/codex/ssh/bwrap executables
 node --test tests/dashboard.test.cjs
-python -m build --no-isolation
-fridica --help
-python -m fridica --version
+ruff check src tests
 ```
 
-Before opening a pull request, run the contributor hooks once over the whole tree:
+The architecture is described in [`docs/architecture.md`](docs/architecture.md).
 
-```bash
-python -m pip install pre-commit
-pre-commit run --all-files   # or `pre-commit install` to run them on every commit
-```
+**Continuous integration** (`.github/workflows/ci.yml`) runs pytest and the node
+test on Ubuntu and macOS, and builds and checks the wheel.
 
-They check file hygiene (whitespace, file endings, merge markers, valid TOML, YAML
-and JSON, leftover debugger calls) and lint with ruff's default rules as configured
-in `pyproject.toml`; no formatter is applied.
-
-Frontend regression tests use Node 22 or later and its built-in test runner, with no npm dependencies.
-Tests use fake Slack clients and fake agent processes and require no tokens or
-live model calls. For a live smoke test, select one test channel and an empty
-project directory, run `doctor`, then run `start --observe-only`. Have another
-member post a message and verify the observation log. Restart normally and ask
-that member to mention you with a request to create a small text file. Check the
-file and threaded reply. Request a file without specifying its location
-to exercise clarification, then try a request outside configured write roots to
-verify blocked behavior. Repeat with the other backend. Live tests can consume
-provider credits and require your Slack installation and CLI login.
-
-## CI, releases, and deployment
-
-The workflows follow snapy's CI → automatic tag → manual PyPI publishing flow,
-adapted for a pure-Python package. Fridica produces one universal wheel and one
-source distribution, rather than platform-specific compiled wheels.
-
-- **Continuous Integration** (`.github/workflows/ci.yml`) runs on pull requests
-  and pushes to `main`. It tests Python 3.11 on Ubuntu and macOS, builds both
-  distributions after every matrix job passes, checks package metadata, and
-  smoke-tests the installed wheel and bundled Slack manifest. Tests use fake
-  agents and Slack clients; no Slack/model credentials are required.
-- **Auto Tag on PR Merge** (`cd.yml`) tags the exact merge commit and creates a
-  GitHub release. The first tag is `v0.1.0`; subsequent merges default to a patch
-  bump. Add one of `release:major`, `release:minor`, or `release:patch` to select
-  the increment. Multiple release labels fail the job. Rerunning an already
-  tagged merge reuses its tag and repairs a missing GitHub release.
-  Authentication uses the automatically supplied `GITHUB_TOKEN`, with
-  `contents: write` permission limited to the tagging job. No GitHub App,
-  private key, or personal access token is needed.
-  Merged fork PRs are supported through a merged-only `pull_request_target`
-  event; the checkout is verified to belong to `main` before release code runs.
-  Tag jobs use [GitHub's concurrency queue](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
-  to run serially (up to 100 pending runs).
-- **Publish to PyPI** (`release.yml`) is manually dispatched with an existing
-  stable tag, such as `v0.1.0`. It verifies the tag belongs to `main`, reruns the
-  full CI workflow on its resolved commit, checks that both artifact versions
-  match the requested tag, then publishes those exact artifacts. Publishing
-  does not run on every merge or tag push.
-
-Versions come from Git tags using
-[hatch-vcs](https://github.com/ofek/hatch-vcs). `fridica.__version__` and the CLI
-read installed package metadata. Untagged/dirty checkouts produce development
-versions; reinstall an editable checkout after changing tags to refresh its
-installed version. Full Git history is fetched in CI. Source distributions carry
-version metadata so they also build without Git.
-
-Repository maintainers must configure these GitHub settings before using CD:
-
-1. Ensure repository/organization Actions policies allow the tagging job's
-   `GITHUB_TOKEN` to have **Contents: write** permission. The workflow requests
-   this explicitly; do not create a token secret. If tag rules restrict `v*`
-   creation, configure them to allow this workflow's tag creation. The built-in
-   token does not bypass repository rules. Existing `BUMP_BOT_APP_ID` and
-   `BUMP_BOT_PRIVATE_KEY` settings are unused and can be removed from Fridica.
-2. Create a GitHub Actions environment named `pypi`. Add `PYPI_API_TOKEN` as an
-   environment secret using a PyPI account authorized to publish `fridica`.
-   Configure required reviewers if publication needs an approval gate. A new
-   PyPI project may need an account-scoped token for its first upload; replace
-   it with a project-scoped token afterward.
-3. Protect `main` and require CI before merging. Auto-tagging reacts to a merge,
-   so branch protection supplies its CI gate. Publishing independently reruns
-   all tests. Require the matrix test jobs and the `package` job as checks.
-4. After a release tag exists, open **Actions → Publish to PyPI → Run workflow**
-   on `main`, enter the tag, and approve the `pypi` environment if configured.
-   PyPI versions are immutable; use a new tag for changed artifacts rather than
-   overwriting a published version.
-
-Tags and releases created using `GITHUB_TOKEN` do not trigger downstream
-tag-push or release-event workflows. Fridica's publishing workflow is manually
-dispatched and reruns CI itself, so it does not depend on those events. See
-[GitHub's workflow-trigger rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
-
-Only the package is deployed by CI. Run the daemon on each owner's machine,
-where their Slack tokens, agent authentication, and project directories live:
-
-```bash
-python -m pip install --upgrade 'fridica==0.1.0'
-fridica doctor
-fridica start
-```
-
-Replace `0.1.0` with the published version. Stop the running daemon before an
-upgrade, then restart it in the same environment. No remote daemon, Slack app,
-GitHub secrets, or PyPI project is provisioned by installing these workflows.
-
-For local workflow linting with actionlint 1.7.12, use
-`actionlint -ignore 'unexpected key "queue" for "concurrency" section' .github/workflows/*.yml`.
-That version's schema predates GitHub's documented `queue` field; the exception
-only suppresses that schema mismatch.
+**Releases:**
+- When a pull request is merged, `cd.yml` tags the next version using its
+  `release:*` label, then creates a GitHub release.
+- `release.yml` publishes a tag to PyPI after `scripts/release.py verify` confirms
+  that the wheel bundles the Slack manifest, the contract, the repository list, the
+  configuration template, and the dashboard.
