@@ -1,0 +1,85 @@
+# Fridica configuration.
+#
+# Fridica is your Slack presence. One parent agent (you) listens in the channels
+# below. Each Slack thread becomes a session, and the parent delegates real work to
+# workers. A worker is a Claude Code or Codex session running on one of the
+# machines listed here, in one of that machine's workspaces.
+
+[owner]
+slack_user = "U000OWNER"          # your Slack member ID (fridica configure --detect fills this in)
+profile = ""                      # a few sentences about you and your projects, shown to every agent
+# contract = "contract.md"        # agent rules; defaults to contract.md beside this file
+
+[slack]
+workspace = "T000TEAM"
+channels = ["C000CHANNEL"]
+# delegate_channels = ["C000CHANNEL"]   # channels whose members may start worker jobs (default: all)
+app_token_env = "SLACK_APP_TOKEN"
+user_token_env = "SLACK_USER_TOKEN"
+general_messages = true           # consider replying without an @mention (a cheap triage call decides)
+cooldown = 60                     # seconds between unsolicited replies in one channel
+
+[parent]
+backend = "claude"                # the parent always runs locally with no tools
+model = ""                        # "" uses the CLI's default model
+triage_model = ""                 # cheaper model for deciding whether to join a conversation
+# default_machine = "local"       # where work goes when nobody names a machine (default: the first one)
+
+[limits]
+max_wait_replies = 3              # consecutive clarifying questions before the thread pauses
+max_delegations_per_turn = 3
+max_workers_per_thread = 4
+max_jobs = 4                      # worker jobs running at once across all machines
+job_timeout = 14400
+worker_idle = 1800                # seconds an idle worker process is kept for follow-ups
+
+[policy]                          # defaults for every machine; machines and workspaces override
+mode = "write"                    # read-only | write | full
+network = ["github.com", "pypi.org", "files.pythonhosted.org"]
+approvals = "auto"                # auto (the backend's AI reviewer decides) | on-request | untrusted | never
+approval_timeout = 1800
+auto_approve = []                 # command prefixes approved without asking, e.g. ["pytest", "git status"]
+
+[machines.local]
+transport = "local"
+backends = ["claude", "codex"]
+# max_workers = 4                 # live worker processes on this machine (default 4)
+# max_jobs = 2                    # jobs running at the same time on this machine (default 2)
+
+[machines.local.workspaces]
+project = "~/project"             # an existing directory; not your home directory
+
+# [machines.snowy]
+# transport = "ssh"
+# host = "snowy"                  # an alias from ~/.ssh/config; run `ssh snowy` once first
+# tags = ["cuda", "rtx5090"]
+# backends = ["codex", "claude"]
+# max_workers = 3
+# max_jobs = 2
+# resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }   # declaring gpus turns on gpu_confine
+#
+# [machines.snowy.workspaces]
+# exocubed = "~/scix/repos/exocubed"
+# scratch = { path = "/data/scratch", policy = { mode = "full" } }
+
+# [machines.dart9]
+# transport = "ssh"
+# host = "dart9"
+# tags = ["cuda", "gcc"]
+# backends = ["codex"]
+#
+# [machines.dart9.workspaces]
+# canoe = "~/repos/canoe"
+
+# [machines.greatlakes]          # Slurm support is not implemented yet; doctor reports it as such
+# transport = "slurm"
+# host = "greatlakes"             # login host
+# tags = ["a100", "multi_gpu"]
+# backends = ["codex"]
+# slurm = { account = "myaccount", partition = "gpu", gres = "gpu:1", time = "04:00:00" }
+#
+# [machines.greatlakes.workspaces]
+# scratch = "/scratch/myaccount/me"
+
+[state]
+path = "~/.local/state/fridica/state.sqlite3"

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fridica</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>Fridica</h1>
+    <span id="status" class="pill">connecting…</span>
+    <nav id="tabs">
+      <button data-view="overview" class="active">Overview</button>
+      <button data-view="threads">Threads</button>
+      <button data-view="workers">Workers</button>
+      <button data-view="approvals">Approvals <span id="approval-count" class="count"></span></button>
+      <button data-view="machines">Machines</button>
+      <button data-view="activity">Activity</button>
+    </nav>
+  </header>
+  <main>
+    <section id="unlock" hidden>
+      <p>Paste the key printed by <code>fridica dashboard</code>.</p>
+      <form id="unlock-form"><input id="key" type="password" autocomplete="off" aria-label="Dashboard key"><button>Unlock</button></form>
+    </section>
+    <section id="view"></section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
