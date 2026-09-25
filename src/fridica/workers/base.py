@@ -13,7 +13,7 @@ import json
 import logging
 
 from ..core.errors import BackendError, SessionUnavailable
-from ..exec.process import OUTPUT_LIMIT, diagnostic, terminate
+from ..exec.process import OUTPUT_LIMIT, diagnostic, release, terminate
 from ..exec.transport import Transport, make_transport
 from .protocol import ALLOW_SESSION, DENY, ApprovalHandler, ApprovalRequest, Outcome, WorkerSpec, deny_all
 from .result import SUMMARIZE_PROMPT, fallback, parse
@@ -124,6 +124,8 @@ class JsonlWorker:
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+        if process is not None:
+            release(process)
 
     def _cancel_idle(self) -> None:
         if self.idle_timer is not None:

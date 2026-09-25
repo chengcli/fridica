@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import time
 import sys
 
 import pytest
@@ -213,3 +214,98 @@ def test_terminate_survives_eperm_from_killpg(tmp_path, monkeypatch):
         return child.returncode
 
     assert asyncio.run(scenario()) is not None
+
+
+def _unraisable(run):
+    """Run ``run`` in a fresh event loop and return exceptions the garbage collector reported afterwards."""
+    import gc
+    seen, previous = [], sys.unraisablehook
+    sys.unraisablehook = seen.append
+    try:
+        asyncio.run(run())
+        gc.collect()
+    finally:
+        sys.unraisablehook = previous
+    return [str(item.exc_value) for item in seen]
+
+
+def test_a_cancelled_run_releases_its_subprocess_before_the_loop_closes(tmp_path):
+    async def scenario():
+        task = asyncio.create_task(process.run_once(["sh", "-c", "sleep 30"], cwd=tmp_path, env=dict(os.environ),
+                                                    timeout=60))
+        await asyncio.sleep(0.3)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert _unraisable(scenario) == []
+
+
+def test_teardown_releases_pipes_held_by_an_escaped_grandchild(tmp_path):
+    """A grandchild in its own session survives the group kill and keeps the pipes open."""
+    marker = tmp_path / "escaped.pid"
+    script = f"setsid sh -c 'echo $$ > {marker}; sleep 30' & sleep 30"
+
+    async def cancelled_run():
+        task = asyncio.create_task(process.run_once(["sh", "-c", script], cwd=tmp_path, env=dict(os.environ), timeout=60))
+        await asyncio.sleep(0.5)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def closed_worker():
+        child = await process.start(["sh", "-c", script], cwd=tmp_path, env=dict(os.environ))
+        await asyncio.sleep(0.5)
+        await process.terminate(child)
+        process.release(child)
+
+    try:
+        assert _unraisable(cancelled_run) == []
+        assert _unraisable(closed_worker) == []
+    finally:
+        if marker.exists():
+            try:
+                os.kill(int(marker.read_text()), 9)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
+def _running(pid: str) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split(")")[1].split()[0]
+    except FileNotFoundError:
+        return False
+    return state != "Z"
+
+
+@pytest.mark.skipif(not Path("/proc").is_dir(), reason="needs /proc")
+@pytest.mark.parametrize("shell", ["bash", "sh"])
+def test_long_lived_remote_agents_die_with_their_channel(tmp_path, shell):
+    """Without a terminal sshd sends no hang-up; the watchdog stops the agent and its tools when stdin closes."""
+    agent_pid, tool_pid = tmp_path / "agent", tmp_path / "tool"
+    script = remote_script(["sh", "-c", f"echo $$ > {agent_pid}; (sleep 300 & echo $! > {tool_pid}; wait) & "
+                                        "while read line; do echo got:$line; done; sleep 300"], PurePosixPath(tmp_path))
+    child = subprocess.Popen([shell, "-c", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                             start_new_session=True)
+    try:
+        child.stdin.write("ping\n")
+        child.stdin.flush()
+        assert child.stdout.readline() == "got:ping\n"
+        time.sleep(0.3)
+        child.stdin.close()  # the SSH channel closed
+        child.wait(timeout=20)
+        time.sleep(0.5)
+        assert not _running(agent_pid.read_text().strip()) and not _running(tool_pid.read_text().strip())
+    finally:
+        for marker in (agent_pid, tool_pid):
+            if marker.exists():
+                try:
+                    os.kill(int(marker.read_text()), 9)
+                except (ProcessLookupError, ValueError):
+                    pass
+
+
+@pytest.mark.parametrize("shell", ["bash", "sh"])
+def test_a_long_lived_agent_that_exits_passes_its_status(tmp_path, shell):
+    script = remote_script(["sh", "-c", "read line; echo done:$line; exit 7"], PurePosixPath(tmp_path))
+    child = subprocess.run([shell, "-c", script], input="x\n", capture_output=True, text=True, timeout=20)
+    assert (child.returncode, child.stdout) == (7, "done:x\n")
+    assert not list(Path(os.environ.get("TMPDIR", "/tmp")).glob("fridica-*.in"))

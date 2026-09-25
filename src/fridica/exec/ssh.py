@@ -73,8 +73,39 @@ def remote_script(command: list[str], cwd: PurePath, *, env: dict[str, str] | No
         seconds = max(1, int(timeout) + 5)
         lines.append(f"if command -v timeout >/dev/null 2>&1; then exec timeout -k 5 {seconds} {agent}; else exec {agent}; fi")
     else:
-        lines.append(f"exec {agent}")
+        lines += watchdog(agent)
     return "exec sh -c " + shlex.quote("; ".join(lines))
+
+
+def watchdog(agent: str) -> list[str]:
+    """Run a long-lived agent so it dies with its SSH channel.
+
+    Without a terminal, sshd sends no hang-up when the client disappears (Fridica stopped, crashed, or lost the
+    network); the agent only sees its stdin close and would keep working unattended. Here stdin reaches the agent
+    through a FIFO fed by ``cat``, and the wrapper watches both:
+
+    - when the feed ends (the channel closed, or Fridica closed stdin to stop the worker), the agent's process
+      group (the agent, its tools, the sandbox) is terminated, then killed;
+    - when the agent exits by itself, its status is passed on.
+
+    ``setsid`` gives the agent its own process group so only that group is signalled; without it (macOS) only the
+    agent's PID is. Background jobs in a non-interactive sh read /dev/null unless stdin is duplicated first, hence
+    fd 3.
+    """
+    # "kill -SIG -PGID" without "--": dash's kill builtin rejects "--".
+    stop = ('kill -{signal} -"$FRIDICA_AGENT" 2>/dev/null || kill -{signal} "$FRIDICA_AGENT" 2>/dev/null')
+    return [
+        'FRIDICA_IN="${TMPDIR:-/tmp}/fridica-$$.in"',
+        'rm -f "$FRIDICA_IN"; mkfifo -m 600 "$FRIDICA_IN" || exit 97',
+        "trap 'rm -f \"$FRIDICA_IN\"' EXIT",
+        f'if command -v setsid >/dev/null 2>&1; then setsid {agent} < "$FRIDICA_IN" & '
+        f'else {agent} < "$FRIDICA_IN" & fi; FRIDICA_AGENT=$!',
+        'exec 3<&0; cat <&3 > "$FRIDICA_IN" & FRIDICA_FEED=$!; exec 3<&-',
+        'while kill -0 "$FRIDICA_AGENT" 2>/dev/null && kill -0 "$FRIDICA_FEED" 2>/dev/null; do sleep 1; done',
+        'if kill -0 "$FRIDICA_AGENT" 2>/dev/null; then ' + stop.format(signal="TERM") + '; sleep 3; '
+        + stop.format(signal="KILL") + '; fi',
+        'kill "$FRIDICA_FEED" 2>/dev/null; wait "$FRIDICA_AGENT"',
+    ]
 
 
 class SshTransport(Transport):

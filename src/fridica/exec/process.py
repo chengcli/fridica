@@ -59,6 +59,18 @@ async def terminate(process: asyncio.subprocess.Process, grace: float = 1.0) -> 
     await process.wait()
 
 
+def release(process: asyncio.subprocess.Process) -> None:
+    """Close the subprocess transport now instead of leaving it to the garbage collector.
+
+    A grandchild that started its own session (a sandbox helper, a proxy) survives the process-group kill and
+    keeps our pipes open, so the transport never closes by itself; if the garbage collector finds it after the
+    event loop has closed, Python prints "Event loop is closed" at exit.
+    """
+    transport = getattr(process, "_transport", None)
+    if transport is not None:
+        transport.close()
+
+
 @dataclass(frozen=True)
 class Completed:
     returncode: int
@@ -118,3 +130,5 @@ async def run_once(argv: list[str], *, stdin: bytes = b"", cwd: Path | None, env
     except BaseException:
         await terminate(process)
         raise
+    finally:
+        release(process)
