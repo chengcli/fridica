@@ -54,7 +54,8 @@ def test_codex_job_returns_a_structured_result_and_maps_policy(tmp_path, fake_ag
     assert outcome.backend_session_id.startswith("thr_")
     start = fake_agents("thread/start")[0]
     params = start["data"]["params"]
-    assert params["approvalPolicy"] == "on-request" and params["sandbox"] == "workspace-write"
+    assert params["approvalPolicy"] == "on-request" and params["approvalsReviewer"] == "auto_review"  # auto by default
+    assert params["sandbox"] == "workspace-write"
     assert params["developerInstructions"] == "Speak as the owner." and params["cwd"] == str(tmp_path / "work")
     turn = fake_agents("turn/start")[0]["data"]["params"]
     assert turn["outputSchema"] == RESULT_SCHEMA
@@ -246,7 +247,7 @@ def test_claude_job_session_and_command_shape(tmp_path, fake_agents):
     users = fake_agents("user")
     assert len({row["pid"] for row in users}) == 2
     argv = users[0]["argv"]
-    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+    assert argv[argv.index("--permission-mode") + 1] == "auto"  # the default approvals mode
     assert argv[argv.index("--append-system-prompt") + 1] == "Speak as the owner."
     assert "--permission-prompt-tool" in argv and "--session-id" in argv
     assert "--resume" in users[-1]["argv"]
@@ -370,3 +371,48 @@ def test_codex_interrupt_before_the_turn_id_is_known_is_sent_later(tmp_path):
 
     run(scenario())
     assert sent == [{"id": 1, "method": "turn/interrupt", "params": {"threadId": "thr", "turnId": "turn_7"}}]
+
+
+def test_auto_approvals_use_the_backends_own_reviewers(tmp_path, fake_agents):
+    async def scenario():
+        worker = CodexWorker(spec(tmp_path, policy=Policy(approvals="auto")))
+        try:
+            return await worker.run("go")
+        finally:
+            await worker.close()
+
+    run(scenario())
+    params = fake_agents("thread/start")[0]["data"]["params"]
+    assert params["approvalPolicy"] == "on-request" and params["approvalsReviewer"] == "auto_review"
+    claude = ClaudeWorker(spec(tmp_path, "claude", policy=Policy(approvals="auto")))
+    claude.prepare("")
+    argv = claude.command()
+    assert argv[argv.index("--permission-mode") + 1] == "auto" and "--permission-prompt-tool" in argv
+    assert Policy().approvals == "auto"
+    asking = CodexWorker(spec(tmp_path, policy=Policy(approvals="on-request")))
+    asking.prepare("")
+    assert asking.policy.approvals == "on-request"
+
+
+def test_claude_warns_when_auto_mode_falls_back(tmp_path, fake_agents, monkeypatch, caplog):
+    monkeypatch.setenv("FAKE_PERMISSION_MODE", "default")
+
+    async def scenario():
+        worker = ClaudeWorker(spec(tmp_path, "claude", policy=Policy(approvals="auto")))
+        try:
+            return await worker.run("go")
+        finally:
+            await worker.close()
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="fridica.workers.claude"):
+        outcome = run(scenario())
+    assert outcome.result.status == "done"
+    assert "runs in default mode instead of auto" in caplog.text
+
+
+def test_on_request_keeps_claude_in_accept_edits(tmp_path):
+    worker = ClaudeWorker(spec(tmp_path, "claude", policy=Policy(approvals="on-request")))
+    worker.prepare("")
+    argv = worker.command()
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits" and "--permission-prompt-tool" in argv

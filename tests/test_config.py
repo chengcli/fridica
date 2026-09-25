@@ -34,6 +34,9 @@ def test_machine_and_workspace_policy_overrides(write_config):
         [machines.box]
         host = "box"
         policy = { network = ["*"], approvals = "never" }
+        [machines.box.workspaces.careful]
+        path = "/careful"
+        policy = { approvals = "auto" }
         [machines.box.workspaces]
         data = { path = "/data", policy = { mode = "read-only" } }
         work = "/work"
@@ -44,6 +47,7 @@ def test_machine_and_workspace_policy_overrides(write_config):
     assert box.workspace("data").policy.mode == "read-only" and not box.workspace("data").writable
     assert box.workspace("work").policy.mode == "write"
     assert box.workspace("work").policy.network == ("*",)
+    assert box.workspace("careful").policy.approvals == "auto"
 
 
 def test_payload_hides_paths(config):
@@ -179,3 +183,38 @@ def test_long_state_paths_get_a_short_control_socket(write_config, workspace, tm
     assert len(str(config.state.control_socket)) < 100 and config.state.control_socket.name.startswith("control-")
     with pytest.raises(ConfigError, match="too long"):
         load_config(write_config(base_config(workspace, deep) + f'control_socket = "{deep.parent}/c.sock"\n'))
+
+
+def test_gpu_confine_turns_on_for_machines_that_declare_gpus(write_config):
+    config = load_config(write_config(machines="""
+        [machines.gpu]
+        host = "gpu"
+        resources = { gpus = [0, 1] }
+        [machines.gpu.workspaces]
+        work = "/work"
+        notes = { path = "/notes", policy = { mode = "read-only" } }
+        raw = { path = "/raw", policy = { mode = "full" } }
+        plain = { path = "/plain", policy = { gpu_confine = false } }
+
+        [machines.cpu]
+        host = "cpu"
+        [machines.cpu.workspaces]
+        work = "/work"
+    """))
+    gpu = config.machines["gpu"]
+    assert [(item.name, item.policy.gpu_confine) for item in gpu.workspaces] == [
+        ("work", True), ("notes", False), ("raw", False), ("plain", False)]
+    assert config.machines["cpu"].workspace("work").policy.gpu_confine is False
+    assert config.machines["local"].workspace("project").policy.gpu_confine is False
+    assert gpu.policy.gpu_confine is False  # the machine-level default stays automatic, resolved per workspace
+
+
+def test_global_opt_out_of_gpu_confine(write_config, workspace, tmp_path):
+    text = base_config(workspace, tmp_path / "s.sqlite3", """
+        [machines.gpu]
+        host = "gpu"
+        resources = { gpus = [0] }
+        [machines.gpu.workspaces]
+        work = "/work"
+    """) + "\n[policy]\ngpu_confine = false\n"
+    assert load_config(write_config(text)).machines["gpu"].workspace("work").policy.gpu_confine is False

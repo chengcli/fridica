@@ -36,7 +36,7 @@ worker_idle = 1800                # seconds an idle worker process is kept for f
 [policy]                          # defaults for every machine; machines and workspaces override
 mode = "write"                    # read-only | write | full
 network = ["github.com", "pypi.org", "files.pythonhosted.org"]
-approvals = "on-request"          # never | on-request | untrusted
+approvals = "auto"                # auto (the backend's AI reviewer decides) | on-request | untrusted | never
 approval_timeout = 1800
 auto_approve = []                 # command prefixes approved without asking, e.g. ["pytest", "git status"]
 
@@ -56,8 +56,7 @@ project = "~/project"             # an existing directory; not your home directo
 # backends = ["codex", "claude"]
 # max_workers = 3
 # max_jobs = 2
-# resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }
-# policy = { gpu_confine = true }
+# resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }   # declaring gpus turns on gpu_confine
 #
 # [machines.snowy.workspaces]
 # exocubed = "~/scix/repos/exocubed"

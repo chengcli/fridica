@@ -257,7 +257,7 @@ auto_resume = false                  # rerun jobs a restart interrupted, continu
 [policy]                             # defaults for every machine; machines and workspaces override
 mode = "write"                       # read-only | write | full
 network = ["github.com", "pypi.org", "files.pythonhosted.org"]
-approvals = "on-request"             # never | on-request | untrusted
+approvals = "auto"                   # auto (default) | on-request | untrusted | never
 approval_timeout = 1800
 auto_approve = ["pytest", "git status"]    # exact commands or "prefix …"; never with ; | & $() etc.
 auto_deny = ["rm -rf"]
@@ -276,8 +276,7 @@ tags = ["cuda", "rtx5090"]
 backends = ["codex", "claude"]       # the first is the default
 max_workers = 3                      # live worker processes on this machine
 max_jobs = 2                         # running jobs on this machine
-resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }
-policy = { gpu_confine = true }
+resources = { cpus = 32, gpus = [0], gpu_type = "RTX 5090", memory_gb = 128 }   # GPUs turn on gpu_confine
 [machines.snowy.workspaces]
 exocubed = "~/scix/repos/exocubed"
 canoe = "/home/me/canoe"
@@ -322,15 +321,27 @@ sees machine names, tags, workspace names, and load, never filesystem paths.
 | `full` | no sandbox | no sandbox (`bypassPermissions` when `approvals = "never"`) |
 
 Codex supports network access only as all or nothing, so any `network` entry gives
-Codex workers full network access. `gpu_confine = true` runs the backend with its
-own sandbox off, inside Fridica's bubblewrap confinement, which exposes `/dev` for
-CUDA. Under it:
+Codex workers full network access.
+
+**GPUs.** The backends' own sandboxes hide the GPU device nodes, so a worker in
+them cannot run CUDA. `gpu_confine` runs the backend with its own sandbox off,
+inside Fridica's bubblewrap confinement, which exposes `/dev`. It turns on
+automatically for `write`-mode workspaces on a machine that declares
+`resources.gpus`:
+
+- read-only workspaces keep the backend sandbox, because confinement can't enforce
+  read-only;
+- `full`-mode workspaces have no sandbox hiding the GPUs to begin with;
+- `gpu_confine = false` opts a machine or workspace out;
+- an explicit `gpu_confine = true` requires `resources.gpus` and can't be combined
+  with `read-only`.
+
+Under the confinement:
 
 - only the worker's own workspace is writable;
 - the backends' settings files are bound read-only;
 - the host network is shared, because the CLI must reach its model API.
 
-It requires `resources.gpus`, and it cannot be combined with `read-only`.
 `resources` are declarative. They are shown to the parent and enforced as
 `OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES`.
 
@@ -422,8 +433,20 @@ Alice:   can you fix snowy and rerun?
 
 ## Approvals
 
-With `approvals = "on-request"` or `"untrusted"`, a worker's request for something
-outside its policy is routed to you. For Codex these are commands, file changes,
+| `approvals` | Who decides a worker's requests beyond its policy |
+| --- | --- |
+| `never` | nobody; the request is refused and the worker carries on without it |
+| `on-request` | you, when the worker needs more than its sandbox allows |
+| `untrusted` | you, for edits and most commands, even inside the sandbox |
+| `auto` (default) | the backend's own AI reviewer: Claude's auto permission mode, or Codex's `auto_review` guardian |
+
+With `auto`, Codex's reviewer approves or denies each request itself (its decisions
+are logged). Claude's classifier needs a model that supports auto mode. On other
+models Claude falls back to default mode, logs a warning, and sends its prompts to
+you instead. `doctor` checks that each backend supports auto on machines that use it.
+
+With `on-request` or `untrusted`, a worker's request for something outside its
+policy is routed to you. For Codex these are commands, file changes,
 and extra permissions from the app-server protocol. For Claude, they are tool calls
 outside its allowlist, through the stream-json control protocol. The request works
 the same over SSH. While it waits, the job holds its machine slot.

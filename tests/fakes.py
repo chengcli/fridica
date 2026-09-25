@@ -124,7 +124,8 @@ def final(summary, prose="Done."):
                        "machine_state": {"branch": "dev", "commit": "", "dirty": False, "notes": ""}, "unresolved": [],
                        "question": "", "report": "All green on claude."})
     emit({"type": "result", "subtype": "success", "is_error": False, "result": f"{prose}\n```json\n{body}\n```", "session_id": session})
-emit({"type": "system", "subtype": "init", "session_id": session})
+emit({"type": "system", "subtype": "init", "session_id": session,
+      "permissionMode": os.environ.get("FAKE_PERMISSION_MODE") or arguments[arguments.index("--permission-mode") + 1]})
 lines = iter(sys.stdin)
 for line in lines:
     message = json.loads(line)

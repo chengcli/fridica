@@ -221,6 +221,9 @@ def _machine(name: str, data: dict, default_policy: Policy, parent_backend: str,
         if workspace.policy.gpu_confine and workspace.policy.mode == "read-only":
             raise ConfigError(f"{label} workspace {workspace.name}: gpu_confine cannot enforce read-only; "
                               "drop one of them")
+    workspaces = tuple(replace(workspace, policy=replace(workspace.policy, gpu_confine=_confined(workspace.policy, resources)))
+                       for workspace in workspaces)
+    policy = replace(policy, gpu_confine=bool(policy.gpu_confine))
     description = data.get("description", "")
     if not isinstance(description, str) or len(description) > 1000:
         raise ConfigError(f"{label} description must be at most 1000 characters")
@@ -260,6 +263,17 @@ def _workspace(machine: str, name: str, value, policy: Policy, transport: str, b
     if str(path) in ("/", "//", "~"):
         raise ConfigError(f"{label}: the remote home directory or / is too broad for a workspace")
     return Workspace(name, path, policy)
+
+
+def _confined(policy: Policy, resources: Resources) -> bool:
+    """Resolve automatic GPU confinement: write-mode workspaces on machines that declare GPUs.
+
+    Read-only workspaces keep the backend sandbox (confinement cannot enforce read-only), and full-mode ones have
+    no sandbox hiding the GPUs in the first place.
+    """
+    if policy.gpu_confine is not None:
+        return policy.gpu_confine
+    return bool(resources.gpus) and policy.mode == "write"
 
 
 def _cross_checks(config: Config) -> None:

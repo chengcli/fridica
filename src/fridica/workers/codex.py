@@ -116,8 +116,12 @@ class CodexWorker(JsonlWorker):
         self.next_id = 1
         await self.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": {"experimentalApi": False}})
         await self.send({"method": "initialized", "params": {}})
-        params = {**self.cwd(), "sandbox": self.sandbox_mode(), "approvalPolicy": self.policy.approvals,
-                  "developerInstructions": self.spec.instructions}
+        params = {**self.cwd(), "sandbox": self.sandbox_mode(), "developerInstructions": self.spec.instructions}
+        if self.policy.approvals == "auto":
+            # Codex's guardian subagent reviews each request instead of routing it to the owner.
+            params.update(approvalPolicy="on-request", approvalsReviewer="auto_review")
+        else:
+            params["approvalPolicy"] = self.policy.approvals
         if self.spec.model:
             params["model"] = self.spec.model
         thread = None
@@ -157,7 +161,10 @@ class CodexWorker(JsonlWorker):
                         or (params.get("turn") or {}).get("id") == self.turn_id)
                 if not mine:
                     continue
-                if method == "item/completed":
+                if method == "item/autoApprovalReview/completed":
+                    logger.info("worker %s: Codex auto-review decided a request: %s", self.spec.worker_id,
+                                json.dumps(params)[:500])
+                elif method == "item/completed":
                     item = params.get("item") if isinstance(params.get("item"), dict) else {}
                     if item.get("type") == "agentMessage" and isinstance(item.get("text"), str):
                         report = item["text"]

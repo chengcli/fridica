@@ -29,6 +29,7 @@ class ClaudeWorker(JsonlWorker):
         super().__init__(spec, transport)
         self.control_id = 0
         self.in_turn = False
+        self.expected_mode = ""
 
     @property
     def policy(self):
@@ -56,6 +57,11 @@ class ClaudeWorker(JsonlWorker):
             mode = "acceptEdits" if policy.approvals != "untrusted" else "default"
             if policy.mode == "full" and policy.approvals == "never":
                 mode = "bypassPermissions"
+        if policy.approvals == "auto":
+            # Claude's classifier approves or blocks each action; on models without auto mode Claude falls back to
+            # default mode, and the stdio prompt tool below then routes its prompts to the owner.
+            mode = "auto"
+        self.expected_mode = mode
         command = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                    "--setting-sources", "", "--settings", json.dumps(self.settings()),
                    "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands",
@@ -94,6 +100,12 @@ class ClaudeWorker(JsonlWorker):
                 kind = message.get("type")
                 if isinstance(message.get("session_id"), str) and kind in {"system", "result"}:
                     self.session = message["session_id"]
+                if kind == "system" and message.get("subtype") == "init":
+                    actual = message.get("permissionMode")
+                    if actual and self.expected_mode and actual != self.expected_mode:
+                        logger.warning("worker %s: Claude runs in %s mode instead of %s (the model may not support it);"
+                                       " requests outside its allowlist go to the owner", self.spec.worker_id, actual,
+                                       self.expected_mode)
                 if kind == "control_request":
                     await self.control(message)
                 elif kind == "result":

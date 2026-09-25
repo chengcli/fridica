@@ -38,7 +38,8 @@ import json, os, sys
 name = os.path.basename(sys.argv[0]); args = sys.argv[1:]
 if name == "claude":
     if args == ["--help"]:
-        print("--input-format --permission-prompts --json-schema --setting-sources --strict-mcp-config --append-system-prompt --session-id dontAsk")
+        print("--input-format --permission-prompts --json-schema --setting-sources --strict-mcp-config --append-system-prompt --session-id dontAsk"
+              + (' "auto"' if os.environ.get("CLAUDE_AUTO") else ""))
     elif args[:2] == ["auth", "status"]:
         print(json.dumps({"loggedIn": os.environ.get("CLAUDE_LOGGED_IN") == "1"}))
     sys.exit(0)
@@ -49,7 +50,8 @@ if name == "codex":
         print("--ignore-user-config --ignore-rules --output-schema --ephemeral"); sys.exit(0)
     if args[:2] == ["app-server", "generate-json-schema"]:
         out = args[args.index("--out") + 1]
-        open(os.path.join(out, "schema.json"), "w").write('"turn/interrupt" "item/commandExecution/requestApproval" "outputSchema"')
+        open(os.path.join(out, "schema.json"), "w").write('"turn/interrupt" "item/commandExecution/requestApproval" "outputSchema"'
+                                                          + (' "auto_review"' if os.environ.get("CODEX_AUTO") else ""))
         sys.exit(0)
 if name in ("bwrap", "socat"):
     sys.exit(0)
@@ -68,6 +70,8 @@ def fake_clis(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-1")
     monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-1")
+    monkeypatch.setenv("CLAUDE_AUTO", "1")  # current CLIs support auto approvals, the default
+    monkeypatch.setenv("CODEX_AUTO", "1")
 
 
 def test_doctor_checks_every_machine(write_config, fake_clis, fake_ssh, monkeypatch, tmp_path, capsys):
@@ -151,3 +155,24 @@ def test_control_commands_talk_to_the_daemon(write_config, monkeypatch, capsys, 
         thread.join(5)
     assert main(["status", "--config", str(path)]) == 3
     assert "fridica is not" in capsys.readouterr().err
+
+
+def test_doctor_checks_auto_approval_support(write_config, fake_clis, monkeypatch, tmp_path):
+    (tmp_path / "boxw").mkdir()
+    path = write_config(machines=f"""
+        [machines.box]
+        transport = "local"
+        backends = ["claude", "codex"]
+        policy = {{ approvals = "auto" }}
+        [machines.box.workspaces]
+        w = "{tmp_path / 'boxw'}"
+    """)
+    monkeypatch.setenv("CLAUDE_LOGGED_IN", "1")
+    monkeypatch.delenv("CLAUDE_AUTO")
+    monkeypatch.delenv("CODEX_AUTO")
+    failures = [check.detail for check in asyncio.run(run_checks(path)) if check.status == "FAIL"]
+    assert any("--permission-mode auto" in detail for detail in failures)
+    assert any("auto_review" in detail for detail in failures)
+    monkeypatch.setenv("CLAUDE_AUTO", "1")
+    monkeypatch.setenv("CODEX_AUTO", "1")
+    assert [check for check in asyncio.run(run_checks(path)) if check.status == "FAIL"] == []

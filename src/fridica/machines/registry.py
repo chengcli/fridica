@@ -15,7 +15,7 @@ import re
 TRANSPORTS = ("local", "ssh", "slurm")
 BACKENDS = ("claude", "codex")
 POLICY_MODES = ("read-only", "write", "full")
-APPROVAL_MODES = ("never", "on-request", "untrusted")
+APPROVAL_MODES = ("never", "on-request", "untrusted", "auto")
 CLAUDE_PROMPTS = ("host", "none")
 SSH_HOST = re.compile(r"(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9_.-]*")
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
@@ -29,13 +29,18 @@ class Policy:
     network: tuple[str, ...] = ()
     """Domains workers may reach. Claude enforces the list; Codex only supports all-or-nothing, so any entry
     means full network access for Codex workers."""
-    approvals: str = "on-request"
+    approvals: str = "auto"
+    """never: refuse anything outside the policy; on-request: ask the owner when the worker needs more than its
+    sandbox; untrusted: ask for edits and most commands too; auto: the backend's own AI reviewer decides (Claude's
+    auto permission mode, Codex's auto_review), and whatever it escalates comes to the owner."""
     approval_timeout: float = 1800.0
     auto_approve: tuple[str, ...] = ()
     auto_deny: tuple[str, ...] = ()
-    gpu_confine: bool = False
+    gpu_confine: bool | None = None
     """Run the backend with its own sandbox off inside Fridica's bubblewrap, which exposes /dev for GPUs.
 
+    None (the default) means automatic: on for write-mode workspaces of machines that declare ``resources.gpus``,
+    because the backends' own sandboxes hide the GPU devices. The loader resolves it to True or False per workspace.
     Confined jobs share the host's network regardless of ``network`` (see ``exec.sandbox``)."""
     claude_prompts: str = "host"
     """host: Claude asks Fridica about tools outside its allowlist; none: those are denied outright."""
@@ -47,8 +52,8 @@ class Policy:
             raise ValueError(f"policy.approvals must be one of {', '.join(APPROVAL_MODES)}")
         if self.claude_prompts not in CLAUDE_PROMPTS:
             raise ValueError("policy.claude_prompts must be host or none")
-        if not isinstance(self.gpu_confine, bool):
-            raise ValueError("policy.gpu_confine must be boolean")
+        if self.gpu_confine is not None and not isinstance(self.gpu_confine, bool):
+            raise ValueError("policy.gpu_confine must be true or false")
         if not _positive(self.approval_timeout):
             raise ValueError("policy.approval_timeout must be a positive number of seconds")
         for name in ("network", "auto_approve", "auto_deny"):

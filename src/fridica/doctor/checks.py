@@ -87,13 +87,14 @@ async def check_machine(config: Config, machine: Machine) -> list[Check]:
         result = await probe.sh(f"test -d {quoted}")
         name = f"  workspace {workspace.name} ({path}, {workspace.policy.mode})"
         checks.append(passed(name) if result.returncode == 0 else failed(name, f"not a directory {probe.where}"))
+    auto = any(workspace.policy.approvals == "auto" for workspace in machine.workspaces)
     for backend in machine.backends:
-        checks.extend(await check_backend(probe, backend, worker=True))
+        checks.extend(await check_backend(probe, backend, worker=True, auto=auto))
     checks.extend(await check_sandbox(probe, system, machine))
     return checks
 
 
-async def check_backend(probe: Probe, backend: str, *, worker: bool) -> list[Check]:
+async def check_backend(probe: Probe, backend: str, *, worker: bool, auto: bool = False) -> list[Check]:
     role = "worker" if worker else "parent"
     name = f"  {backend} ({role}) {probe.where}"
     found = await probe.sh(f"command -v {backend}")
@@ -104,6 +105,8 @@ async def check_backend(probe: Probe, backend: str, *, worker: bool) -> list[Che
         help_text = (await probe.sh("claude --help")).text
         flags = CLAUDE_FLAGS if worker else PARENT_FLAGS["claude"]
         missing = [flag for flag in flags if flag not in help_text]
+        if auto and '"auto"' not in help_text:
+            missing.append("--permission-mode auto")
         checks.append(failed(name, f"upgrade claude; missing {', '.join(missing)}") if missing else passed(name + " capabilities"))
         status = await probe.sh("claude auth status")
         try:
@@ -115,11 +118,13 @@ async def check_backend(probe: Probe, backend: str, *, worker: bool) -> list[Che
     else:
         if worker:
             script = ('d=$(mktemp -d) || exit 2; codex app-server generate-json-schema --out "$d" >/dev/null 2>&1 || '
-                      '{ rm -rf "$d"; exit 3; }; ' + " && ".join(f'grep -rq {shlex.quote(item)} "$d"' for item in CODEX_PROTOCOL)
+                      '{ rm -rf "$d"; exit 3; }; ' + " && ".join(f'grep -rq {shlex.quote(item)} "$d"'
+                                                                 for item in CODEX_PROTOCOL + (("auto_review",) if auto else ()))
                       + '; code=$?; rm -rf "$d"; exit $code')
             result = await probe.sh(script, timeout=60)
             checks.append(passed(name + " app-server protocol") if result.returncode == 0 else failed(
-                name, "upgrade codex; its app-server lacks approvals, turn/interrupt, or outputSchema"))
+                name, "upgrade codex; its app-server lacks approvals, turn/interrupt, outputSchema"
+                      + (", or auto_review" if auto else "")))
             config_file = await probe.sh('grep -qs "^\\[mcp_servers" "$HOME/.codex/config.toml"')
             if config_file.returncode == 0:
                 checks.append(Check("WARN", name, "~/.codex/config.toml defines MCP servers; codex app-server loads them "
