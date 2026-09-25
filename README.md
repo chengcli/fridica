@@ -497,15 +497,11 @@ fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguou
 fridica dashboard --port 8765           # prints http://127.0.0.1:8765/#key=…
 ```
 
-The dashboard shows:
-
-- **Overview:** what needs attention.
-- **Threads:** summary, decisions, messages, workers and jobs, plus resume, pause,
-  close, archive and clean.
-- **Workers:** interrupt or stop a worker.
-- **Approvals:** allow once, allow for the session, or deny.
-- **Machines:** load and live processes.
-- **Activity:** the audit log.
+The dashboard shows approvals, stalled threads, active jobs, and failed posts.
+It also has thread, worker, machine, activity, and settings views. The owner can
+give a thread a private instruction; it follows the normal worker scopes and
+approvals. Settings can change the parent model and workload limits. Live
+refresh can be switched off; viewing the page makes no model calls.
 
 It listens on 127.0.0.1 only, rejects cross-origin requests, and requires the
 printed key for every API call.

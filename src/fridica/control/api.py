@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 THREAD_ACTIONS = ("resume", "pause", "close", "archive", "restore", "clean")
 LIMIT_KEYS = ("max_wait_replies", "max_no_progress", "max_delegations_per_turn",
               "max_workers_per_thread", "max_jobs", "job_timeout", "worker_idle")
+PARENT_KEYS = ("backend", "model", "triage_model", "reasoning_effort")
 
 
 class Controls(Protocol):
@@ -40,6 +41,10 @@ class Controls(Protocol):
     async def thread_action(self, session_id: str, action: str, actor: str) -> dict: ...
 
     def update_limits(self, changes: dict) -> Config: ...
+
+    def update_parent(self, changes: dict) -> Config: ...
+
+    async def instruct_thread(self, session_id: str, text: str, client_id: str) -> dict: ...
 
 
 def create_app(controls: Controls) -> web.Application:
@@ -64,6 +69,10 @@ def create_app(controls: Controls) -> web.Application:
         limit = int(request.query.get("limit", 100))
         return web.json_response([views.session(item) for item in controls.store.threads.list(control=control, limit=limit)])
 
+    @routes.get("/attention/threads")
+    async def attention_threads(request):
+        return web.json_response([views.session(item) for item in controls.store.threads.needing_attention()])
+
     @routes.get("/threads/{id}")
     async def thread(request):
         store = controls.store
@@ -78,6 +87,7 @@ def create_app(controls: Controls) -> web.Application:
             "workers": [_worker(controls, worker) for worker in workers],
             "jobs": [views.job(job) for worker in workers for job in store.jobs.for_worker(worker.id)],
             "outbox": [views.outbox(post) for post in store.outbox.for_session(item.id)],
+            "instructions": store.inbox.instructions(item.id),
             "notes": {"revision": revision, "data": notes},
         })
 
@@ -97,6 +107,16 @@ def create_app(controls: Controls) -> web.Application:
     @routes.post("/threads/{id}/{action}")
     async def thread_action(request):
         action = request.match_info["action"]
+        if action == "instruct":
+            body = await _body(request)
+            text, client_id = body.get("text"), body.get("client_id")
+            if not isinstance(text, str) or not 1 <= len(text.strip()) <= 4000:
+                raise web.HTTPBadRequest(text="instruction must be 1–4000 characters")
+            if not isinstance(client_id, str) or not 8 <= len(client_id) <= 80 or not client_id.isascii() or not client_id.replace("-", "").isalnum():
+                raise web.HTTPBadRequest(text="client_id must be an ASCII identifier of 8–80 characters")
+            if controls.store.threads.get(request.match_info["id"]) is None:
+                raise web.HTTPNotFound(text="no such thread")
+            return web.json_response(await controls.instruct_thread(request.match_info["id"], text, client_id))
         if action not in THREAD_ACTIONS:
             raise web.HTTPNotFound(text="unknown thread action")
         body = await _body(request)
@@ -107,6 +127,11 @@ def create_app(controls: Controls) -> web.Application:
     async def workers(request):
         statuses = tuple(filter(None, request.query.get("status", "").split(","))) or None
         return web.json_response([_worker(controls, item) for item in controls.store.workers.all(statuses=statuses)])
+
+    @routes.get("/jobs")
+    async def jobs(request):
+        store = controls.store
+        return web.json_response([views.job(job) for job in (*store.jobs.running(), *store.jobs.queued())])
 
     @routes.post("/workers/{id}/{op}")
     async def worker_op(request):
@@ -149,7 +174,12 @@ def create_app(controls: Controls) -> web.Application:
         for machine in controls.config.machines.machines:
             data = machine.payload(busy.get(machine.name, 0))
             data.update(transport=machine.transport, host=machine.host, live_workers=live.get(machine.name, 0),
-                        max_workers=machine.max_workers)
+                        max_workers=machine.max_workers,
+                        workspace_details=[{
+                            "name": workspace.name, "path": str(workspace.path),
+                            "mode": workspace.policy.mode, "approvals": workspace.policy.approvals,
+                            "network": list(workspace.policy.network),
+                        } for workspace in machine.workspaces])
             payload.append(data)
         return web.json_response(payload)
 
@@ -168,6 +198,22 @@ def create_app(controls: Controls) -> web.Application:
     @routes.get("/activity")
     async def activity(request):
         return web.json_response(controls.store.audit.recent(limit=int(request.query.get("limit", 200))))
+
+    @routes.get("/config")
+    async def config(request):
+        return web.json_response(_dashboard_config(controls.config))
+
+    @routes.patch("/config/parent")
+    async def parent(request):
+        body = await _body(request)
+        unknown = set(body) - set(PARENT_KEYS)
+        if unknown:
+            raise web.HTTPBadRequest(text=f"not editable here: {', '.join(sorted(unknown))}")
+        try:
+            config = controls.update_parent(body)
+        except ConfigError as error:
+            raise web.HTTPBadRequest(text=str(error)) from None
+        return web.json_response({"parent": _dashboard_config(config)["parent"]})
 
     @routes.patch("/config/limits")
     async def limits(request):
@@ -188,6 +234,13 @@ def create_app(controls: Controls) -> web.Application:
 def _worker(controls: Controls, record) -> dict:
     live = controls.supervisor.live.get(record.id)
     return views.worker(record, live=bool(live and live.alive), busy=bool(live and live.busy))
+
+
+def _dashboard_config(config: Config) -> dict:
+    return {
+        "parent": {key: getattr(config.parent, key) for key in PARENT_KEYS},
+        "limits": {key: getattr(config.limits, key) for key in LIMIT_KEYS},
+    }
 
 
 async def _body(request: web.Request) -> dict:

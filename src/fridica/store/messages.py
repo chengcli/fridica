@@ -109,6 +109,23 @@ class Inbox:
         )
         return cursor.lastrowid
 
+    def add_once(self, session_id: str, kind: str, ref: str, now: float, payload: dict) -> int:
+        with self.db.transaction():
+            row = self.db.one("SELECT id FROM thread_inbox WHERE session_id=? AND kind=? AND ref=?",
+                              (session_id, kind, ref))
+            return row[0] if row else self.add(session_id, kind, now, ref=ref, payload=payload)
+
+    def instructions(self, session_id: str, *, limit: int = 20) -> list[dict]:
+        rows = self.db.all("SELECT id, state, created, payload_json FROM thread_inbox"
+                           " WHERE session_id=? AND kind='owner_instruction' ORDER BY id DESC LIMIT ?",
+                           (session_id, limit))
+        return [{"id": row[0], "state": row[1], "created": row[2], "text": json.loads(row[3])["text"]}
+                for row in rows]
+
+    def wipe_instructions(self, session_id: str) -> None:
+        self.db.execute("UPDATE thread_inbox SET payload_json=? WHERE session_id=? AND kind='owner_instruction'",
+                        (codec.dumps({"text": ""}), session_id))
+
     def claim(self, session_id: str) -> InboxItem | None:
         """Mark the thread's oldest pending item as processing and return it."""
         with self.db.transaction():

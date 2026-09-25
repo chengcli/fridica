@@ -19,12 +19,15 @@ from ..control.client import ControlClient, ControlError, DaemonUnavailable
 
 logger = logging.getLogger(__name__)
 STATIC = {"": ("index.html", "text/html"), "index.html": ("index.html", "text/html"),
-          "app.js": ("app.js", "text/javascript"), "app.css": ("app.css", "text/css")}
+          "app.js": ("app.js", "text/javascript"), "app.css": ("app.css", "text/css"),
+          "fridica-logo.png": ("fridica-logo.png", "image/png")}
 ALLOWED = [
-    ("GET", r"/status"), ("GET", r"/threads"), ("GET", r"/threads/[^/]+"), ("POST", r"/threads/[^/]+/[a-z]+"),
+    ("GET", r"/status"), ("GET", r"/threads"), ("GET", r"/threads/[^/]+"),
+    ("POST", r"/threads/[^/]+/(resume|pause|close|archive|restore|clean|instruct)"),
     ("GET", r"/workers"), ("POST", r"/workers/[^/]+/(interrupt|stop)"), ("GET", r"/approvals"),
     ("POST", r"/approvals/[^/]+"), ("GET", r"/machines"), ("GET", r"/outbox"), ("POST", r"/outbox/\d+/retry"),
-    ("GET", r"/activity"), ("PATCH", r"/config/limits"),
+    ("GET", r"/activity"), ("GET", r"/jobs"), ("GET", r"/config"), ("GET", r"/attention/threads"),
+    ("PATCH", r"/config/limits"), ("PATCH", r"/config/parent"),
 ]
 
 

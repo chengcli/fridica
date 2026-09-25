@@ -82,6 +82,8 @@ serves every thread at once.
 
 Owner controls (resume, pause, close, archive, restore, clean) are `control` inbox
 rows. They are therefore serialized with everything else in the thread.
+Local owner instructions also use the inbox. They can resume a paused thread
+without creating a Slack message.
 
 ## Backend protocols (verified against Claude Code 2.1.282 and codex-cli 0.154)
 

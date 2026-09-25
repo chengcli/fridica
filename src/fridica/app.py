@@ -93,8 +93,29 @@ class Daemon:
         self.bus.thread(session_id)
         return {"session": session_id, "action": action, "queued": True}
 
+    async def instruct_thread(self, session_id: str, text: str, client_id: str) -> dict:
+        session = self.store.threads.get(session_id)
+        if session is None:
+            raise ValueError("no such thread")
+        if self.observe_only or session.key.channel not in self.config.slack.channels:
+            raise ValueError("this thread cannot run an instruction")
+        if session.control in ("closed", "archived", "cleaned"):
+            raise ValueError(f"restore the {session.control} thread before giving an instruction")
+        if not isinstance(text, str) or not 1 <= len(text.strip()) <= 4000:
+            raise ValueError("instruction must be 1–4000 characters")
+        if not isinstance(client_id, str) or not 8 <= len(client_id) <= 80 or not client_id.isascii() or not client_id.replace("-", "").isalnum():
+            raise ValueError("client_id must be an ASCII identifier of 8–80 characters")
+        instruction_id = self.store.inbox.add_once(session_id, "owner_instruction", client_id,
+                                                    self.clock.now(), {"text": text.strip()})
+        self.bus.thread(session_id)
+        return {"instruction_id": instruction_id, "queued": True}
+
     def update_limits(self, changes: dict) -> Config:
         self.reload(editor.update(self.config.path, {"limits": changes}))
+        return self.config
+
+    def update_parent(self, changes: dict) -> Config:
+        self.reload(editor.update(self.config.path, {"parent": changes}))
         return self.config
 
     def reload(self, config: Config) -> None:

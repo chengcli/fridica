@@ -3,29 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fridica</title>
+  <meta name="theme-color" content="#f5f6f5">
+  <title>Fridica · Control room</title>
+  <link rel="icon" href="fridica-logo.png">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-  <header>
-    <h1>Fridica</h1>
-    <span id="status" class="pill">connecting…</span>
-    <nav id="tabs">
-      <button data-view="overview" class="active">Overview</button>
-      <button data-view="threads">Threads</button>
-      <button data-view="workers">Workers</button>
-      <button data-view="approvals">Approvals <span id="approval-count" class="count"></span></button>
-      <button data-view="machines">Machines</button>
-      <button data-view="activity">Activity</button>
-    </nav>
-  </header>
-  <main>
-    <section id="unlock" hidden>
-      <p>Paste the key printed by <code>fridica dashboard</code>.</p>
-      <form id="unlock-form"><input id="key" type="password" autocomplete="off" aria-label="Dashboard key"><button>Unlock</button></form>
-    </section>
-    <section id="view"></section>
-  </main>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="brand"><img src="fridica-logo.png" alt=""><div><strong>fridica</strong><small>CONTROL ROOM</small></div></div>
+      <div class="nav-label">WORKSPACE</div>
+      <nav id="tabs">
+        <button data-view="overview" class="active"><span class="nav-icon">◫</span> Overview</button>
+        <button data-view="inbox"><span class="nav-icon">◉</span> Inbox <span id="inbox-count" class="count"></span></button>
+        <button data-view="threads"><span class="nav-icon">☰</span> Threads</button>
+        <button data-view="workers"><span class="nav-icon">◇</span> Workers</button>
+        <button data-view="machines"><span class="nav-icon">▦</span> Machines &amp; access</button>
+        <button data-view="activity"><span class="nav-icon">◷</span> Activity</button>
+      </nav>
+      <div class="nav-bottom"><button id="settings-tab" data-view="settings"><span class="nav-icon">⚙</span> Settings</button></div>
+    </aside>
+    <div class="main-column">
+      <header class="topbar"><div class="crumb">Fridica <span>/</span> <strong id="current-view">Overview</strong></div>
+        <div class="top-actions"><span id="status" class="connection">Connecting</span><span id="last-sync" class="last-sync"></span>
+          <button id="refresh-button" class="icon-button" title="Refresh now" aria-label="Refresh now">↻</button>
+          <button id="auto-button" class="text-button" aria-pressed="true">Live on</button></div>
+      </header>
+      <main>
+        <section id="unlock" class="unlock panel" hidden>
+          <div class="eyebrow">LOCAL ACCESS</div><h2>Unlock the control room</h2>
+          <p>Enter the key printed by <code>fridica dashboard</code>.</p>
+          <form id="unlock-form"><input id="key" type="password" autocomplete="off" aria-label="Dashboard key" required><button class="primary">Unlock</button></form>
+        </section>
+        <section id="view"></section>
+      </main>
+    </div>
+  </div>
+  <dialog id="confirm-dialog"><form method="dialog"><div class="eyebrow">REVIEW ACTION</div><h2 id="dialog-title"></h2><p id="dialog-body"></p><pre id="dialog-detail" hidden></pre><div class="dialog-actions"><button value="cancel">Cancel</button><button id="dialog-confirm" value="confirm" class="primary">Continue</button></div></form></dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>
