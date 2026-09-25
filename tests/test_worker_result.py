@@ -41,4 +41,12 @@ def test_missing_structure_is_none_and_fallback_is_partial():
     assert coerce({"status": "done", "summary": ""}) is None
     assert coerce({"status": "great", "summary": "x"}) is None
     result = fallback("I did the thing.\n```json\n{broken\n```")
-    assert result.status == "partial" and result.report == "I did the thing."
+    assert result.status == "partial" and result.report.startswith("I did the thing.") and "{broken" in result.report
+
+
+def test_prose_keeps_code_blocks_that_are_not_the_result():
+    text = "Here is the fix:\n```python\nprint('hi')\n```\nand a broken block\n```json\n{broken\n```"
+    assert prose(text) == text.strip()
+    assert fallback(text).report.endswith("```")
+    with_result = f"Done.\n```python\nx = 1\n```\n```json\n{json.dumps(VALID)}\n```"
+    assert prose(with_result) == "Done.\n```python\nx = 1\n```"

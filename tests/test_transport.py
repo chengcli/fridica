@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 
 import pytest
 
@@ -169,3 +170,32 @@ def test_run_once_bounds_output(tmp_path):
 
 def test_diagnostic_is_a_bounded_single_line():
     assert process.diagnostic(b"a\n  b\n" + b"x" * 1000, limit=10) == "x" * 10
+
+
+BSD_REALPATH = r'''#!{python}
+"""Behaves like macOS realpath: no -e option, and missing paths are errors."""
+import os, sys
+args = [arg for arg in sys.argv[1:] if arg != "--"]
+if any(arg.startswith("-") for arg in args):
+    print("realpath: illegal option", file=sys.stderr); sys.exit(1)
+path = args[0]
+if not os.path.exists(path):
+    print(f"realpath: {path}: No such file or directory", file=sys.stderr); sys.exit(1)
+print(os.path.realpath(path))
+'''
+
+
+def test_remote_read_works_with_bsd_realpath(fake_ssh, tmp_path, monkeypatch):
+    binaries = tmp_path / "bsd"
+    binaries.mkdir()
+    (binaries / "realpath").write_text(BSD_REALPATH.replace("{python}", sys.executable))
+    (binaries / "realpath").chmod(0o700)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "notes.md").write_text("# hi")
+    transport = make_transport(machine())
+    roots = (PurePosixPath(root),)
+    assert asyncio.run(transport.read_file(PurePosixPath(root / "notes.md"), roots=roots)) == b"# hi"
+    with pytest.raises(ValueError):
+        asyncio.run(transport.read_file(PurePosixPath(root / "missing.md"), roots=roots))

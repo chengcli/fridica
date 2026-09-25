@@ -210,7 +210,11 @@ CREATE TABLE audit (
 );
 """
 
-MIGRATIONS: tuple[str, ...] = (V1,)
+V2 = """
+ALTER TABLE thread_inbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+"""
+
+MIGRATIONS: tuple[str, ...] = (V1, V2)
 
 
 def version(connection: sqlite3.Connection) -> int:

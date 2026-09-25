@@ -151,8 +151,8 @@ def _limits(data: dict) -> Limits:
         else:
             values[name] = _number(value, f"limits.{name}", minimum=1)
     limits = Limits(**values)
-    if limits.reply_chars > 12000:
-        raise ConfigError("limits.reply_chars must be at most 12000 (Slack's practical message size)")
+    if not 500 <= limits.reply_chars <= 12000:
+        raise ConfigError("limits.reply_chars must be between 500 and 12000 (Slack's practical message size)")
     return limits
 
 

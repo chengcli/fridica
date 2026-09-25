@@ -1,4 +1,7 @@
 import asyncio
+import pathlib
+import shutil
+import tempfile
 import stat
 
 import pytest
@@ -52,9 +55,12 @@ class Controls:
 
 
 @pytest.fixture
-def api(config, store, tmp_path):
+def api(config, store, tmp_path, request):
     controls = Controls(config, store)
-    socket = tmp_path / "run" / "control.sock"
+    # Unix socket paths are limited to about 104 bytes, and macOS temporary directories are long.
+    short = pathlib.Path(tempfile.mkdtemp(prefix="fr-", dir="/tmp"))
+    request.addfinalizer(lambda: shutil.rmtree(short, ignore_errors=True))
+    socket = short / "control.sock"
     session = store.threads.ensure(ThreadKey("TTEAM", "CROOM", "1.0"), 1.0)
     store.workers.add(WorkerRecord("w1", session.id, "snowy", "exocubed", "codex"), 1.0)
     store.jobs.add(Job("j1", "w1", session.id, "brief"), 1.0)

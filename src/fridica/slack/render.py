@@ -55,6 +55,8 @@ def permalinks(text: str) -> list[tuple[str, str, str, str | None]]:
 
 def split_message(text: str, limit: int) -> list[str]:
     """``text`` in consecutive parts of at most ``limit`` characters, split at paragraphs, then lines, then words."""
+    if limit < 1:
+        raise ValueError("split_message needs a positive limit")
     parts, rest = [], text.strip()
     while len(rest) > limit:
         window = rest[:limit + 1]
@@ -71,8 +73,10 @@ def fit_reply(text: str, details: str, limit: int) -> tuple[str, str]:
         return ATTACHED, details
     if len(text) <= limit:
         return text, details
-    head = split_message(text, limit - len(CONTINUED))[0]
-    return head + CONTINUED, text + (f"\n\n---\n\n{details}" if details else "")
+    full = text + (f"\n\n---\n\n{details}" if details else "")
+    if limit <= len(CONTINUED) + 20:
+        return text[:max(limit, 1)], full  # too little room for a pointer; keep the configured maximum
+    return split_message(text, limit - len(CONTINUED))[0] + CONTINUED, full
 
 
 def mentions(text: str, participants: Iterable[str]) -> str:

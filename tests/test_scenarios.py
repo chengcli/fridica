@@ -459,3 +459,34 @@ def test_long_threads_have_no_turn_limit(config, store):
     run(harness, body)
     assert harness.texts() == [f"reply {index}" for index in range(12)]
     assert store.threads.list()[0].turns == 12 and store.threads.list()[0].control == "active"
+
+
+def test_failing_items_are_retried_a_few_times_then_dropped(config, store, monkeypatch):
+    from fridica.threads import actor as actor_module
+    harness = Harness(config, store, decide(action("finally")))
+    failures = {"left": 2}
+    original = actor_module.ThreadActor.on_message
+
+    async def flaky(self, item):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise RuntimeError("database is locked")
+        await original(self, item)
+
+    monkeypatch.setattr(actor_module.ThreadActor, "on_message", flaky)
+
+    async def body():
+        harness.message("<@UOWNER> one")
+
+    run(harness, body)
+    assert harness.texts() == ["finally"]
+
+    failures["left"] = 99
+    harness2 = Harness(config, store, decide())
+    harness2.counter = 50
+
+    async def body2():
+        harness2.message("<@UOWNER> two")
+
+    run(harness2, body2)
+    assert harness2.texts() == [] and store.audit.recent()[0]["action"] == "inbox.dropped"

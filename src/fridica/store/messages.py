@@ -122,10 +122,18 @@ class Inbox:
     def finish(self, inbox_id: int, state: str = "done") -> None:
         self.db.execute("UPDATE thread_inbox SET state=? WHERE id=?", (state, inbox_id))
 
-    def release(self, inbox_id: int, state: str) -> bool:
-        """Move an item out of ``processing`` (back to pending, or dropped) unless it was already committed."""
-        cursor = self.db.execute("UPDATE thread_inbox SET state=? WHERE id=? AND state='processing'", (state, inbox_id))
-        return cursor.rowcount == 1
+    def retry_or_drop(self, inbox_id: int, limit: int) -> str:
+        """After a failure: back to pending for another attempt, or dropped once ``limit`` attempts failed.
+
+        Returns the new state, or "" when the item was already committed (it is left alone).
+        """
+        with self.db.transaction():
+            row = self.db.one("SELECT attempts FROM thread_inbox WHERE id=? AND state='processing'", (inbox_id,))
+            if row is None:
+                return ""
+            state = "pending" if row[0] + 1 < limit else "dropped"
+            self.db.execute("UPDATE thread_inbox SET attempts=attempts+1, state=? WHERE id=?", (state, inbox_id))
+            return state
 
     def release_session(self, session_id: str) -> int:
         """Return a thread's in-flight items to pending (its actor died)."""

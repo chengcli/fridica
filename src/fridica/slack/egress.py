@@ -22,6 +22,14 @@ PAGES = 10
 AMBIGUOUS_ERRORS = {"internal_error", "fatal_error", "request_timeout", "service_unavailable"}
 
 
+class IncompleteHistory(RuntimeError):
+    """Paging stopped at the cap: ``payloads`` holds what was read; older messages in the window were not."""
+
+    def __init__(self, payloads: list[dict]):
+        super().__init__(f"history paging stopped after {PAGES} pages")
+        self.payloads = payloads
+
+
 class SlackAPI(Protocol):
     async def post(self, channel: str, text: str, *, thread_ts: str | None, meta: FridicaMeta | None) -> str: ...
 
@@ -90,8 +98,13 @@ class SlackClient:
             raise _failure(error) from None
         except (OSError, TimeoutError) as error:
             raise DeliveryAmbiguous(type(error).__name__) from None
-        file = response.get("file") or {}
-        return file.get("id", "") if isinstance(file, dict) else ""
+        file = response.get("file") if hasattr(response, "get") else None
+        if not isinstance(file, dict) or not isinstance(file.get("id"), str) or not file["id"]:
+            files = response.get("files") if hasattr(response, "get") else None
+            file = files[0] if isinstance(files, list) and files and isinstance(files[0], dict) else {}
+        if not isinstance(file.get("id"), str) or not file["id"]:
+            raise DeliveryAmbiguous("Slack did not confirm the uploaded file")
+        return file["id"]
 
     async def fetch(self, channel: str, ts: str, thread: str | None) -> list[dict]:
         """A linked message, or a thread root with its replies (conversations.replies returns from the root)."""
@@ -106,12 +119,18 @@ class SlackClient:
         return []
 
     async def recent(self, channel: str, oldest: float, threads: tuple[str, ...] = ()) -> list[dict]:
-        """Messages since ``oldest`` (top level, replies in recent roots, and replies in ``threads``) as payloads."""
+        """Messages since ``oldest`` (top level, replies in recent roots, and replies in ``threads``) as payloads.
+
+        Raises IncompleteHistory, carrying what was read, when paging hit its cap.
+        """
         bound = f"{oldest:.6f}"
-        found = {item["ts"]: item for item in await self._pages(self.client.conversations_history, channel=channel, oldest=bound)}
+        items, complete = await self._pages(self.client.conversations_history, channel=channel, oldest=bound)
+        found = {item["ts"]: item for item in items}
         roots = set(threads) | {ts for ts, item in found.items() if item.get("reply_count")}
         for root in sorted(roots):
-            for item in await self._pages(self.client.conversations_replies, channel=channel, ts=root, oldest=bound):
+            replies, whole = await self._pages(self.client.conversations_replies, channel=channel, ts=root, oldest=bound)
+            complete = complete and whole
+            for item in replies:
                 if item["ts"] != root:
                     found.setdefault(item["ts"], item)
         payloads = []
@@ -120,17 +139,19 @@ class SlackClient:
                 continue
             payloads.append({"type": "event_callback", "event_id": f"catchup:{channel}:{ts}",
                              "team_id": self.config.slack.workspace, "event": {**item, "type": "message", "channel": channel}})
+        if not complete:
+            raise IncompleteHistory(payloads)
         return payloads
 
     @staticmethod
-    async def _pages(method, **arguments) -> list[dict]:
+    async def _pages(method, **arguments) -> tuple[list[dict], bool]:
+        """Every message of a paginated call up to PAGES pages, and whether the listing was complete."""
         items, cursor = [], None
         for _ in range(PAGES):
             response = await method(**arguments, limit=200, include_all_metadata=True, **({"cursor": cursor} if cursor else {}))
             items += [item for item in response.get("messages") or [] if isinstance(item, dict) and isinstance(item.get("ts"), str)]
             cursor = (response.get("response_metadata") or {}).get("next_cursor")
             if not cursor:
-                break
-        else:
-            logger.warning("catch-up stopped after %d pages; older messages in this window were not read", PAGES)
-        return items
+                return items, True
+        logger.warning("catch-up stopped after %d pages; the next pass rereads the full window", PAGES)
+        return items, False

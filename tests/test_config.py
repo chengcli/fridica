@@ -25,7 +25,8 @@ def test_loads_machines_workspaces_and_defaults(config, workspace):
     assert snowy.resources.environment() == {"OMP_NUM_THREADS": "32", "CUDA_VISIBLE_DEVICES": "0"}
     assert config.machines["dart9"].backends == ("codex",)
     assert config.limits.max_wait_replies == 3 and config.policy.mode == "write"
-    assert config.state.control_socket.name == "control.sock"
+    socket = config.state.control_socket  # beside the state database, unless that path is too long for a socket
+    assert len(str(socket)) <= 100 and (socket.name == "control.sock" or socket.name.startswith("control-"))
     assert len(config.fingerprint) == 64
 
 

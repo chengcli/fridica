@@ -42,7 +42,8 @@ def gate(message: Message, session: ThreadSession, *, owner: str, limits: Limits
         return Verdict("ignore", "our own post") if message.generated else Verdict("observe", "the owner wrote")
     mentioned = mentions(message, owner) or resumed
     waiting = session.status == "waiting"
-    peer_turn = message.meta.turn if message.meta and not session.reset_at else 0
+    # Peers' turn counters always propagate; nothing resets them now that threads have no turn limit.
+    peer_turn = message.meta.turn if message.meta else 0
     turn = max(session.turns, peer_turn) + 1
     if message.generated:
         if message.meta.kind == "debrief_root":

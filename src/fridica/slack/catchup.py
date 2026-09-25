@@ -15,7 +15,7 @@ from ..config.schema import Config
 from ..core.bus import Bus
 from ..core.clock import Clock
 from ..store import Store
-from .egress import SlackAPI
+from .egress import IncompleteHistory, SlackAPI
 from .ingress import normalize
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,16 @@ THREAD_AGE = 86400.0
 
 
 async def catch_up(slack: SlackAPI, store: Store, config: Config, bus: Bus, window: float, now: float) -> int:
-    added = 0
+    """Store missed messages; raises IncompleteHistory (after storing what was read) if any channel was truncated."""
+    added, incomplete = 0, None
     for channel in config.slack.channels:
         threads = tuple(session.key.root_ts for session in store.threads.list(channel=channel, limit=200)
                         if session.updated >= now - THREAD_AGE)
-        for payload in await slack.recent(channel, now - window, threads):
+        try:
+            payloads = await slack.recent(channel, now - window, threads)
+        except IncompleteHistory as error:
+            payloads, incomplete = error.payloads, error
+        for payload in payloads:
             message = normalize(payload, source="catchup")
             if message is None or message.workspace != config.slack.workspace:
                 continue
@@ -39,6 +44,8 @@ async def catch_up(slack: SlackAPI, store: Store, config: Config, bus: Bus, wind
                 added += 1
                 logger.info("caught up on message %s in %s that Slack did not deliver live", message.ts, channel)
                 bus.thread(session_id)
+    if incomplete is not None:
+        raise incomplete
     return added
 
 

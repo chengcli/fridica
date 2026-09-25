@@ -48,9 +48,9 @@ def test_dropped_mentions_are_described():
 
 
 def test_render_helpers():
-    text, details = render.fit_reply("word " * 50, "", 60)
-    assert len(text) <= 60 and "details file" in text and details.startswith("word")
-    assert render.fit_reply("", "doc", 60) == (render.ATTACHED, "doc")
+    text, details = render.fit_reply("word " * 50, "", 120)
+    assert len(text) <= 120 and "details file" in text and details.startswith("word")
+    assert render.fit_reply("", "doc", 120) == (render.ATTACHED, "doc")
     assert render.mentions("ask UBOB, not `UCAROL` or <@UDAN>", {"UBOB", "UCAROL"}) == "ask <@UBOB>, not `UCAROL` or <@UDAN>"
     assert render.reply_text("Which branch?", "", status="waiting", requester="UALICE", people=set(), limit=100)[0] == \
         "<@UALICE> Which branch?"
@@ -114,3 +114,63 @@ def test_catch_up_stores_missed_messages_once(config, store):
     assert asyncio.run(catchup.catch_up(Recent(), store, config, bus, 3600, 200.0)) == 0
     assert rung == ["TTEAM:CROOM:100.000009"]
     assert store.messages.thread(store.threads.list()[0].key)[0].source == "catchup"
+
+
+def test_fit_reply_never_splits_with_a_non_positive_limit():
+    for limit in (1, 10, len(render.CONTINUED), len(render.CONTINUED) + 5):
+        text, details = render.fit_reply("word " * 40, "", limit)
+        assert len(text) <= limit and details.startswith("word")
+    with pytest.raises(ValueError):
+        render.split_message("abc", 0)
+
+
+def test_catch_up_rereads_the_window_after_truncated_paging(config, store):
+    from fridica.slack.egress import IncompleteHistory
+
+    class Truncated:
+        async def recent(self, channel, oldest, threads=()):
+            if channel != "CROOM":
+                return []
+            raise IncompleteHistory([payload(ts="100.000009", text="<@UOWNER> partial")])
+
+    with pytest.raises(IncompleteHistory):
+        asyncio.run(catchup.catch_up(Truncated(), store, config, Bus(), 3600, 200.0))
+    assert store.messages.exists("TTEAM", "CROOM", "100.000009")  # what was read is still stored
+
+
+class Pager:
+    def __init__(self, pages):
+        self.pages = pages
+        self.calls = 0
+
+    async def conversations_history(self, **arguments):
+        self.calls += 1
+        more = self.calls < self.pages
+        return {"messages": [{"ts": f"100.{self.calls:06d}", "text": "x", "user": "U1"}],
+                "response_metadata": {"next_cursor": "c" if more else ""}}
+
+    async def conversations_replies(self, **arguments):
+        return {"messages": []}
+
+
+def test_egress_reports_truncated_history(config):
+    from fridica.slack.egress import IncompleteHistory, PAGES
+    assert len(asyncio.run(SlackClient(config, Pager(3)).recent("CROOM", 0))) == 3
+    with pytest.raises(IncompleteHistory) as error:
+        asyncio.run(SlackClient(config, Pager(PAGES + 5)).recent("CROOM", 0))
+    assert len(error.value.payloads) == PAGES
+
+
+class Uploader:
+    def __init__(self, response):
+        self.response = response
+
+    async def files_upload_v2(self, **arguments):
+        return self.response
+
+
+def test_upload_needs_a_confirmed_file(config):
+    assert asyncio.run(SlackClient(config, Uploader({"file": {"id": "F1"}})).upload("C", None, b"x", "a.md")) == "F1"
+    assert asyncio.run(SlackClient(config, Uploader({"files": [{"id": "F2"}]})).upload("C", None, b"x", "a.md")) == "F2"
+    with pytest.raises(DeliveryAmbiguous):
+        asyncio.run(SlackClient(config, Uploader({"ok": True})).upload("C", None, b"x", "a.md"))

@@ -97,8 +97,10 @@ class SshTransport(Transport):
     async def read_file(self, path: PurePath, *, roots: tuple[PurePath, ...], limit: int = ARTIFACT_LIMIT) -> bytes:
         """One round trip: the file's real path, each root's real path, a NUL, then the bytes."""
         root_words = " ".join(quoted_path(root) for root in roots)
-        script = (f"f=$(realpath -e -- {quoted_path(path)}) || exit 3; test -f \"$f\" || exit 4; printf '%s\\0' \"$f\"; "
-                  f"for r in {root_words}; do printf '%s\\0' \"$(realpath -e -- \"$r\" 2>/dev/null || echo -)\"; done; "
+        # GNU realpath needs -e to fail on missing paths; BSD/macOS realpath fails by default and has no -e.
+        resolve = 'rp() { realpath -e -- "$1" 2>/dev/null || realpath -- "$1" 2>/dev/null; }; '
+        script = (f"{resolve}f=$(rp {quoted_path(path)}) || exit 3; test -f \"$f\" || exit 4; printf '%s\\0' \"$f\"; "
+                  f"for r in {root_words}; do printf '%s\\0' \"$(rp \"$r\" || echo -)\"; done; "
                   f"printf '\\0'; head -c {limit + 1} -- \"$f\"")
         argv = ssh_command(self.machine.host, "exec sh -c " + shlex.quote(script))
         completed = await process.run_once(argv, cwd=None, env=process.scrubbed_environment(self.excluded_env),

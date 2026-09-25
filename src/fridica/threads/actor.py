@@ -28,7 +28,7 @@ INSPECTION_NOTICE = "An earlier task in this thread needs a local look before I 
 DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
 INTERRUPTED = "One of the jobs I started for this thread was interrupted by a restart and was not resumed."
 RESUME_MARGIN = 1e-6
-STALE_RETRIES = 3
+ATTEMPTS = 3
 
 
 class Runtime(Protocol):
@@ -63,13 +63,14 @@ class Outcome:
     action: dict | None = None
     follow_ups: tuple[tuple[str, str, dict], ...] = ()
     """Inbox items to add: (kind, ref, payload)."""
+    wipe: bool = False
+    """Erase the thread's message text (the owner's clean action)."""
 
 
 class ThreadActor:
     def __init__(self, runtime: Runtime, session_id: str):
         self.rt = runtime
         self.session_id = session_id
-        self.stale: dict[int, int] = {}
 
     @property
     def store(self) -> Store:
@@ -87,18 +88,21 @@ class ThreadActor:
                 return
             try:
                 await self.handle(item)
-            except StaleSession:
-                # Only an uncommitted item is retried, and only a few times.
-                self.stale[item.id] = self.stale.get(item.id, 0) + 1
-                retry = self.stale[item.id] <= STALE_RETRIES
-                if self.store.inbox.release(item.id, "pending" if retry else "dropped"):
-                    logger.info("thread %s changed while item %s was processed; %s", self.session_id, item.id,
-                                "retrying it" if retry else "dropping it")
-            except Exception:
-                logger.exception("could not process %s item %s in thread %s", item.kind, item.id, self.session_id)
-                if self.store.inbox.release(item.id, "dropped"):
+            except Exception as error:
+                # An uncommitted item gets a few more attempts (a transient database error or a stale session
+                # usually clears); a committed one is left alone. Persisting the count stops endless retries.
+                if isinstance(error, StaleSession):
+                    logger.info("thread %s changed while item %s was processed", self.session_id, item.id)
+                else:
+                    logger.exception("could not process %s item %s in thread %s", item.kind, item.id, self.session_id)
+                state = self.store.inbox.retry_or_drop(item.id, ATTEMPTS)
+                if state == "dropped":
+                    logger.error("giving up on %s item %s in thread %s after %d attempts", item.kind, item.id,
+                                 self.session_id, ATTEMPTS)
                     self.store.audit.record("fridica", "inbox.dropped", self.rt.clock.now(), target=self.session_id,
                                             details={"item": item.id, "kind": item.kind})
+                elif state == "pending":
+                    return  # stop this pass; the manager's sweep retries the item shortly
 
     async def handle(self, item: InboxItem) -> None:
         handler = {"message": self.on_message, "worker_result": self.on_worker, "worker_interrupted": self.on_worker,
@@ -138,6 +142,8 @@ class ThreadActor:
                 self.store.cooldowns.mark(outcome.session.key.workspace, outcome.session.key.channel, now)
             for kind, ref, payload in outcome.follow_ups:
                 self.store.inbox.add(self.session_id, kind, now, ref=ref, payload=payload)
+            if outcome.wipe:
+                self.store.messages.wipe(outcome.session.key)
             session = self.store.threads.save(outcome.session, now)
             self.store.inbox.finish(item.id)
         if outcome.posts:
@@ -395,14 +401,12 @@ class ThreadActor:
             if latest is not None:
                 follow_ups = (("message", latest.event_id, {"resumed": True}),)
         elif action == "clean":
-            with self.store.transaction():
-                self.store.messages.wipe(session.key)
             updated = replace(session, control="cleaned", summary="", decisions=())
         else:
             self.store.inbox.finish(item.id, "dropped")
             return
         self.store.audit.record(actor, f"thread.{action}", now, target=session.id)
-        self.commit(item, Outcome(session=updated, follow_ups=follow_ups))
+        self.commit(item, Outcome(session=updated, follow_ups=follow_ups, wipe=action == "clean"))
         if action in ("close", "archive", "clean"):
             for worker in self.store.workers.for_session(session.id):
                 if worker.status != "stopped":

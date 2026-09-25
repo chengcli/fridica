@@ -42,7 +42,7 @@ class ApprovalBroker:
         automatic = rules.decide(policy, request)
         if automatic is not None:
             self.store.audit.record("policy", "approval." + ("allow" if automatic != DENY else "deny"), now,
-                                    target=worker.id, details={"summary": request.summary})
+                                    target=worker.id, details={"kind": request.kind})
             return automatic
         approval = Approval(id=uuid.uuid4().hex[:12], worker_id=worker.id, job_id=job.id, session_id=job.session_id,
                             kind=request.kind, summary=request.summary, detail=request.detail,
@@ -53,7 +53,9 @@ class ApprovalBroker:
         with self.store.transaction():
             self.store.approvals.add(approval)
             self.store.workers.set_status(worker.id, "awaiting_approval", now)
-        logger.info("worker %s on %s asks: %s (approval %s)", worker.id, worker.machine, request.summary, approval.id)
+        # The summary can contain command arguments (possibly secrets); it stays in the database for the owner
+        # and is never written to the log.
+        logger.info("worker %s on %s asks for a %s approval (%s)", worker.id, worker.machine, request.kind, approval.id)
         if self.notify is not None:
             try:
                 self.notify(approval)

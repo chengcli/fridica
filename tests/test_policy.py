@@ -70,3 +70,9 @@ def test_advance_pauses_loops_and_stalls():
     assert stalled.control == "paused" and "without progress" in stalled.pause_reason
     repeat = advance(advance(SESSION, **arguments(text="Same")), **arguments(text="same ", turn=2))
     assert repeat.no_progress == 1
+
+
+def test_peer_turns_count_after_a_resume():
+    resumed = replace(SESSION, reset_at=1.5, turns=0)
+    peer = message("<@UOWNER> ?", sender="UPEER", meta=FridicaMeta("UPEER", status="waiting", turn=7), ts="3.0")
+    assert verdict(peer, resumed).turn == 8

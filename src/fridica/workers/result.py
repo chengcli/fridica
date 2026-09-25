@@ -55,7 +55,9 @@ WorkerResult object and nothing after it. Schema:
 SUMMARIZE_PROMPT = ("Return only the WorkerResult JSON object for the work you just did, in one fenced ```json "
                     "block, with no other text.")
 
-FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL)
+# A fenced block: an opening fence at the start of a line with an optional info string (json, python, …),
+# its body, and the next closing fence line. Anchoring to lines keeps consecutive blocks paired correctly.
+FENCE = re.compile(r"^```[\w+-]*[ \t]*\n(.*?)\n```[ \t]*$", re.DOTALL | re.MULTILINE)
 
 
 def parse(text: str) -> WorkerResult | None:
@@ -76,11 +78,15 @@ def parse(text: str) -> WorkerResult | None:
 
 
 def prose(text: str) -> str:
-    """The message text with any trailing JSON block removed."""
-    match = None
-    for match in FENCE.finditer(text):
-        pass
-    return (text[:match.start()] if match else text).strip()
+    """The message text without its WorkerResult block; other fenced blocks (code examples) are kept."""
+    for match in reversed(list(FENCE.finditer(text))):
+        try:
+            data = json.loads(match.group(1))
+        except ValueError:
+            continue
+        if coerce(data) is not None:
+            return (text[:match.start()] + text[match.end():]).strip()
+    return text.strip()
 
 
 def coerce(data) -> WorkerResult | None:
