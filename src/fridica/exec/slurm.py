@@ -24,7 +24,7 @@ class SlurmNotImplemented(NotImplementedError):
 
 class SlurmTransport(Transport):
     def launch(self, command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,
-               timeout: float | None = None, confine: bool = False) -> Launch:
+               timeout: float | None = None, confine=None, create: bool = False) -> Launch:
         raise SlurmNotImplemented(f"machine {self.machine.name} uses Slurm, which Fridica does not support yet")
 
     async def read_file(self, path: PurePath, *, roots: tuple[PurePath, ...], limit: int = ARTIFACT_LIMIT) -> bytes:

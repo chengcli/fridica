@@ -11,7 +11,10 @@ from .transport import ARTIFACT_LIMIT, Launch, Transport
 
 class LocalTransport(Transport):
     def launch(self, command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,
-               timeout: float | None = None, confine: tuple[PurePath, ...] | None = None) -> Launch:
+               timeout: float | None = None, confine: tuple[PurePath, ...] | None = None,
+               create: bool = False) -> Launch:
+        if create:
+            Path(cwd).expanduser().mkdir(parents=True, exist_ok=True)
         prefix = []
         if confine is not None:
             prepare_local(str(Path.home()))

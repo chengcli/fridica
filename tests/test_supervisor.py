@@ -238,9 +238,12 @@ def test_idle_workers_are_evicted_to_respect_max_workers(harness):
 
 
 def test_artifacts_are_read_from_the_workspace(harness, workspace):
-    (workspace / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
+    (workspace / "worker1").mkdir()  # the worker's slot folder
+    (workspace / "worker1" / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
+    (workspace / "other.png").write_bytes(b"\x89PNG\r\n\x1a\nDATA")
     harness.add("a", machine="local", workspace="project")
-    harness.script["a"] = {"instant": True, "artifacts": [str(workspace / "plot.png"), "/etc/passwd.png"]}
+    harness.script["a"] = {"instant": True, "artifacts": [str(workspace / "worker1" / "plot.png"), "/etc/passwd.png",
+                                                          str(workspace / "other.png")]}
 
     async def scenario():
         harness.supervisor.schedule()
@@ -251,7 +254,8 @@ def test_artifacts_are_read_from_the_workspace(harness, workspace):
 
     asyncio.run(scenario())
     artifacts = harness.store.artifacts.for_job("a-j0")
-    assert [(item["status"], item["size"]) for item in artifacts] == [("ready", 12), ("rejected", 0)]
+    # Only files inside the worker's own slot folder are read; another slot's files (or the shared root) are not.
+    assert [(item["status"], item["size"]) for item in artifacts] == [("ready", 12), ("rejected", 0), ("rejected", 0)]
     assert artifacts[0]["blob"].endswith(b"DATA")
 
 
@@ -272,8 +276,8 @@ def test_one_pass_counts_workers_it_is_starting_and_never_evicts_them(harness):
     harness.supervisor.config = replace(config, limits=replace(config.limits, max_jobs=5), machines=replace(
         config.machines, machines=tuple(replace(item, max_workers=2, max_jobs=3) if item.name == "snowy" else item
                                         for item in config.machines.machines)))
-    harness.add("x", jobs=0)
-    harness.add("y", jobs=0)
+    harness.add("x", jobs=0, slot=1)
+    harness.add("y", jobs=0, slot=2)
     harness.add("x2", jobs=0)
     harness.store.jobs.add(Job("x-follow", "x", harness.session.id, "follow up"), 2.0)
     harness.add("w1")
@@ -347,3 +351,46 @@ def test_stop_that_times_out_finishes_the_job_once(harness, monkeypatch):
     assert harness.store.jobs.get("a-j0").status == "cancelled"
     assert [item.ref for item in harness.store.inbox.pending(harness.session.id)] == ["a-j0"]
     assert harness.store.workers.get("a").status == "stopped"
+
+
+def test_jobs_get_sticky_slots_with_their_own_subfolder_and_gpus(harness):
+    config = harness.config
+    harness.supervisor.config = replace(config, machines=replace(config.machines, machines=tuple(
+        replace(item, max_jobs=2, max_workers=4, resources=replace(item.resources, gpus=(0, 1)),
+                workspaces=tuple(replace(space, subfolders=True) for space in item.workspaces))
+        if item.name == "snowy" else item for item in config.machines.machines)))
+    for name in ("a", "b", "c"):
+        harness.add(name)
+
+    async def scenario():
+        started = harness.supervisor.schedule()
+        await settle()
+        specs = {name: harness.fakes[name].spec for name in harness.fakes}
+        harness.fakes["a"].release.set()      # slot of a frees up
+        await settle()
+        again = harness.supervisor.schedule()  # c takes a's free slot
+        await settle()
+        return started, specs, again
+
+    started, specs, again = asyncio.run(scenario())
+    assert started == ["a-j0", "b-j0"] and again == ["c-j0"]
+    assert (str(specs["a"].workspace.path), specs["a"].machine.resources.gpus, specs["a"].slot) == (
+        "~/scix/repos/exocubed/worker1", (0,), 1)
+    assert (str(specs["b"].workspace.path), specs["b"].machine.resources.gpus) == ("~/scix/repos/exocubed/worker2", (1,))
+    assert specs["a"].create_cwd
+    assert harness.store.workers.get("c").slot == 1 and str(harness.fakes["c"].spec.workspace.path).endswith("worker1")
+
+
+def test_a_worker_waits_for_its_own_slot(harness):
+    config = harness.config
+    harness.supervisor.config = replace(config, machines=replace(config.machines, machines=tuple(
+        replace(item, max_jobs=2, max_workers=4) if item.name == "snowy" else item for item in config.machines.machines)))
+    harness.add("a", jobs=1, slot=1)
+    harness.add("b", jobs=1, slot=1)   # sticky to slot 1, which a is using
+
+    async def scenario():
+        started = harness.supervisor.schedule()
+        await settle()
+        return started
+
+    assert asyncio.run(scenario()) == ["a-j0"]  # b does not move to the free slot 2; it keeps its session's directory

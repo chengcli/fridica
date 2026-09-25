@@ -79,7 +79,8 @@ class JsonlWorker:
 
     async def start(self) -> None:
         confine = (self.spec.workspace.path,) if self.spec.confined else None
-        self.process = await self.transport.spawn(self.command(), self.spec.workspace.path, confine=confine)
+        self.process = await self.transport.spawn(self.command(), self.spec.workspace.path, confine=confine,
+                                                  create=self.spec.create_cwd)
         self.lines = asyncio.Queue()
         self.stderr = bytearray()
         self.reader = asyncio.create_task(self._read_lines())

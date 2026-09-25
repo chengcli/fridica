@@ -197,11 +197,12 @@ def test_fan_out_to_two_machines_joins_into_one_reply_and_follow_ups_reach_one_w
 
 
 def test_single_finished_job_posts_its_report_directly_with_artifacts(config, store, workspace):
-    (workspace / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\nPIXELS")
+    (workspace / "worker1").mkdir()  # the worker's slot folder
+    (workspace / "worker1" / "plot.png").write_bytes(b"\x89PNG\r\n\x1a\nPIXELS")
 
     def work(spec, brief, resume):
         return WorkerResult("done", "Plotted it.", report="Here is the plot: 1.2x faster.",
-                            artifacts=(ArtifactRef(str(workspace / "plot.png"), "png", "speedup"),))
+                            artifacts=(ArtifactRef(str(spec.workspace.path / "plot.png"), "png", "speedup"),))
 
     harness = Harness(config, store, decide(action("Plotting now.", delegate=[delegation("Plot speedup.", workspace="project")])), work)
 

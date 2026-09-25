@@ -195,6 +195,8 @@ class WorkerRecord:
     status: str = "idle"
     summary: str = ""
     last_result: WorkerResult | None = None
+    slot: int = 0
+    """The machine job slot this worker runs in (1-based; 0 until its first job is scheduled)."""
     created: float = 0.0
     updated: float = 0.0
 

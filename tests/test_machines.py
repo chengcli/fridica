@@ -41,3 +41,21 @@ def test_ambiguity_and_unknowns_are_errors_with_candidates(config):
         resolve(config.machines, Selector(machine="dart9", backend="claude"))
     with pytest.raises(MatchError, match="no machine has"):
         resolve(config.machines, Selector(tags=("tpu",)))
+
+
+def test_gpus_are_split_across_job_slots():
+    from fridica.machines.registry import slot_gpus
+    assert slot_gpus((0, 1), 1, 2) == (0,) and slot_gpus((0, 1), 2, 2) == (1,)
+    assert slot_gpus((0, 1, 2, 3), 2, 2) == (2, 3)
+    assert slot_gpus((0, 1), 3, 3) == (0,)          # fewer GPUs than slots: shared round robin
+    assert slot_gpus((0, 1), 1, 1) == (0, 1) and slot_gpus(None, 1, 2) is None and slot_gpus((0, 1), 0, 2) == (0, 1)
+
+
+def test_slot_views_of_machines_and_workspaces(config):
+    from dataclasses import replace
+    snowy = replace(config.machines["snowy"], max_jobs=2)
+    assert snowy.for_slot(1).resources.gpus == (0,) and snowy.for_slot(1).resources.cpus == 32
+    canoe = snowy.workspace("canoe")
+    assert str(canoe.for_slot(2).path) == "/home/me/canoe/worker2" and canoe.for_slot(0) is canoe  # on by default
+    whole = replace(canoe, subfolders=False)
+    assert whole.for_slot(2) is whole

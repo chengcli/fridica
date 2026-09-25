@@ -57,7 +57,8 @@ def worker(row: sqlite3.Row) -> WorkerRecord:
         id=row["id"], session_id=row["session_id"], machine=row["machine"], workspace=row["workspace"],
         backend=row["backend"], role=row["role"], ephemeral=bool(row["ephemeral"]),
         backend_session_id=row["backend_session_id"], status=row["status"], summary=row["summary"],
-        last_result=result_from(row["last_result_json"]), created=row["created"], updated=row["updated"],
+        last_result=result_from(row["last_result_json"]), slot=row["slot"], created=row["created"],
+        updated=row["updated"],
     )
 
 
