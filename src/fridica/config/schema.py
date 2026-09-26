@@ -70,6 +70,16 @@ class Limits:
 
 
 @dataclass(frozen=True)
+class GitHubConfig:
+    enabled: bool = True
+    """Show the parent the current state of GitHub pull requests and issues linked in a thread."""
+    token_env: str = "FRIDICA_GITHUB_TOKEN"
+    """Optional read-only token; unset means anonymous requests (60 per hour per IP)."""
+    cache_seconds: float = 180.0
+    """How long a pull request's or issue's state is reused before it is fetched again."""
+
+
+@dataclass(frozen=True)
 class StateConfig:
     path: Path = DEFAULT_STATE
     control_socket: Path = DEFAULT_STATE.with_name("control.sock")
@@ -84,8 +94,13 @@ class Config:
     limits: Limits = Limits()
     policy: Policy = Policy()
     state: StateConfig = StateConfig()
+    github: GitHubConfig = GitHubConfig()
     path: Path | None = None
     fingerprint: str = field(default="", compare=False)
+
+    def secret_env(self) -> tuple[str, ...]:
+        """Environment variables that hold the daemon's credentials; no child process may see them."""
+        return (self.slack.app_token_env, self.slack.user_token_env, self.github.token_env)
 
     def tokens(self) -> tuple[str, str]:
         """The Socket Mode app token and the owner's user token, read from the environment."""

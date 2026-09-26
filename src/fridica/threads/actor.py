@@ -29,6 +29,7 @@ INSPECTION_NOTICE = "An earlier task in this thread needs a local look before I 
 DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
 INTERRUPTED = "One of the jobs I started for this thread was interrupted by a restart and was not resumed."
 RESUME_MARGIN = 1e-6
+GITHUB_WAIT = 20.0
 ATTACHMENT_WAIT = 30.0
 ATTEMPTS = 3
 
@@ -44,6 +45,7 @@ class Runtime(Protocol):
     supervisor: Any
     parent_slots: Any
     observe_only: bool
+    github: Any
 
     def repositories(self) -> tuple[dict, ...]: ...
 
@@ -203,7 +205,9 @@ class ThreadActor:
         if attached.get(message.event_id):
             trigger["message"]["attachments"] = attached.pop(message.event_id)  # shown once, in the trigger
         linked = await links.linked(self.rt.slack, config.slack.channels, message, history)
-        action = await self.decide(self.context(session, trigger, linked=linked, attachments=attached), session, ledger)
+        github = await self.github_state(session, first=message.text, history=history)
+        action = await self.decide(self.context(session, trigger, linked=linked, github=github, attachments=attached),
+                                   session, ledger)
         self.apply(item, session, action, turn=verdict.turn, requester=message.sender, ledger=ledger,
                    unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason))
 
@@ -223,9 +227,26 @@ class ThreadActor:
             return {}
 
     def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = (),
-                attachments: dict[str, list[dict]] | None = None):
+                github: tuple[dict, ...] = (), attachments: dict[str, list[dict]] | None = None):
         return contexts.build(self.store, self.config, session, trigger, repositories=self.rt.repositories(),
-                              busy=self.rt.supervisor.busy_by_machine(), linked=linked, attachments=attachments)
+                              busy=self.rt.supervisor.busy_by_machine(), linked=linked, github=github,
+                              attachments=attachments)
+
+    async def github_state(self, session: ThreadSession, *, first: str = "", history=None) -> tuple[dict, ...]:
+        """Current state of GitHub links in ``first`` and the thread (newest first); empty when turned off.
+
+        Bounded by GITHUB_WAIT: a slow or failing GitHub costs the parent this block, never the reply.
+        """
+        if self.rt.github is None or not self.config.github.enabled:
+            return ()
+        if history is None:
+            history = self.store.messages.thread(session.key, limit=contexts.HISTORY_LIMIT)
+        texts = [first, *(item.text for item in reversed(history))]
+        try:
+            return await asyncio.wait_for(self.rt.github.linked(texts), GITHUB_WAIT)
+        except Exception as error:
+            logger.warning("thread %s: GitHub state unavailable (%s)", session.id, type(error).__name__)
+            return ()
 
     def rules(self, session: ThreadSession) -> Rules:
         config = self.config
@@ -343,7 +364,8 @@ class ThreadActor:
             kind = "notice"
         else:
             trigger = {"kind": "worker_results", "results": [self._result_view(member) for member in unreported]}
-            action = await self.decide(self.context(session, trigger), session, ledger)
+            github = await self.github_state(session)
+            action = await self.decide(self.context(session, trigger, github=github), session, ledger)
             kind = "report"
         self.apply(item, session, action, turn=session.turns, requester=requester, ledger=ledger, reported=ids,
                    kind=kind, artifacts=artifacts)
@@ -408,7 +430,8 @@ class ThreadActor:
                           status="complete" if session.status == "blocked" else session.status)
         trigger = {"kind": "owner_instruction", "text": item.payload["text"]}
         ledger: list[dict] = []
-        action = await self.decide(self.context(session, trigger), session, ledger)
+        github = await self.github_state(session, first=item.payload["text"])
+        action = await self.decide(self.context(session, trigger, github=github), session, ledger)
         self.apply(item, session, action, turn=session.turns + 1,
                    requester=self.config.owner.slack_user, ledger=ledger)
 

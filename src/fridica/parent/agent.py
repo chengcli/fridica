@@ -29,7 +29,7 @@ class ParentAgent:
         self.config = config
         self.llm = llm or make_llm(config.parent.backend, model=config.parent.model,
                                    reasoning_effort=config.parent.reasoning_effort, timeout=config.parent.timeout,
-                                   excluded_env=(config.slack.app_token_env, config.slack.user_token_env))
+                                   excluded_env=config.secret_env())
 
     def contract(self) -> Contract:
         return load(self.config.owner.contract)

@@ -71,7 +71,7 @@ def worker_view(record) -> dict:
 
 
 def build(store: Store, config: Config, session: ThreadSession, trigger: dict, *, repositories: tuple[dict, ...],
-          busy: dict[str, int], linked: tuple[dict, ...] = (),
+          busy: dict[str, int], linked: tuple[dict, ...] = (), github: tuple[dict, ...] = (),
           attachments: dict[str, list[dict]] | None = None) -> ParentContext:
     budget = config.parent.context_chars
     attachments = attachments or {}
@@ -96,7 +96,7 @@ def build(store: Store, config: Config, session: ThreadSession, trigger: dict, *
             remaining = fit_attachments(item["attachments"], remaining)
     return ParentContext(
         owner=config.owner.slack_user, profile=config.owner.profile, session=session, trigger=trigger,
-        history=history, channel=channel, linked=linked,
+        history=history, channel=channel, linked=linked, github=github,
         workers=tuple(worker_view(record) for record in store.workers.for_session(session.id)),
         machines=tuple(config.machines.payload(busy)), repositories=repositories,
         notes=store.notes.current(session.id)[1], delegation_allowed=config.slack.may_delegate(session.key.channel),
