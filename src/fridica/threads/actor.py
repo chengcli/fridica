@@ -20,7 +20,7 @@ from ..config.schema import Config
 from ..core.models import FridicaMeta, InboxItem, Job, OutboxItem, ThreadSession, WorkerRecord
 from ..parent.actions import Action, Reply, Rules
 from ..parent.agent import ParentUnavailable, unavailable_reply
-from ..slack import links, render
+from ..slack import files, links, render
 from ..store import StaleSession, Store
 from . import context as contexts
 from . import policy
@@ -35,6 +35,7 @@ DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
 INTERRUPTED = "One of the jobs I started for this thread was interrupted by a restart and was not resumed."
 RESUME_MARGIN = 1e-6
 GITHUB_WAIT = 20.0
+ATTACHMENT_WAIT = 30.0
 ATTEMPTS = 3
 
 
@@ -211,12 +212,27 @@ class ThreadActor:
                 self.settle(item, (decision, "triage"), ledger)
                 return
         history = self.store.messages.thread(session.key, limit=contexts.HISTORY_LIMIT)
+        attached = await self.attachment_texts(message, history)
+        if attached.get(message.event_id):
+            trigger["message"]["attachments"] = attached.pop(message.event_id)  # shown once, in the trigger
         linked = await links.linked(self.rt.slack, config.slack.channels, message, history)
         github = await self.github_state(session, first=message.text, history=history)
-        action = await self.decide(self.context(session, trigger, linked=linked, github=github), session, ledger)
+        action = await self.decide(self.context(session, trigger, linked=linked, github=github, attachments=attached),
+                                   session, ledger)
         self.apply(item, session, action, turn=verdict.turn, requester=message.sender, ledger=ledger,
                    unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason),
                    repeat_ok=policy.repost_requested(message, config.owner.slack_user))
+
+    async def attachment_texts(self, message, history) -> dict[str, list[dict]]:
+        """Views of attached files for a decide call, trigger first; bounded by ATTACHMENT_WAIT."""
+        messages = [message, *(item for item in reversed(history) if item.event_id != message.event_id)]
+        if not any(item.attachments for item in messages):
+            return {}
+        try:
+            return await asyncio.wait_for(files.read(self.rt.slack, messages), ATTACHMENT_WAIT)
+        except Exception as error:
+            logger.warning("thread %s: attachments unavailable (%s)", self.session_id, type(error).__name__)
+            return {}
 
     async def blocked_notice(self, session: ThreadSession) -> str:
         """``Blocked: <blocker>. Next: <name> to <next_step>.`` from the thread's task note, naming people in plain
@@ -243,9 +259,10 @@ class ThreadActor:
         return SPECIAL.sub(lambda match: (match.group(2) or match.group(1).split("^")[0]).lstrip("@!"), text)
 
     def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = (),
-                github: tuple[dict, ...] = ()):
+                github: tuple[dict, ...] = (), attachments: dict[str, list[dict]] | None = None):
         return contexts.build(self.store, self.config, session, trigger, repositories=self.rt.repositories(),
-                              busy=self.rt.supervisor.busy_by_machine(), linked=linked, github=github)
+                              busy=self.rt.supervisor.busy_by_machine(), linked=linked, github=github,
+                              attachments=attachments)
 
     async def github_state(self, session: ThreadSession, *, first: str = "", history=None) -> tuple[dict, ...]:
         """Current state of GitHub links in ``first`` and the thread (newest first); empty when turned off.

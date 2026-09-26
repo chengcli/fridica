@@ -45,6 +45,16 @@ class FridicaMeta:
 
 
 @dataclass(frozen=True)
+class Attachment:
+    """A file shared with a message. ``url`` is Slack's private download URL (files.slack.com only)."""
+    id: str
+    name: str
+    mimetype: str = ""
+    size: int = 0
+    url: str = ""
+
+
+@dataclass(frozen=True)
 class Message:
     event_id: str
     workspace: str
@@ -57,6 +67,7 @@ class Message:
     source: str = "socket"
     """socket | catchup | self (our own post, recorded by the outbox)."""
     meta: FridicaMeta | None = None
+    attachments: tuple[Attachment, ...] = ()
 
     @property
     def root_ts(self) -> str:

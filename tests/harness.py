@@ -22,6 +22,7 @@ class FakeSlack:
         self.next_ts = next_ts
         self.fetched: dict = {}
         self.names: dict = {}
+        self.files: dict = {}
 
     async def post(self, channel, text, *, thread_ts, meta):
         if self.failures:
@@ -42,6 +43,14 @@ class FakeSlack:
 
     async def user_name(self, user):
         return self.names.get(user, user)
+
+    async def download(self, url, limit, *, html=False):
+        from fridica.slack.egress import FileUnavailable
+
+        if url not in self.files:
+            raise FileUnavailable("the Slack token lacks files:read")
+        data = self.files[url]
+        return data[:limit + 1], len(data)
 
 
 class ScriptedLLM:
