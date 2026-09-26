@@ -52,6 +52,8 @@ class Action:
     summary: str = ""
     decisions: tuple[str, ...] = ()
     note: dict = field(default_factory=dict)
+    suppressed: bool = False
+    """Set when the reply was dropped because it repeated the thread's last reply word for word."""
 
 
 @dataclass(frozen=True)

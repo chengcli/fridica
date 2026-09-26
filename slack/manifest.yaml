@@ -7,6 +7,7 @@ oauth_config:
       - channels:history
       - channels:read
       - chat:write
+      - files:read
       - files:write
       - users:read
 settings:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 
 from ..core.models import InboxItem, Message, ThreadKey
@@ -13,26 +14,26 @@ class Messages:
     def __init__(self, db: Database):
         self.db = db
 
-    def intake(self, message: Message, now: float) -> tuple[str, int | None]:
+    def intake(self, message: Message, now: float, *, work: bool = True) -> tuple[str, int | None]:
         """Persist a Slack message, create its thread, and queue it for the thread's actor.
 
         One transaction, so a crash can never leave a message without its inbox row.
-        Returns ``(session_id, inbox_id)``; ``inbox_id`` is None for duplicates and for
-        our own posts (``source='self'``), which are history but never work.
+        Returns ``(session_id, inbox_id)``; ``inbox_id`` is None for duplicates, for
+        our own posts (``source='self'``), and with ``work=False`` (history only).
         """
         key = message.key
         with self.db.transaction():
             cursor = self.db.execute(
                 "INSERT OR IGNORE INTO messages (event_id, workspace, channel, ts, root_ts, thread_ts, sender, text,"
-                " files_json, source, meta_json, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " files_json, source, meta_json, received_at, attachments_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (message.event_id, message.workspace, message.channel, message.ts, key.root_ts, message.thread_ts,
                  message.sender, message.text, codec.dumps(list(message.files)), message.source,
-                 codec.meta_json(message.meta), now),
+                 codec.meta_json(message.meta), now, codec.dumps([asdict(item) for item in message.attachments])),
             )
             if cursor.rowcount == 0:
                 return key.id, None
             ensure_thread(self.db, key, now)
-            if message.source == "self":
+            if message.source == "self" or not work:
                 return key.id, None
             inbox = self.db.execute(
                 "INSERT INTO thread_inbox (session_id, kind, ref, created) VALUES (?, 'message', ?, ?)",
@@ -43,6 +44,16 @@ class Messages:
     def get(self, event_id: str) -> Message | None:
         row = self.db.one("SELECT * FROM messages WHERE event_id=?", (event_id,))
         return codec.message(row) if row else None
+
+    def latest_ts(self, workspace: str, channel: str, *, received_before: float | None = None) -> float | None:
+        """The Slack timestamp of the newest message stored in a channel (before ``received_before``), or None."""
+        sql = "SELECT MAX(CAST(ts AS REAL)) FROM messages WHERE workspace=? AND channel=?"
+        parameters: tuple = (workspace, channel)
+        if received_before is not None:
+            sql += " AND received_at < ?"
+            parameters += (received_before,)
+        row = self.db.one(sql, parameters)
+        return row[0] if row and row[0] is not None else None
 
     def exists(self, workspace: str, channel: str, ts: str) -> bool:
         return self.db.one("SELECT 1 FROM messages WHERE workspace=? AND channel=? AND ts=?",

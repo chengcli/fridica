@@ -24,6 +24,7 @@ from ..exec.transport import make_transport
 from ..machines.registry import Machine
 from ..parent.contract import load as load_contract
 from ..parent.repos import load_repos
+from ..store.db import Database
 
 SANDBOX_HELP = "see the README section on sandbox dependencies"
 USERNS_PROBE = "bwrap --unshare-user --unshare-net --ro-bind / / --dev /dev --proc /proc --die-with-parent -- /bin/true"
@@ -55,7 +56,7 @@ class Probe:
 
     def __init__(self, machine: Machine, config: Config):
         self.machine = machine
-        self.transport = make_transport(machine, excluded_env=(config.slack.app_token_env, config.slack.user_token_env))
+        self.transport = make_transport(machine, excluded_env=config.secret_env())
 
     async def sh(self, script: str, *, timeout: float = 30) -> Completed:
         return await self.transport.probe(["sh", "-c", script], timeout=timeout)
@@ -159,6 +160,27 @@ async def check_sandbox(probe: Probe, system: str, machine: Machine) -> list[Che
     return [passed(name + " (bubblewrap user namespaces)")]
 
 
+def check_file_scope(config: Config) -> Check:
+    """Whether the token could read attached files at the daemon's last start (recorded then; no Slack call here)."""
+    name = "Slack files:read (attached text files)"
+    scopes = None
+    if config.state.path.exists():
+        try:
+            database = Database(config.state.path, lock=False, readonly=True)
+            try:
+                scopes = database.meta("slack_scopes")
+            finally:
+                database.close()
+        except Exception:
+            scopes = None
+    if scopes is None or scopes == "unknown":
+        return Check("SKIP", name, "known after the first start" if scopes is None else "Slack did not report scopes")
+    if "files:read" in scopes.split(","):
+        return passed(name)
+    return Check("WARN", name, "not granted: attachments are shown by name only; add files:read to the Slack app "
+                               "(slack/manifest.yaml) and reinstall it")
+
+
 async def run_checks(path: Path) -> list[Check]:
     checks = [passed("Operating system") if sys.platform in ("linux", "darwin") else failed("Operating system", "macOS or Linux is required")]
     try:
@@ -180,6 +202,7 @@ async def run_checks(path: Path) -> list[Check]:
                                     ("Slack user token", config.slack.user_token_env, "xoxp-")):
         checks.append(passed(label) if os.environ.get(variable, "").startswith(prefix)
                       else failed(label, f"set {variable} to a {prefix} token"))
+    checks.append(check_file_scope(config))
     local = next((machine for machine in config.machines.machines if machine.transport == "local"), None)
     parent_probe = Probe(local or Machine("local", "local", (), (config.parent.backend,), config.parent.backend,
                                           config.policy), config)

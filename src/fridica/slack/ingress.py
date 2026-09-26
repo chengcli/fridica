@@ -5,10 +5,13 @@ from __future__ import annotations
 import math
 import re
 
-from ..core.models import Message
+from urllib.parse import urlsplit
+
+from ..core.models import Attachment, Message
 from .render import parse_metadata
 
 TEXT_LIMIT = 40000
+FILE_HOST = "files.slack.com"
 TS = re.compile(r"\d+\.\d+")
 
 
@@ -30,8 +33,10 @@ def normalize(payload: dict, *, source: str = "socket") -> Message | None:
     if any(not isinstance(value, str) or not value for value in fields):
         return None
     text = event.get("text") if isinstance(event.get("text"), str) else ""
-    files = tuple(item.get("name", "") for item in event.get("files", []) if isinstance(item, dict)) \
-        if isinstance(event.get("files"), list) else ()
+    entries = [item for item in event.get("files", []) if isinstance(item, dict)] \
+        if isinstance(event.get("files"), list) else []
+    files = tuple(item.get("name", "") for item in entries)
+    attachments = tuple(attachment for attachment in map(_attachment, entries) if attachment is not None)
     if not text and not files:
         return None
     ts = event["ts"]
@@ -42,7 +47,31 @@ def normalize(payload: dict, *, source: str = "socket") -> Message | None:
         return None
     return Message(event_id=payload["event_id"], workspace=payload["team_id"], channel=event["channel"], ts=ts,
                    thread_ts=thread_ts if thread_ts != ts else None, sender=event["user"], text=text[:TEXT_LIMIT],
-                   files=files, source=source, meta=parse_metadata(event.get("metadata")))
+                   files=files, source=source, meta=parse_metadata(event.get("metadata")), attachments=attachments)
+
+
+def file_url(url: str) -> bool:
+    """An https URL on Slack's file host, with no port and no credentials: the only place the token is sent."""
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme == "https" and parts.hostname == FILE_HOST and parts.port is None
+                and parts.username is None and parts.password is None)
+    except ValueError:
+        return False
+
+
+def _attachment(item: dict) -> Attachment | None:
+    """A file's id, name, type, size and private URL; the URL is kept only on Slack's own file host, because the
+    daemon sends the owner's token with the download."""
+    url = item.get("url_private") if isinstance(item.get("url_private"), str) else ""
+    if not file_url(url):
+        url = ""
+    identifier, name = item.get("id"), item.get("name")
+    if not isinstance(identifier, str) or not isinstance(name, str):
+        return None
+    size = item.get("size") if isinstance(item.get("size"), int) and item.get("size") >= 0 else 0
+    mimetype = item.get("mimetype") if isinstance(item.get("mimetype"), str) else ""
+    return Attachment(identifier[:32], name[:200], mimetype[:100], size, url)
 
 
 def dropped_mention(payload: object, owner: str) -> str | None:
