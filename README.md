@@ -557,6 +557,9 @@ ruff check src tests
 ```
 
 The architecture is described in [`docs/architecture.md`](docs/architecture.md).
+A data-backed design document (layers, context management, security, mapping to Slack, and a comparison
+with the previous design) is in [`docs/fridica-design.pdf`](docs/fridica-design.pdf); see [`docs/README.md`](docs/README.md)
+to rebuild it.
 
 **Continuous integration** (`.github/workflows/ci.yml`) runs pytest and the node
 test on Ubuntu and macOS, and builds and checks the wheel.

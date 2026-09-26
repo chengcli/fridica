@@ -1,5 +1,8 @@
 # Architecture
 
+> For the full, current design with statistics from live use, see the design document
+> [`fridica-design.pdf`](fridica-design.pdf) (sources and rebuild steps in [`README.md`](README.md)).
+
 Fridica maps Slack onto an agent hierarchy:
 
 - **workspace:** the parent agent (the owner);
