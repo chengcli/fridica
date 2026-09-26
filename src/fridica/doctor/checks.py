@@ -55,7 +55,7 @@ class Probe:
 
     def __init__(self, machine: Machine, config: Config):
         self.machine = machine
-        self.transport = make_transport(machine, excluded_env=(config.slack.app_token_env, config.slack.user_token_env))
+        self.transport = make_transport(machine, excluded_env=config.secret_env())
 
     async def sh(self, script: str, *, timeout: float = 30) -> Completed:
         return await self.transport.probe(["sh", "-c", script], timeout=timeout)

@@ -82,5 +82,10 @@ project = "~/project"             # an existing directory; each job slot works i
 # [machines.greatlakes.workspaces]
 # scratch = "/scratch/myaccount/me"
 
+[github]
+enabled = true                    # show the parent the state of linked GitHub pull requests and issues
+token_env = "FRIDICA_GITHUB_TOKEN" # optional read-only token; unset means anonymous (60 requests/hour)
+cache_seconds = 180
+
 [state]
 path = "~/.local/state/fridica/state.sqlite3"
