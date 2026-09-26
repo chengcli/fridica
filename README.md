@@ -484,6 +484,11 @@ Alice:   can you fix snowy and rerun?
   Runaway exchanges are stopped by the loop protections below instead: clarifying
   questions (`max_wait_replies`) and turns without progress (`max_no_progress`)
   pause the thread, and the dashboard or `fridica threads ID resume` restarts it.
+- **No identical resends.** A reply that repeats the thread's last reply word for word,
+  with the same status and nothing new (no details file, job, or attachment), is not
+  posted again. It is still posted when the message @-mentions you or asks for a
+  repost, for the owner's own instruction, and for worker results; a correction is
+  always posted. A dropped repeat counts as a turn without progress.
 - **Debrief.** When the parent marks a discussion finished, a debrief is posted to
   the channel.
 - **Several owners' Fridicas in one thread.** Every post carries metadata:
