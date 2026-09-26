@@ -218,7 +218,12 @@ V3 = """
 ALTER TABLE workers ADD COLUMN slot INTEGER NOT NULL DEFAULT 0;
 """
 
-MIGRATIONS: tuple[str, ...] = (V1, V2, V3)
+V4 = """
+ALTER TABLE jobs ADD COLUMN fetch_repo TEXT NOT NULL DEFAULT '';
+ALTER TABLE jobs ADD COLUMN fetch_ref TEXT NOT NULL DEFAULT '';
+"""
+
+MIGRATIONS: tuple[str, ...] = (V1, V2, V3, V4)
 
 
 def version(connection: sqlite3.Connection) -> int:

@@ -5,6 +5,7 @@ import pytest
 
 from fridica.config import load_config
 from fridica.core.errors import ConfigError
+from fridica.machines.registry import Policy
 
 from helpers import base_config
 
@@ -49,6 +50,27 @@ def test_machine_and_workspace_policy_overrides(write_config):
     assert box.workspace("work").policy.mode == "write"
     assert box.workspace("work").policy.network == ("*",)
     assert box.workspace("careful").policy.approvals == "auto"
+
+
+def test_repo_fetch_grants_are_local_and_require_isolated_workers(write_config, workspace, tmp_path):
+    policy = Policy(fetch_repos=("chengcli/snapy",), approvals="on-request")
+    assert policy.fetch_repos == ("chengcli/snapy",)
+    for repo in ("https://github.com/chengcli/snapy", "chengcli/snapy/extra", "../snapy"):
+        with pytest.raises(ValueError, match="fetch_repos"):
+            Policy(fetch_repos=(repo,))
+    for extra in ("network = ['github.com']", "mode = 'full'", "auto_approve = ['git']"):
+        text = base_config(workspace, tmp_path / 'state.sqlite3')
+        text += "\n[policy]\nfetch_repos = ['chengcli/snapy']\napprovals = 'on-request'\n" + extra + "\n"
+        with pytest.raises(ConfigError, match="fetch_repos"):
+            load_config(write_config(text))
+    auto = base_config(workspace, tmp_path / 'state.sqlite3') + "\n[policy]\nfetch_repos = ['chengcli/snapy']\n"
+    with pytest.raises(ConfigError, match="fetch_repos"):
+        load_config(write_config(auto))
+    gpu = base_config(workspace, tmp_path / 'state.sqlite3').replace(
+        '[machines.local]\n', '[machines.local]\nresources = { gpus = [0] }\n')
+    gpu += "\n[policy]\nfetch_repos = ['chengcli/snapy']\napprovals = 'on-request'\n"
+    with pytest.raises(ConfigError, match="fetch_repos"):
+        load_config(write_config(gpu))
 
 
 def test_payload_hides_paths(config):

@@ -213,6 +213,8 @@ class Job:
     join_group: str = ""
     inbox_id: int | None = None
     deliverable: str = "report"
+    fetch_repo: str = ""
+    fetch_ref: str = ""
     status: str = "queued"
     attempt: int = 0
     reported: bool = False

@@ -5,6 +5,7 @@ import pytest
 
 from fridica.core.errors import BackendError
 from fridica.core.models import StickyContext, ThreadKey, ThreadSession, WorkerRecord
+from fridica.machines.registry import Registry
 from fridica.parent.actions import Rules, validate
 from fridica.parent.agent import ParentAgent, ParentUnavailable
 from fridica.parent.prompts import ParentContext
@@ -21,7 +22,8 @@ def action(reply=None, delegate=(), control=(), context=None, summary="", decisi
 
 def delegation(**values):
     base = {"worker_id": "", "machine": "", "tags": [], "workspace": "", "backend": "", "role": "general",
-            "ephemeral": False, "brief": "Investigate the CUDA init failure.", "deliverable": "report"}
+            "ephemeral": False, "brief": "Investigate the CUDA init failure.", "deliverable": "report",
+            "fetch_repo": "", "fetch_ref": ""}
     return {**base, **values}
 
 
@@ -73,6 +75,26 @@ def test_sticky_context_places_follow_ups(rules):
     session = replace(SESSION, context=StickyContext(machine="snowy", workspace="exocubed"))
     result, errors = validate(action(delegate=[delegation()]), rules(session=session))
     assert errors == [] and result.delegations[0].placement.workspace.name == "exocubed"
+
+
+def test_fetch_delegation_needs_an_exact_local_grant_and_safe_ref(rules):
+    raw = action(delegate=[delegation(fetch_repo="chengcli/snapy", fetch_ref="refs/heads/main")])
+    result, errors = validate(raw, rules())
+    assert not result.delegations and "not granted" in errors[0]
+
+    base = rules()
+    machine = base.registry["local"]
+    workspace = machine.workspace("project")
+    granted = replace(workspace, policy=replace(workspace.policy, fetch_repos=("chengcli/snapy",)))
+    registry = Registry((replace(machine, workspaces=(granted,)), *base.registry.machines[1:]), base.registry.default)
+    allowed = replace(base, registry=registry)
+    result, errors = validate(raw, allowed)
+    assert errors == [] and (result.delegations[0].fetch_repo, result.delegations[0].fetch_ref) == (
+        "chengcli/snapy", "refs/heads/main")
+    for repo, ref in (("other/snapy", "refs/heads/main"), ("chengcli/snapy", "refs/heads/../private"),
+                      ("chengcli/snapy", "--upload-pack=evil")):
+        result, errors = validate(action(delegate=[delegation(fetch_repo=repo, fetch_ref=ref)]), allowed)
+        assert not result.delegations and errors
 
 
 def test_problems_are_reported_for_repair(rules):

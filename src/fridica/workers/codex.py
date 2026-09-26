@@ -116,6 +116,10 @@ class CodexWorker(JsonlWorker):
         self.next_id = 1
         await self.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": {"experimentalApi": False}})
         await self.send({"method": "initialized", "params": {}})
+        if self.policy.fetch_repos:
+            resolved = (await self.request("config/read", {})).get("config")
+            if not isinstance(resolved, dict) or resolved.get("mcp_servers") or resolved.get("mcpServers"):
+                raise BackendError("Codex MCP configuration is incompatible with scoped repository fetch")
         params = {**self.cwd(), "sandbox": self.sandbox_mode(), "developerInstructions": self.spec.instructions}
         if self.policy.approvals == "auto":
             # Codex's guardian subagent reviews each request instead of routing it to the owner.

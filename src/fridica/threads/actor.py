@@ -262,7 +262,8 @@ class ThreadActor:
                 if not delegation.ephemeral:
                     context.update(machine=placement.machine.name, workspace=placement.workspace.name)
             jobs.append(Job("j" + uuid.uuid4().hex[:10], worker_id, session.id, delegation.brief, join_group=group,
-                            inbox_id=item.id, deliverable=delegation.deliverable))
+                            inbox_id=item.id, deliverable=delegation.deliverable,
+                            fetch_repo=delegation.fetch_repo, fetch_ref=delegation.fetch_ref))
         still_working = any(job.id not in reported for job in self.store.jobs.active_in_session(session.id))
         updated = policy.advance(session, send=reply.send, status=reply.status, text=text, turn=turn,
                                  delegated=bool(jobs), working=still_working, note_kind=action.note.get("kind", "result"),

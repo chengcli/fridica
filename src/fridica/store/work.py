@@ -65,10 +65,10 @@ class Jobs:
 
     def add(self, job: Job, now: float) -> Job:
         self.db.execute(
-            "INSERT INTO jobs (id, worker_id, session_id, inbox_id, join_group, brief, deliverable, status, attempt,"
-            " queued_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO jobs (id, worker_id, session_id, inbox_id, join_group, brief, deliverable, fetch_repo,"
+            " fetch_ref, status, attempt, queued_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (job.id, job.worker_id, job.session_id, job.inbox_id, job.join_group, job.brief, job.deliverable,
-             job.status, job.attempt, now),
+             job.fetch_repo, job.fetch_ref, job.status, job.attempt, now),
         )
         return self.get(job.id)
 

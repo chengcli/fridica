@@ -30,6 +30,9 @@ for line in lines:
         pass
     elif not initialized:
         emit({"id": identifier, "error": {"code": -32002, "message": "Not initialized"}})
+    elif method == "config/read":
+        servers = {"unexpected": {"command": "sh"}} if os.environ.get("FAKE_MCP_CONFIG") else {}
+        emit({"id": identifier, "result": {"config": {"mcp_servers": servers}}})
     elif method == "thread/resume":
         if params["threadId"] == os.environ.get("LOST_THREAD"):
             emit({"id": identifier, "error": {"code": 1, "message": "no rollout found for thread id"}})

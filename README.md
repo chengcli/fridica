@@ -317,7 +317,7 @@ sees machine names, tags, workspace names, and load, never filesystem paths.
 | `mode` | Codex worker | Claude worker |
 | --- | --- | --- |
 | `read-only` | `readOnly` sandbox | only Read, Glob, and Grep |
-| `write` | `workspaceWrite` sandbox in the workspace | edits accepted, Bash sandboxed with `network` as its domain allowlist |
+| `write` | `workspaceWrite` sandbox in the workspace | edits accepted, Bash sandboxed; `network` pre-allows listed hosts |
 | `full` | no sandbox | no sandbox (`bypassPermissions` when `approvals = "never"`) |
 
 Codex supports network access only as all or nothing, so any `network` entry gives
@@ -397,6 +397,14 @@ collaborators; the first collaborator is the owner, and their word is final. The
 list travels to the parent and to workers as data. Workers find checkouts by git
 remote, because entries never contain local paths. `[parent] repos = "…"` overrides
 the list for local testing.
+
+The shared list is not a permission grant. To let workers review a public GitHub
+ref without granting general network access, set `fetch_repos` in the owner's local
+workspace policy (for example, `["chengcli/snapy", "UCzhangxi/snapy"]`), with
+`network = []` and `approvals = "on-request"`. A delegated job may name one listed
+repo and ref; Fridica fetches it into a new bare repo in that workspace and gives
+the worker its path and commit SHA. This needs write mode and no GPU confinement.
+Push remains a separate approval. Private-repo credentials are not supported here.
 
 ## Run
 

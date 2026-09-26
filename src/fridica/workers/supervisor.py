@@ -23,6 +23,7 @@ from ..core.models import Job, WorkerRecord
 from ..exec.transport import make_transport
 from ..store import Store
 from .artifacts import collect
+from .fetch import fetch_repo
 from .protocol import DENY, ApprovalRequest, Worker, WorkerFactory, WorkerSpec
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class Running:
     resume: str = ""
     stopping: bool = False
     interrupted: bool = False
+    fetching: bool = False
     finished: bool = False
 
 
@@ -182,9 +184,9 @@ class Supervisor:
     def _worker(self, record: WorkerRecord) -> Worker:
         worker = self.live.get(record.id)
         spec = self.spec(record)
-        if worker is not None and (worker.spec.workspace.path, worker.spec.machine.resources) != (
-                spec.workspace.path, spec.machine.resources):
-            # Its slot or the configuration changed: start a process with the new directory and GPUs.
+        if worker is not None and (worker.spec.workspace, worker.spec.machine.resources) != (
+                spec.workspace, spec.machine.resources):
+            # Restart when the workspace policy changes, including a revoked grant.
             self._close_later(self.live.pop(record.id))
             worker = None
         if worker is None:
@@ -202,7 +204,20 @@ class Supervisor:
             async def on_approval(request: ApprovalRequest) -> str:
                 return await self.approvals.request(worker=record, job=job, request=request)
 
-            outcome = await worker.run(frame(job, record), resume=state.resume, on_approval=on_approval)
+            brief = frame(job, record)
+            if job.fetch_repo:
+                state.fetching = True
+                try:
+                    transport = make_transport(worker.spec.machine, excluded_env=worker.spec.excluded_env)
+                    path, sha = await fetch_repo(transport, worker.spec.workspace.path, worker.spec.workspace.policy,
+                                                 job.fetch_repo, job.fetch_ref, job.id, create=worker.spec.create_cwd)
+                finally:
+                    state.fetching = False
+                self.store.audit.record("policy", "repo.fetch", self.clock.now(), target=job.id,
+                                        details={"repo": job.fetch_repo, "ref": job.fetch_ref, "commit": sha})
+                brief += (f"\n\nFridica fetched {job.fetch_repo} {job.fetch_ref} at {sha} into the bare repository "
+                          f"{path}. Inspect it locally; this does not grant network or push access.")
+            outcome = await worker.run(brief, resume=state.resume, on_approval=on_approval)
             artifacts = []
             if outcome.result.artifacts:
                 transport = make_transport(worker.spec.machine, excluded_env=worker.spec.excluded_env)
@@ -214,7 +229,11 @@ class Supervisor:
         except asyncio.CancelledError:
             if state.stopping:
                 self._finish(job, record, "cancelled", error="stopped", stop=True, state=state)
-            raise
+                raise
+            if state.interrupted:
+                self._finish(job, record, "interrupted", error="interrupted during repository fetch", state=state)
+            else:
+                raise
         except Exception as error:
             status = "interrupted" if state.interrupted or state.stopping else "failed"
             retire = retire or state.stopping
@@ -258,6 +277,9 @@ class Supervisor:
         if running is None or worker is None:
             return False
         running.interrupted = True
+        if running.fetching:
+            running.task.cancel()
+            return True
         await worker.interrupt()
         return True
 
