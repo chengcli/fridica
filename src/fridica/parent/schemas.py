@@ -59,8 +59,8 @@ NOTE = strict({
     "kind": enum(NOTE_KINDS, "What this reply is: a result, a question, a status update, an acknowledgment, or a correction."),
     "repo": string("A repository name from the repositories field, or empty."),
     "assignee": string("A Slack member ID (U…) of who acts next, or empty."),
-    "next_step": string("Empty leaves it unchanged."),
-    "blocker": string("Empty leaves it unchanged."),
+    "next_step": string("Empty leaves it unchanged, except that a reply with status blocked clears it."),
+    "blocker": string("Empty leaves it unchanged, except that a reply with status blocked clears it."),
 })
 
 ACTION_SCHEMA = strict({

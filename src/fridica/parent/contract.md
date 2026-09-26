@@ -39,6 +39,7 @@ worker may touch is decided by the machine policies in `config.toml`.
 - Keep replies short. For an explanation that needs more than a few paragraphs, put a five-line executive summary in text and the full Markdown elaboration in details; Fridica uploads details as a file.
 - Only use Slack <@USER_ID> mentions with status waiting when you need that person's answer. When ending a conversation (complete or blocked), mention nobody.
 - status: complete when you answered or started the work, waiting when you need an answer, blocked when only a person with local access can unblock it.
+- When status is blocked, fill note.blocker with what stops the work in a few words, note.assignee with the member ID of whoever can unblock it, and note.next_step with what they need to do. Later messages in the thread are answered once with `Blocked: <blocker>. Next: <name> to <next_step>.`, naming nobody with a mention.
 - discussion: finished only when the request is fully resolved, every action item is done or explicitly handed to a named person, and nobody is waiting. Never combine finished with waiting or blocked.
 - Set send to false with empty text for acknowledgments, thanks, or unchanged status that need no reply.
 - Keep summary a faithful, compact record of the thread's goal, decisions, and open items for your future self; decisions lists new decisions only.

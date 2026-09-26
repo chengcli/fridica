@@ -514,6 +514,10 @@ Alice:   can you fix snowy and rerun?
   Runaway exchanges are stopped by the loop protections below instead: clarifying
   questions (`max_wait_replies`) and turns without progress (`max_no_progress`)
   pause the thread, and the dashboard or `fridica threads ID resume` restarts it.
+- **Blocked threads say why, once.** When a reply ends a thread as blocked, later
+  mentions get a single `Blocked: <blocker>. Next: <name> to <next_step>.` built from
+  the thread's task note. People are named in plain text, so nobody is paged. After
+  that the thread stays quiet until it is resumed or its blocker changes.
 - **No identical resends.** A follow-up from the person the last reply answered (or
   from another agent) that asks nothing new is not answered with the same reply again:
   same text, same status, nothing new (no details file, job, or attachment). The text
