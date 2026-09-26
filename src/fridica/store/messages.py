@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 
 from ..core.models import InboxItem, Message, ThreadKey
@@ -24,10 +25,10 @@ class Messages:
         with self.db.transaction():
             cursor = self.db.execute(
                 "INSERT OR IGNORE INTO messages (event_id, workspace, channel, ts, root_ts, thread_ts, sender, text,"
-                " files_json, source, meta_json, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " files_json, source, meta_json, received_at, attachments_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (message.event_id, message.workspace, message.channel, message.ts, key.root_ts, message.thread_ts,
                  message.sender, message.text, codec.dumps(list(message.files)), message.source,
-                 codec.meta_json(message.meta), now),
+                 codec.meta_json(message.meta), now, codec.dumps([asdict(item) for item in message.attachments])),
             )
             if cursor.rowcount == 0:
                 return key.id, None
