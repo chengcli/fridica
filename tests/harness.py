@@ -21,6 +21,7 @@ class FakeSlack:
         self.failures: list[Exception] = []
         self.next_ts = next_ts
         self.fetched: dict = {}
+        self.names: dict = {}
 
     async def post(self, channel, text, *, thread_ts, meta):
         if self.failures:
@@ -38,6 +39,9 @@ class FakeSlack:
 
     async def recent(self, channel, oldest, threads=()):
         return []
+
+    async def user_name(self, user):
+        return self.names.get(user, user)
 
 
 class ScriptedLLM:
