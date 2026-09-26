@@ -16,7 +16,8 @@ from ..machines.registry import (
     BACKENDS, NAME, POLICY_FIELDS, SSH_HOST, TRANSPORTS, Machine, Policy, Registry, Resources, Slurm, Workspace,
 )
 from .schema import (
-    DEFAULT_STATE, REASONING_EFFORTS, Config, Limits, OwnerConfig, ParentConfig, SlackConfig, StateConfig,
+    DEFAULT_STATE, REASONING_EFFORTS, Config, GitHubConfig, Limits, OwnerConfig, ParentConfig, SlackConfig,
+    StateConfig,
 )
 
 USER_ID = re.compile(r"[UW][A-Z0-9]+")
@@ -24,7 +25,7 @@ TEAM_ID = re.compile(r"T[A-Z0-9]+")
 CHANNEL_ID = re.compile(r"[CG][A-Z0-9]+")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SOCKET_PATH_LIMIT = 100
-TOP_LEVEL = {"owner", "slack", "parent", "limits", "policy", "machines", "state"}
+TOP_LEVEL = {"owner", "slack", "parent", "limits", "policy", "machines", "state", "github"}
 MACHINE_DEFAULTS = {field.name: field.default for field in fields(Machine)}
 MACHINE_KEYS = {"transport", "host", "tags", "backends", "default_backend", "max_workers", "max_jobs", "policy",
                 "resources", "slurm", "description", "workspaces"}
@@ -69,7 +70,7 @@ def parse(data: dict, *, base: Path) -> Config:
     registry = Registry(machines, default)
     parent = _parent(parent_data, base, default)
     config = Config(owner=owner, slack=slack, machines=registry, parent=parent, limits=limits, policy=policy,
-                    state=state)
+                    state=state, github=_github(_table(data, "github")))
     _cross_checks(config)
     return config
 
@@ -112,6 +113,20 @@ def _slack(data: dict) -> SlackConfig:
     if "cooldown" in data:
         values["cooldown"] = _number(data["cooldown"], "slack.cooldown", minimum=0)
     return SlackConfig(**values)
+
+
+def _github(data: dict) -> GitHubConfig:
+    _keys(data, {field.name for field in fields(GitHubConfig)}, "[github]")
+    values: dict = {}
+    if "enabled" in data:
+        values["enabled"] = _bool(data["enabled"], "github.enabled")
+    if "token_env" in data:
+        if not isinstance(data["token_env"], str) or not ENV_NAME.fullmatch(data["token_env"]):
+            raise ConfigError("github.token_env must be an environment variable name")
+        values["token_env"] = data["token_env"]
+    if "cache_seconds" in data:
+        values["cache_seconds"] = _number(data["cache_seconds"], "github.cache_seconds", minimum=0)
+    return GitHubConfig(**values)
 
 
 def _parent(data: dict, base: Path, default_machine: str) -> ParentConfig:

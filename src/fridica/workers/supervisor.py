@@ -176,7 +176,7 @@ class Supervisor:
                           workspace=workspace.for_slot(record.slot), backend=record.backend,
                           instructions=self.instructions(record), model="", reasoning_effort="",
                           job_timeout=self.config.limits.job_timeout, idle_timeout=self.config.limits.worker_idle,
-                          excluded_env=(self.config.slack.app_token_env, self.config.slack.user_token_env),
+                          excluded_env=self.config.secret_env(),
                           slot=record.slot)
 
     def _worker(self, record: WorkerRecord) -> Worker:

@@ -398,6 +398,44 @@ list travels to the parent and to workers as data. Workers find checkouts by git
 remote, because entries never contain local paths. `[parent] repos = "…"` overrides
 the list for local testing.
 
+## GitHub links
+
+When a message in a thread links a GitHub pull request or issue, the parent sees its
+state as it is right now, not as someone last described it:
+
+- title and state;
+- head commit and tree, base branch, and whether the head is behind the base;
+- mergeable state (`unknown` is shown as such after one retry);
+- check runs on the head, where `cancelled` is its own state and never counts as
+  success;
+- reviews as `approved @<sha>`, with approvals on an older commit marked stale.
+  `approvals 2/3` means two approvals on the head out of three reviewers whose latest
+  decision is an approval or a change request;
+- assignees, labels, and the status lines at the top of the body (owner, next,
+  blocker, waiting on).
+
+The rest of the body, including HTML comments, is not passed on, and the block is
+marked untrusted data. A `head:` or `tree:` line in the body is not shown as a fact. It
+is checked against the real commit and reported as matching or not. CI reads
+`incomplete` when there are more check runs than one call lists.
+
+At most three links per call are followed, and a slow GitHub never delays a reply by
+more than 20 seconds. Results are cached per repository and number, and a rate limit
+pauses all calls until it resets:
+
+```toml
+[github]
+enabled = true
+token_env = "FRIDICA_GITHUB_TOKEN"   # optional read-only token
+cache_seconds = 180
+```
+
+Public repositories need no token, but anonymous requests are limited to 60 per hour
+per IP address, and each pull request costs about five. A read-only fine-grained token
+in the named variable raises that limit and reaches private repositories. Like the
+Slack tokens, it is removed from every agent's environment. Changing `token_env` takes
+a restart.
+
 ## Run
 
 ```bash
@@ -512,8 +550,13 @@ The daemon owns a single SQLite database. `fridica/store/schema.py` is the only
 module that runs DDL, and migrations are versioned.
 
 - **Persist before acknowledging.** A Slack event is stored, together with its
-  thread and inbox row, before Socket Mode is acked. A catch-up pass re-reads the
-  last hour at start, and the last 15 minutes every 5 minutes.
+  thread and inbox row, before Socket Mode is acked. Catch-up re-reads each channel
+  from its last complete pass, however long the daemon was down, up to 7 days back.
+  A pass that hit the paging cap is repeated from the same point, and a new database
+  starts 1 hour back. Replies are refetched for threads that were active just before
+  the gap, and every 5 minutes at least the last 15 minutes are re-read. Missed
+  messages from the last day are handled normally, and so are older ones that mention
+  you. Other older messages are stored as history but not answered.
 - **One serial actor per thread, threads in parallel.** An inbox item's effects
   commit in one transaction: posts, jobs, workers, session changes, and parent-call
   records. A crash either retries the item from scratch or leaves it fully applied.
@@ -535,7 +578,8 @@ module that runs DDL, and migrations are versioned.
 
 ## Security model
 
-- Slack tokens are removed from every agent's environment. The parent has no tools.
+- Slack tokens and the optional GitHub token are removed from every agent's environment.
+  The parent has no tools.
 - Workers run under their backend's sandbox, or Fridica's bubblewrap for
   `gpu_confine`, with per-workspace policy.
 - A writable local workspace may not contain Fridica itself, `config.toml`, or the
@@ -544,8 +588,8 @@ module that runs DDL, and migrations are versioned.
   a channel they cannot read.
 - Workers' artifacts are read only from inside their workspace, with symlinks
   resolved, and must match their declared type (PNG, PDF, or UTF-8 Markdown).
-- Message text, notes, linked messages, and worker results are passed to models as
-  data, marked untrusted.
+- Message text, notes, linked messages, GitHub state, and worker results are passed to
+  models as data, marked untrusted.
 
 ## Development
 
