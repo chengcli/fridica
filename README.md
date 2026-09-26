@@ -550,8 +550,13 @@ The daemon owns a single SQLite database. `fridica/store/schema.py` is the only
 module that runs DDL, and migrations are versioned.
 
 - **Persist before acknowledging.** A Slack event is stored, together with its
-  thread and inbox row, before Socket Mode is acked. A catch-up pass re-reads the
-  last hour at start, and the last 15 minutes every 5 minutes.
+  thread and inbox row, before Socket Mode is acked. Catch-up re-reads each channel
+  from its last complete pass, however long the daemon was down, up to 7 days back.
+  A pass that hit the paging cap is repeated from the same point, and a new database
+  starts 1 hour back. Replies are refetched for threads that were active just before
+  the gap, and every 5 minutes at least the last 15 minutes are re-read. Missed
+  messages from the last day are handled normally, and so are older ones that mention
+  you. Other older messages are stored as history but not answered.
 - **One serial actor per thread, threads in parallel.** An inbox item's effects
   commit in one transaction: posts, jobs, workers, session changes, and parent-call
   records. A crash either retries the item from scratch or leaves it fully applied.

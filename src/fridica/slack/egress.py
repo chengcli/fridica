@@ -153,5 +153,5 @@ class SlackClient:
             cursor = (response.get("response_metadata") or {}).get("next_cursor")
             if not cursor:
                 return items, True
-        logger.warning("catch-up stopped after %d pages; the next pass rereads the full window", PAGES)
+        logger.warning("catch-up stopped after %d pages; the next pass rereads the channel from its watermark", PAGES)
         return items, False

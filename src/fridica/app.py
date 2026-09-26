@@ -254,7 +254,8 @@ async def serve(config: Config, *, observe_only: bool = False) -> None:
             async with asyncio.TaskGroup() as group:
                 group.create_task(daemon.run())
                 group.create_task(status())
-                group.create_task(catchup.run(slack, daemon.store, lambda: daemon.config, daemon.bus, daemon.clock))
+                group.create_task(catchup.run(slack, daemon.store, lambda: daemon.config, daemon.bus, daemon.clock,
+                                              started_at=daemon.started_at))
         finally:
             await socket.close()
             daemon.store.close()
