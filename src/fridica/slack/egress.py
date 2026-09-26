@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from typing import Protocol
 
 from slack_sdk.errors import SlackApiError
@@ -13,13 +14,19 @@ from slack_sdk.web.async_client import AsyncWebClient
 from ..config.schema import Config
 from ..core.errors import DeliveryAmbiguous, DeliveryRejected, RateLimited
 from ..core.models import FridicaMeta
-from .ingress import TEXT_LIMIT
+from .ingress import TEXT_LIMIT, file_url
 from .render import metadata
 
 logger = logging.getLogger(__name__)
 LINKED_REPLY_LIMIT = 50
 PAGES = 10
+DOWNLOAD_CACHE = 32
+FAILURE_TTL = 300.0
 AMBIGUOUS_ERRORS = {"internal_error", "fatal_error", "request_timeout", "service_unavailable"}
+
+
+class FileUnavailable(RuntimeError):
+    """An attachment that cannot be read; the message is safe to show the parent."""
 
 
 class IncompleteHistory(RuntimeError):
@@ -38,6 +45,10 @@ class SlackAPI(Protocol):
     async def fetch(self, channel: str, ts: str, thread: str | None) -> list[dict]: ...
 
     async def recent(self, channel: str, oldest: float, threads: tuple[str, ...] = ()) -> list[dict]: ...
+
+    async def user_name(self, user_id: str) -> str: ...
+
+    async def download(self, url: str, limit: int, *, html: bool = False) -> tuple[bytes, int]: ...
 
 
 def _failure(error: SlackApiError) -> Exception:
@@ -61,10 +72,18 @@ class SlackClient:
     def __init__(self, config: Config, client: AsyncWebClient):
         self.config = config
         self.client = client
+        self.names: dict[str, str] = {}
+        self.scopes: frozenset[str] | None = None
+        """The user token's OAuth scopes, read by validate(); None until then."""
+        self.downloads: dict[str, tuple[bytes, int]] = {}
+        self.failures: dict[str, tuple[float, str]] = {}
 
     async def validate(self) -> None:
         """The user token must belong to the configured owner, who must be in every configured channel."""
         response = await self.client.auth_test()
+        header = (getattr(response, "headers", None) or {}).get("x-oauth-scopes")
+        # No header means unknown, not "no scopes": downloads are then attempted and fail on their own.
+        self.scopes = None if header is None else frozenset(item.strip() for item in header.split(",") if item.strip())
         if (response.get("user_id") != self.config.owner.slack_user or response.get("team_id") != self.config.slack.workspace
                 or response.get("bot_id")):
             raise ValueError("the Slack user token does not belong to the configured owner and workspace")
@@ -118,6 +137,70 @@ class SlackClient:
                          "ts": entry.get("ts", "")} for entry in chosen]
         return []
 
+    async def download(self, url: str, limit: int, *, html: bool = False) -> tuple[bytes, int]:
+        """Up to ``limit`` + 1 bytes of a file on files.slack.com, and its full size (0 when unknown).
+
+        Needs the files:read scope. Only Slack's own file host ever receives the token, redirects are not
+        followed, and an HTML answer is taken for Slack's sign-in page unless the file itself is HTML (``html``).
+        Failures are remembered for FAILURE_TTL seconds.
+        """
+        import aiohttp
+
+        if self.scopes is not None and "files:read" not in self.scopes:
+            raise FileUnavailable("the Slack token lacks files:read")
+        if not file_url(url):
+            raise FileUnavailable("not a Slack file URL")
+        if url in self.downloads:
+            return self.downloads[url]
+        failed = self.failures.get(url)
+        if failed is not None and failed[0] > time.monotonic():
+            raise FileUnavailable(failed[1])
+        session = getattr(self.client, "session", None)
+        owned = session is None
+        session = session or aiohttp.ClientSession()
+        try:
+            async with session.get(url, headers={"Authorization": f"Bearer {self.client.token}"}, allow_redirects=False,
+                                   timeout=aiohttp.ClientTimeout(total=20)) as response:
+                if response.status != 200 or (response.content_type == "text/html" and not html):
+                    # Without files:read Slack answers with its sign-in page instead of the file.
+                    raise FileUnavailable("Slack did not return the file")
+                data = bytearray()
+                while len(data) <= limit:  # read() returns what is buffered, not the whole request
+                    chunk = await response.content.read(limit + 1 - len(data))
+                    if not chunk:
+                        break
+                    data += chunk
+                size = response.content_length or 0
+        except FileUnavailable as error:
+            self.failures[url] = (time.monotonic() + FAILURE_TTL, str(error))
+            raise
+        except (aiohttp.ClientError, TimeoutError) as error:
+            message = f"download failed ({type(error).__name__})"
+            self.failures[url] = (time.monotonic() + FAILURE_TTL, message)
+            raise FileUnavailable(message) from None
+        finally:
+            if owned:
+                await session.close()
+        if len(self.downloads) >= DOWNLOAD_CACHE:
+            self.downloads.pop(next(iter(self.downloads)))
+        self.downloads[url] = (bytes(data), size)
+        return self.downloads[url]
+
+    async def user_name(self, user_id: str) -> str:
+        """A member's display name for plain-text use (no mention); the ID itself when it cannot be looked up."""
+        cache = self.names
+        if user_id not in cache:
+            try:
+                response = await self.client.users_info(user=user_id)
+                user = response.get("user") or {}
+                profile = user.get("profile") or {}
+                cache[user_id] = (profile.get("display_name") or profile.get("real_name") or user.get("real_name")
+                                  or user.get("name") or user_id)
+            except Exception as error:
+                logger.warning("could not look up the name of %s (%s)", user_id, type(error).__name__)
+                return user_id
+        return cache[user_id]
+
     async def recent(self, channel: str, oldest: float, threads: tuple[str, ...] = ()) -> list[dict]:
         """Messages since ``oldest`` (top level, replies in recent roots, and replies in ``threads``) as payloads.
 
@@ -153,5 +236,5 @@ class SlackClient:
             cursor = (response.get("response_metadata") or {}).get("next_cursor")
             if not cursor:
                 return items, True
-        logger.warning("catch-up stopped after %d pages; the next pass rereads the full window", PAGES)
+        logger.warning("catch-up stopped after %d pages; the next pass rereads the channel from its watermark", PAGES)
         return items, False

@@ -218,7 +218,11 @@ V3 = """
 ALTER TABLE workers ADD COLUMN slot INTEGER NOT NULL DEFAULT 0;
 """
 
-MIGRATIONS: tuple[str, ...] = (V1, V2, V3)
+V4 = """
+ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';
+"""
+
+MIGRATIONS: tuple[str, ...] = (V1, V2, V3, V4)
 
 
 def version(connection: sqlite3.Connection) -> int:

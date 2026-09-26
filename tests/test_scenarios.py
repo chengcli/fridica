@@ -74,7 +74,8 @@ def test_unaddressed_messages_are_triaged_with_a_channel_cooldown(config, store)
 
 
 def test_clarification_loop_pauses_after_three_questions(config, store):
-    harness = Harness(config, store, decide(*[action("Which branch?", status="waiting")] * 3))
+    questions = ["Which branch?", "Which branch exactly?", "Main or the release branch?"]
+    harness = Harness(config, store, decide(*[action(text, status="waiting") for text in questions]))
 
     async def body():
         root = harness.message("<@UOWNER> fix the build")
@@ -84,7 +85,7 @@ def test_clarification_loop_pauses_after_three_questions(config, store):
             await harness.settle()
 
     run(harness, body)
-    assert harness.texts() == ["<@UALICE> Which branch?"] * 3
+    assert harness.texts() == [f"<@UALICE> {text}" for text in questions]
     session = store.threads.list()[0]
     assert session.control == "paused" and "consecutive replies" in session.pause_reason
     assert store.messages.verdict(store.messages.thread(session.key)[-1].event_id).startswith("observe")
@@ -172,7 +173,7 @@ def test_parent_failure_blocks_and_a_later_mention_gets_one_notice(config, store
 
     run(harness, body)
     texts = harness.texts()
-    assert len(texts) == 2 and "look at it myself" in texts[0] and "needs a local look" in texts[1]
+    assert len(texts) == 2 and "look at it myself" in texts[0] and texts[1].startswith("Blocked: ")
 
 
 def test_observe_only_stores_but_never_posts(config, store):

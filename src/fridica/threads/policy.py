@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import hashlib
+import re
 
 from ..config.schema import Limits
 from ..core.models import Message, ThreadSession
@@ -64,6 +65,16 @@ def gate(message: Message, session: ThreadSession, *, owner: str, limits: Limits
     if general_messages and not cooling:
         return Verdict("triage", "unaddressed message", turn)
     return Verdict("observe", "not addressed")
+
+
+REPOST = re.compile(r"(?<!don't )(?<!do not )(?<!no need to )\b(re-?post|repeat (?:it|that|this|your)|"
+                    r"(?:post|send|say|paste|share) (?:it|that|this|(?:the|your) [\w-]+(?: [\w-]+)?) again|"
+                    r"again,? verbatim|one more time)\b", re.IGNORECASE)
+
+
+def repost_requested(message: Message, owner: str) -> bool:
+    """A message that may be answered with the thread's last reply again: it @-mentions the owner or asks for a repost."""
+    return mentions(message, owner) or REPOST.search(message.text) is not None
 
 
 def reply_hash(text: str) -> str:

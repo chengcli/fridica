@@ -12,10 +12,12 @@ CHANNEL_LIMIT = 10
 CHANNEL_CHARS = 4000
 
 
-def message_view(message: Message) -> dict:
+def message_view(message: Message, attachments: list[dict] | None = None) -> dict:
     data = {"event_id": message.event_id, "ts": message.ts, "sender": message.sender, "text": message.text}
     if message.files:
         data["files"] = list(message.files)
+    if attachments:
+        data["attachments"] = attachments
     if message.meta:
         data["from_agent"] = {"owner": message.meta.owner, "status": message.meta.status, "kind": message.meta.kind}
     return data
@@ -40,9 +42,12 @@ def worker_view(record) -> dict:
 
 
 def build(store: Store, config: Config, session: ThreadSession, trigger: dict, *, repositories: tuple[dict, ...],
-          busy: dict[str, int], linked: tuple[dict, ...] = ()) -> ParentContext:
+          busy: dict[str, int], linked: tuple[dict, ...] = (), github: tuple[dict, ...] = (),
+          attachments: dict[str, list[dict]] | None = None) -> ParentContext:
     budget = config.parent.context_chars
-    history = [message_view(item) for item in store.messages.thread(session.key, limit=HISTORY_LIMIT)]
+    attachments = attachments or {}
+    history = [message_view(item, attachments.get(item.event_id))
+               for item in store.messages.thread(session.key, limit=HISTORY_LIMIT)]
     channel = ()
     if session.turns == 0:
         recent = store.messages.channel_recent(session.key.workspace, session.key.channel, session.key.root_ts,
@@ -50,7 +55,7 @@ def build(store: Store, config: Config, session: ThreadSession, trigger: dict, *
         channel = bounded([message_view(item) for item in recent], CHANNEL_CHARS)
     return ParentContext(
         owner=config.owner.slack_user, profile=config.owner.profile, session=session, trigger=trigger,
-        history=bounded(history, budget // 2), channel=channel, linked=linked,
+        history=bounded(history, budget // 2), channel=channel, linked=linked, github=github,
         workers=tuple(worker_view(record) for record in store.workers.for_session(session.id)),
         machines=tuple(config.machines.payload(busy)), repositories=repositories,
         notes=store.notes.current(session.id)[1], delegation_allowed=config.slack.may_delegate(session.key.channel),

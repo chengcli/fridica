@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import logging
+import os
 
 from .approvals.broker import ApprovalBroker
 from .config import editor
@@ -32,11 +33,13 @@ HEARTBEAT = 5.0
 
 class Daemon:
     def __init__(self, config: Config, slack: SlackAPI, *, store: Store | None = None, parent: ParentAgent | None = None,
-                 factory=default_factory, clock: Clock | None = None, observe_only: bool = False):
+                 factory=default_factory, clock: Clock | None = None, observe_only: bool = False, github=None):
         self.config = config
         self.slack = slack
         self.clock = clock or Clock()
         self.observe_only = observe_only
+        self.github = github
+        """A GitHubLinks for following pull request and issue links; None turns the feature off (tests, no network)."""
         self.store = store or Store(config.state.path)
         self.store.db.bind(config.owner.slack_user, config.slack.workspace)
         self.bus = Bus()
@@ -123,9 +126,14 @@ class Daemon:
         if (config.owner.slack_user, config.slack.workspace) != (self.config.owner.slack_user, self.config.slack.workspace):
             logger.error("the Slack identity in the configuration changed; restart Fridica to switch identities")
             config = replace(config, owner=self.config.owner, slack=replace(config.slack, workspace=self.config.slack.workspace))
-        tokens = (config.slack.app_token_env, config.slack.user_token_env)
-        if self._own_parent and (config.parent != self.config.parent
-                                 or tokens != (self.config.slack.app_token_env, self.config.slack.user_token_env)):
+        if config.github.token_env != self.config.github.token_env:
+            logger.error("github.token_env changed; restart Fridica to use another GitHub token")
+            config = replace(config, github=replace(config.github, token_env=self.config.github.token_env))
+        if self.github is not None:
+            self.github.cache_seconds = config.github.cache_seconds
+        elif config.github.enabled and not self.config.github.enabled:
+            logger.warning("github.enabled turned on; restart Fridica to start following GitHub links")
+        if self._own_parent and (config.parent != self.config.parent or config.secret_env() != self.config.secret_env()):
             self.parent = ParentAgent(config)
         if config.limits.parent_concurrency != self.config.limits.parent_concurrency:
             self.parent_slots = asyncio.Semaphore(config.limits.parent_concurrency)  # holders release the old one
@@ -213,7 +221,16 @@ async def serve(config: Config, *, observe_only: bool = False) -> None:
         web = AsyncWebClient(token=user_token, session=session, retry_handlers=[])
         slack = SlackClient(config, web)
         await slack.validate()
-        daemon = Daemon(config, slack, observe_only=observe_only)
+        github = None
+        if config.github.enabled:
+            from .github.client import GitHubClient
+            from .github.links import GitHubLinks
+            github = GitHubLinks(GitHubClient(session, os.environ.get(config.github.token_env, "")),
+                                 cache_seconds=config.github.cache_seconds)
+        daemon = Daemon(config, slack, observe_only=observe_only, github=github)
+        daemon.store.db.set_meta("slack_scopes", "unknown" if slack.scopes is None else ",".join(sorted(slack.scopes)))
+        if slack.scopes is not None and "files:read" not in slack.scopes:
+            logger.warning("the Slack token lacks files:read; attached files are shown to the parent by name only")
         socket = SocketModeClient(app_token=app_token, web_client=web)
 
         async def receive(client, request):
@@ -240,7 +257,8 @@ async def serve(config: Config, *, observe_only: bool = False) -> None:
             async with asyncio.TaskGroup() as group:
                 group.create_task(daemon.run())
                 group.create_task(status())
-                group.create_task(catchup.run(slack, daemon.store, lambda: daemon.config, daemon.bus, daemon.clock))
+                group.create_task(catchup.run(slack, daemon.store, lambda: daemon.config, daemon.bus, daemon.clock,
+                                              started_at=daemon.started_at))
         finally:
             await socket.close()
             daemon.store.close()

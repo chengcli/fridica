@@ -8,9 +8,11 @@ to be retried from scratch or fully applied, never half done.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 import logging
 import os
+import re
 from typing import Any, Protocol
 import uuid
 
@@ -18,16 +20,22 @@ from ..config.schema import Config
 from ..core.models import FridicaMeta, InboxItem, Job, OutboxItem, ThreadSession, WorkerRecord
 from ..parent.actions import Action, Reply, Rules
 from ..parent.agent import ParentUnavailable, unavailable_reply
-from ..slack import links, render
+from ..slack import files, links, render
 from ..store import StaleSession, Store
 from . import context as contexts
 from . import policy
 
 logger = logging.getLogger(__name__)
-INSPECTION_NOTICE = "An earlier task in this thread needs a local look before I can continue. I haven't retried it."
+BLOCKED_DEFAULT = "this needs someone with local access before I can continue"
+MENTION = re.compile(r"<@([UW][A-Z0-9]+)(?:\|[^>]*)?>")
+MEMBER = re.compile(r"[UW][A-Z0-9]+")
+SPECIAL = re.compile(r"<!([^>|]+)(?:\|([^>]*))?>")
+NOTICE_FIELD = 300
 DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
 INTERRUPTED = "One of the jobs I started for this thread was interrupted by a restart and was not resumed."
 RESUME_MARGIN = 1e-6
+GITHUB_WAIT = 20.0
+ATTACHMENT_WAIT = 30.0
 ATTEMPTS = 3
 
 
@@ -42,6 +50,7 @@ class Runtime(Protocol):
     supervisor: Any
     parent_slots: Any
     observe_only: bool
+    github: Any
 
     def repositories(self) -> tuple[dict, ...]: ...
 
@@ -182,9 +191,15 @@ class ThreadActor:
             self.settle(item, (verdict.kind, verdict.reason))
             return
         if verdict.kind == "notice":
-            # Once per blocked period: a resume changes reset_at.
-            post = self.post(session, f"{session.id}:inspection:{session.reset_at}:{session.turns}", "notice",
-                             INSPECTION_NOTICE, status="blocked", turn=session.turns)
+            # Once per blocked period and blocker: a resume changes reset_at, a new blocker changes the key.
+            _, note = self.store.notes.current(session.id)
+            fields = "\n".join(str(note.get(name, "")) for name in ("blocker", "assignee", "next_step"))
+            key = f"{session.id}:blocked:{session.reset_at}:{session.turns}:{policy.reply_hash(fields)[:12]}"
+            if self.store.outbox.get(key) is not None:
+                self.settle(item, ("observe", "blocked notice already posted"))
+                return
+            text = await self.blocked_notice(session)
+            post = self.post(session, key, "notice", text, status="blocked", turn=session.turns)
             self.commit(item, Outcome(session=session, posts=(post,), verdict=("notice", verdict.reason)))
             return
         ledger: list[dict] = []
@@ -197,14 +212,73 @@ class ThreadActor:
                 self.settle(item, (decision, "triage"), ledger)
                 return
         history = self.store.messages.thread(session.key, limit=contexts.HISTORY_LIMIT)
+        attached = await self.attachment_texts(message, history)
+        if attached.get(message.event_id):
+            trigger["message"]["attachments"] = attached.pop(message.event_id)  # shown once, in the trigger
         linked = await links.linked(self.rt.slack, config.slack.channels, message, history)
-        action = await self.decide(self.context(session, trigger, linked=linked), session, ledger)
+        github = await self.github_state(session, first=message.text, history=history)
+        action = await self.decide(self.context(session, trigger, linked=linked, github=github, attachments=attached),
+                                   session, ledger)
         self.apply(item, session, action, turn=verdict.turn, requester=message.sender, ledger=ledger,
-                   unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason))
+                   unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason),
+                   repeat_ok=policy.repost_requested(message, config.owner.slack_user))
 
-    def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = ()):
+    async def attachment_texts(self, message, history) -> dict[str, list[dict]]:
+        """Views of attached files for a decide call, trigger first; bounded by ATTACHMENT_WAIT."""
+        messages = [message, *(item for item in reversed(history) if item.event_id != message.event_id)]
+        if not any(item.attachments for item in messages):
+            return {}
+        try:
+            return await asyncio.wait_for(files.read(self.rt.slack, messages), ATTACHMENT_WAIT)
+        except Exception as error:
+            logger.warning("thread %s: attachments unavailable (%s)", self.session_id, type(error).__name__)
+            return {}
+
+    async def blocked_notice(self, session: ThreadSession) -> str:
+        """``Blocked: <blocker>. Next: <name> to <next_step>.`` from the thread's task note, naming people in plain
+        text: a blocked thread must not page anyone (a thread that needs someone's answer is waiting, not blocked)."""
+        _, note = self.store.notes.current(session.id)
+        blocker = await self._plain(note.get("blocker", "")) or BLOCKED_DEFAULT
+        assignee = str(note.get("assignee", "")).strip()
+        step = await self._plain(note.get("next_step", ""))
+        step = re.sub(r"^to\s+", "", step, flags=re.IGNORECASE).rstrip(". ")
+        name = await self._plain(f"<@{assignee}>" if MEMBER.fullmatch(assignee) else assignee)
+        text = f"Blocked: {blocker.rstrip('. ')}."
+        if name and step:
+            text += f" Next: {name} to {step}."
+        elif name or step:
+            text += f" Next: {name or step}."
+        return text
+
+    async def _plain(self, text: str) -> str:
+        """``text`` with member mentions replaced by names and every special mention (here, channel, user groups)
+        reduced to its label, so nothing pings; at most NOTICE_FIELD characters."""
+        text = " ".join(str(text or "").split())[:NOTICE_FIELD]
+        names = {user: await self.rt.slack.user_name(user) for user in dict.fromkeys(MENTION.findall(text))}
+        text = MENTION.sub(lambda match: names[match.group(1)], text)
+        return SPECIAL.sub(lambda match: (match.group(2) or match.group(1).split("^")[0]).lstrip("@!"), text)
+
+    def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = (),
+                github: tuple[dict, ...] = (), attachments: dict[str, list[dict]] | None = None):
         return contexts.build(self.store, self.config, session, trigger, repositories=self.rt.repositories(),
-                              busy=self.rt.supervisor.busy_by_machine(), linked=linked)
+                              busy=self.rt.supervisor.busy_by_machine(), linked=linked, github=github,
+                              attachments=attachments)
+
+    async def github_state(self, session: ThreadSession, *, first: str = "", history=None) -> tuple[dict, ...]:
+        """Current state of GitHub links in ``first`` and the thread (newest first); empty when turned off.
+
+        Bounded by GITHUB_WAIT: a slow or failing GitHub costs the parent this block, never the reply.
+        """
+        if self.rt.github is None or not self.config.github.enabled:
+            return ()
+        if history is None:
+            history = self.store.messages.thread(session.key, limit=contexts.HISTORY_LIMIT)
+        texts = [first, *(item.text for item in reversed(history))]
+        try:
+            return await asyncio.wait_for(self.rt.github.linked(texts), GITHUB_WAIT)
+        except Exception as error:
+            logger.warning("thread %s: GitHub state unavailable (%s)", session.id, type(error).__name__)
+            return ()
 
     def rules(self, session: ThreadSession) -> Rules:
         config = self.config
@@ -231,14 +305,26 @@ class ThreadActor:
 
     def apply(self, item: InboxItem, session: ThreadSession, action: Action, *, turn: int, requester: str,
               ledger: list, unsolicited: bool = False, verdict: tuple[str, str] | None = None, reported: tuple[str, ...] = (),
-              kind: str = "reply", artifacts: tuple[dict, ...] = ()) -> ThreadSession:
+              kind: str = "reply", artifacts: tuple[dict, ...] = (), repeat_ok: bool = False) -> ThreadSession:
+        """Apply the parent's action.
+
+        A reply that repeats the thread's last one (same text and status, nothing else new: no details, jobs, or
+        artifacts, not a correction) is not resent unless ``repeat_ok``: an @-mention, an explicit repost request,
+        the owner's own instruction, or worker results."""
         config, reply = self.config, action.reply
         posts: list[OutboxItem] = []
-        text = ""
+        text = details = ""
         if reply.send:
             people = render.participants(config.owner.slack_user, self.store.messages.thread(session.key, limit=100))
             text, details = render.reply_text(reply.text, reply.details, status=reply.status, requester=requester,
                                               people=people, limit=config.limits.reply_chars)
+            if (policy.reply_hash(text) == session.last_reply_hash and reply.status == session.status
+                    and not (repeat_ok or artifacts or details or action.delegations)
+                    and action.note.get("kind") != "correction"):
+                logger.info("thread %s: not resending an identical reply", session.id)
+                action = replace(action, reply=replace(reply, send=False, text="", details=""), suppressed=True)
+                reply, text = action.reply, ""
+        if reply.send:
             key = f"{item.id}:{kind}"
             posts.append(self.post(session, key, kind, text, status=reply.status, turn=max(session.turns, turn)))
             if details:
@@ -268,7 +354,11 @@ class ThreadActor:
                                  delegated=bool(jobs), working=still_working, note_kind=action.note.get("kind", "result"),
                                  summary=action.summary, decisions=action.decisions, context=context,
                                  limits=config.limits)
-        note = {key: value for key, value in action.note.items() if key != "kind"} or None
+        note = {key: value for key, value in action.note.items() if key != "kind"}
+        if reply.send and reply.status == "blocked":
+            # A blocked reply states its blocker afresh: empty fields clear what an earlier blocked turn left.
+            note = {"blocker": "", "assignee": "", "next_step": "", **note}
+        note = note or None
         # A finished discussion gets a channel debrief, as its own item so it runs after this one commits.
         follow_ups = (("debrief", "", {"after": f"{item.id}:{kind}"}),) if reply.finished else ()
         session = self.commit(item, Outcome(
@@ -322,10 +412,11 @@ class ThreadActor:
             kind = "notice"
         else:
             trigger = {"kind": "worker_results", "results": [self._result_view(member) for member in unreported]}
-            action = await self.decide(self.context(session, trigger), session, ledger)
+            github = await self.github_state(session)
+            action = await self.decide(self.context(session, trigger, github=github), session, ledger)
             kind = "report"
         self.apply(item, session, action, turn=session.turns, requester=requester, ledger=ledger, reported=ids,
-                   kind=kind, artifacts=artifacts)
+                   kind=kind, artifacts=artifacts, repeat_ok=True)
 
     def _result_view(self, job: Job) -> dict:
         worker = self.store.workers.get(job.worker_id)
@@ -387,9 +478,10 @@ class ThreadActor:
                           status="complete" if session.status == "blocked" else session.status)
         trigger = {"kind": "owner_instruction", "text": item.payload["text"]}
         ledger: list[dict] = []
-        action = await self.decide(self.context(session, trigger), session, ledger)
+        github = await self.github_state(session, first=item.payload["text"])
+        action = await self.decide(self.context(session, trigger, github=github), session, ledger)
         self.apply(item, session, action, turn=session.turns + 1,
-                   requester=self.config.owner.slack_user, ledger=ledger)
+                   requester=self.config.owner.slack_user, ledger=ledger, repeat_ok=True)
 
     async def on_control(self, item: InboxItem) -> None:
         session = self.store.threads.get(self.session_id)
@@ -432,7 +524,7 @@ class ThreadActor:
 
 def _action_record(action: Action) -> dict:
     return {"reply": {"send": action.reply.send, "status": action.reply.status, "discussion": action.reply.discussion,
-                      "chars": len(action.reply.text)},
+                      "chars": len(action.reply.text), "suppressed_repeat": action.suppressed},
             "delegations": [{"worker_id": item.worker_id,
                              "machine": item.placement.machine.name if item.placement else "",
                              "workspace": item.placement.workspace.name if item.placement else "",
