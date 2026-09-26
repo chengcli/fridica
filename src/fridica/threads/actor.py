@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import dataclass, replace
 import logging
 import os
+import re
 from typing import Any, Protocol
 import uuid
 
@@ -25,7 +26,11 @@ from . import context as contexts
 from . import policy
 
 logger = logging.getLogger(__name__)
-INSPECTION_NOTICE = "An earlier task in this thread needs a local look before I can continue. I haven't retried it."
+BLOCKED_DEFAULT = "this needs someone with local access before I can continue"
+MENTION = re.compile(r"<@([UW][A-Z0-9]+)(?:\|[^>]*)?>")
+MEMBER = re.compile(r"[UW][A-Z0-9]+")
+SPECIAL = re.compile(r"<!([^>|]+)(?:\|([^>]*))?>")
+NOTICE_FIELD = 300
 DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
 INTERRUPTED = "One of the jobs I started for this thread was interrupted by a restart and was not resumed."
 RESUME_MARGIN = 1e-6
@@ -185,9 +190,15 @@ class ThreadActor:
             self.settle(item, (verdict.kind, verdict.reason))
             return
         if verdict.kind == "notice":
-            # Once per blocked period: a resume changes reset_at.
-            post = self.post(session, f"{session.id}:inspection:{session.reset_at}:{session.turns}", "notice",
-                             INSPECTION_NOTICE, status="blocked", turn=session.turns)
+            # Once per blocked period and blocker: a resume changes reset_at, a new blocker changes the key.
+            _, note = self.store.notes.current(session.id)
+            fields = "\n".join(str(note.get(name, "")) for name in ("blocker", "assignee", "next_step"))
+            key = f"{session.id}:blocked:{session.reset_at}:{session.turns}:{policy.reply_hash(fields)[:12]}"
+            if self.store.outbox.get(key) is not None:
+                self.settle(item, ("observe", "blocked notice already posted"))
+                return
+            text = await self.blocked_notice(session)
+            post = self.post(session, key, "notice", text, status="blocked", turn=session.turns)
             self.commit(item, Outcome(session=session, posts=(post,), verdict=("notice", verdict.reason)))
             return
         ledger: list[dict] = []
@@ -206,6 +217,30 @@ class ThreadActor:
         self.apply(item, session, action, turn=verdict.turn, requester=message.sender, ledger=ledger,
                    unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason),
                    repeat_ok=policy.repost_requested(message, config.owner.slack_user))
+
+    async def blocked_notice(self, session: ThreadSession) -> str:
+        """``Blocked: <blocker>. Next: <name> to <next_step>.`` from the thread's task note, naming people in plain
+        text: a blocked thread must not page anyone (a thread that needs someone's answer is waiting, not blocked)."""
+        _, note = self.store.notes.current(session.id)
+        blocker = await self._plain(note.get("blocker", "")) or BLOCKED_DEFAULT
+        assignee = str(note.get("assignee", "")).strip()
+        step = await self._plain(note.get("next_step", ""))
+        step = re.sub(r"^to\s+", "", step, flags=re.IGNORECASE).rstrip(". ")
+        name = await self._plain(f"<@{assignee}>" if MEMBER.fullmatch(assignee) else assignee)
+        text = f"Blocked: {blocker.rstrip('. ')}."
+        if name and step:
+            text += f" Next: {name} to {step}."
+        elif name or step:
+            text += f" Next: {name or step}."
+        return text
+
+    async def _plain(self, text: str) -> str:
+        """``text`` with member mentions replaced by names and every special mention (here, channel, user groups)
+        reduced to its label, so nothing pings; at most NOTICE_FIELD characters."""
+        text = " ".join(str(text or "").split())[:NOTICE_FIELD]
+        names = {user: await self.rt.slack.user_name(user) for user in dict.fromkeys(MENTION.findall(text))}
+        text = MENTION.sub(lambda match: names[match.group(1)], text)
+        return SPECIAL.sub(lambda match: (match.group(2) or match.group(1).split("^")[0]).lstrip("@!"), text)
 
     def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = (),
                 github: tuple[dict, ...] = ()):
@@ -302,7 +337,11 @@ class ThreadActor:
                                  delegated=bool(jobs), working=still_working, note_kind=action.note.get("kind", "result"),
                                  summary=action.summary, decisions=action.decisions, context=context,
                                  limits=config.limits)
-        note = {key: value for key, value in action.note.items() if key != "kind"} or None
+        note = {key: value for key, value in action.note.items() if key != "kind"}
+        if reply.send and reply.status == "blocked":
+            # A blocked reply states its blocker afresh: empty fields clear what an earlier blocked turn left.
+            note = {"blocker": "", "assignee": "", "next_step": "", **note}
+        note = note or None
         # A finished discussion gets a channel debrief, as its own item so it runs after this one commits.
         follow_ups = (("debrief", "", {"after": f"{item.id}:{kind}"}),) if reply.finished else ()
         session = self.commit(item, Outcome(

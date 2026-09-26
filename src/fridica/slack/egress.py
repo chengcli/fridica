@@ -39,6 +39,8 @@ class SlackAPI(Protocol):
 
     async def recent(self, channel: str, oldest: float, threads: tuple[str, ...] = ()) -> list[dict]: ...
 
+    async def user_name(self, user_id: str) -> str: ...
+
 
 def _failure(error: SlackApiError) -> Exception:
     response = error.response
@@ -61,6 +63,7 @@ class SlackClient:
     def __init__(self, config: Config, client: AsyncWebClient):
         self.config = config
         self.client = client
+        self.names: dict[str, str] = {}
 
     async def validate(self) -> None:
         """The user token must belong to the configured owner, who must be in every configured channel."""
@@ -117,6 +120,21 @@ class SlackClient:
                 return [{"sender": entry.get("user") or entry.get("bot_id") or "", "text": entry["text"][:TEXT_LIMIT],
                          "ts": entry.get("ts", "")} for entry in chosen]
         return []
+
+    async def user_name(self, user_id: str) -> str:
+        """A member's display name for plain-text use (no mention); the ID itself when it cannot be looked up."""
+        cache = self.names
+        if user_id not in cache:
+            try:
+                response = await self.client.users_info(user=user_id)
+                user = response.get("user") or {}
+                profile = user.get("profile") or {}
+                cache[user_id] = (profile.get("display_name") or profile.get("real_name") or user.get("real_name")
+                                  or user.get("name") or user_id)
+            except Exception as error:
+                logger.warning("could not look up the name of %s (%s)", user_id, type(error).__name__)
+                return user_id
+        return cache[user_id]
 
     async def recent(self, channel: str, oldest: float, threads: tuple[str, ...] = ()) -> list[dict]:
         """Messages since ``oldest`` (top level, replies in recent roots, and replies in ``threads``) as payloads.
