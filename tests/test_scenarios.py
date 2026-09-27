@@ -173,7 +173,7 @@ def test_parent_failure_blocks_and_a_later_mention_gets_one_notice(config, store
 
     run(harness, body)
     texts = harness.texts()
-    assert len(texts) == 2 and "look at it myself" in texts[0] and "needs a local look" in texts[1]
+    assert len(texts) == 2 and "look at it myself" in texts[0] and texts[1].startswith("Blocked: ")
 
 
 def test_observe_only_stores_but_never_posts(config, store):
