@@ -150,8 +150,29 @@ Verify these settings before installation:
 | OAuth & Permissions → User Token Scopes | Public-channel messages | `channels:history` |
 | OAuth & Permissions → User Token Scopes | Channel information and membership checks | `channels:read` |
 | OAuth & Permissions → User Token Scopes | Send replies as your account | `chat:write` |
+| OAuth & Permissions → User Token Scopes | Read attached text files: diffs, logs, small outputs (optional) | `files:read` |
 | OAuth & Permissions → User Token Scopes | Upload details files, figures, and PDFs to threads | `files:write` |
 | OAuth & Permissions → User Token Scopes | Display names (included in the manifest; optional) | `users:read` |
+
+**Attached files.** With `files:read`, the daemon reads text attachments once a message
+is to be answered, and shows them to the parent as untrusted data under a header naming
+the file. Limits:
+
+- only text types are read;
+- at most three files and 64 KB of text per reply, the triggering message's files
+  first, and a file over 64 KB is cut with a marker;
+- attached text shares `[parent] context_chars` with the thread history, and is cut
+  with a marker beyond what the history leaves;
+- files Fridica uploaded itself are skipped, and a file shared twice is read once;
+- downloads give up after 30 seconds.
+
+Workers never hold the Slack token, and it is only ever sent to `files.slack.com`.
+Cleaning a thread erases its attachments along with its text.
+
+`files:read` is in the shipped manifest, because reading attachments is the point of this
+feature. To turn it off, leave the scope out when you install the app. The parent then
+sees file names only, and `fridica doctor` reports the missing scope once the daemon has
+started.
 
 **Bot Token Scopes and bot event subscriptions are not used.** You do not need a
 public Request URL with Socket Mode.

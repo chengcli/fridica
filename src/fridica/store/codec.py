@@ -7,7 +7,7 @@ import json
 import sqlite3
 
 from ..core.models import (
-    Approval, FridicaMeta, InboxItem, Job, Message, OutboxItem, StickyContext, ThreadKey, ThreadSession,
+    Approval, Attachment, FridicaMeta, InboxItem, Job, Message, OutboxItem, StickyContext, ThreadKey, ThreadSession,
     WorkerRecord, WorkerResult,
 )
 
@@ -29,6 +29,7 @@ def message(row: sqlite3.Row) -> Message:
         event_id=row["event_id"], workspace=row["workspace"], channel=row["channel"], ts=row["ts"],
         thread_ts=row["thread_ts"], sender=row["sender"], text=row["text"],
         files=tuple(json.loads(row["files_json"])), source=row["source"], meta=meta_from(row["meta_json"]),
+        attachments=tuple(Attachment(**item) for item in json.loads(row["attachments_json"])),
     )
 
 

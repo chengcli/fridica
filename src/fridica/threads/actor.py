@@ -8,6 +8,7 @@ to be retried from scratch or fully applied, never half done.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 import logging
 import os
@@ -18,7 +19,7 @@ from ..config.schema import Config
 from ..core.models import FridicaMeta, InboxItem, Job, OutboxItem, ThreadSession, WorkerRecord
 from ..parent.actions import Action, Reply, Rules
 from ..parent.agent import ParentUnavailable, unavailable_reply
-from ..slack import links, render
+from ..slack import files, links, render
 from ..store import StaleSession, Store
 from . import context as contexts
 from . import policy
@@ -28,6 +29,7 @@ INSPECTION_NOTICE = "An earlier task in this thread needs a local look before I 
 DEBRIEF_HEADER = "Debrief: this discussion is finished.\n\n"
 INTERRUPTED = "One of the jobs I started for this thread was interrupted by a restart and was not resumed."
 RESUME_MARGIN = 1e-6
+ATTACHMENT_WAIT = 30.0
 ATTEMPTS = 3
 
 
@@ -197,14 +199,33 @@ class ThreadActor:
                 self.settle(item, (decision, "triage"), ledger)
                 return
         history = self.store.messages.thread(session.key, limit=contexts.HISTORY_LIMIT)
+        attached = await self.attachment_texts(message, history)
+        if attached.get(message.event_id):
+            trigger["message"]["attachments"] = attached.pop(message.event_id)  # shown once, in the trigger
         linked = await links.linked(self.rt.slack, config.slack.channels, message, history)
-        action = await self.decide(self.context(session, trigger, linked=linked), session, ledger)
+        action = await self.decide(self.context(session, trigger, linked=linked, attachments=attached), session, ledger)
         self.apply(item, session, action, turn=verdict.turn, requester=message.sender, ledger=ledger,
                    unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason))
 
-    def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = ()):
+    async def attachment_texts(self, message, history) -> dict[str, list[dict]]:
+        """Views of attached files for a decide call, trigger first; bounded by ATTACHMENT_WAIT."""
+        messages = [message, *(item for item in reversed(history) if item.event_id != message.event_id)]
+        if not any(item.attachments for item in messages):
+            return {}
+        try:
+            owner = self.config.owner.slack_user
+            own = self.store.outbox.own_files([(attachment.id, item.channel, item.root_ts, attachment.name)
+                                               for item in messages if item.sender == owner
+                                               for attachment in item.attachments])
+            return await asyncio.wait_for(files.read(self.rt.slack, messages, own=own), ATTACHMENT_WAIT)
+        except Exception as error:
+            logger.warning("thread %s: attachments unavailable (%s)", self.session_id, type(error).__name__)
+            return {}
+
+    def context(self, session: ThreadSession, trigger: dict, *, linked: tuple[dict, ...] = (),
+                attachments: dict[str, list[dict]] | None = None):
         return contexts.build(self.store, self.config, session, trigger, repositories=self.rt.repositories(),
-                              busy=self.rt.supervisor.busy_by_machine(), linked=linked)
+                              busy=self.rt.supervisor.busy_by_machine(), linked=linked, attachments=attachments)
 
     def rules(self, session: ThreadSession) -> Rules:
         config = self.config

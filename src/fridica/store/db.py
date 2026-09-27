@@ -78,6 +78,9 @@ class Database:
     def all(self, sql: str, parameters: tuple | dict = ()) -> list[sqlite3.Row]:
         return self.connection.execute(sql, parameters).fetchall()
 
+    def set_meta(self, key: str, value: str) -> None:
+        self.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
     def meta(self, key: str) -> str | None:
         row = self.one("SELECT value FROM meta WHERE key=?", (key,))
         return row[0] if row else None

@@ -18,9 +18,12 @@ Trust boundaries
 ----------------
 
 **Slack → daemon.** Messages are normalized and size-limited at ingress (40,000 characters). Only
-configured channels in the bound workspace are processed. The prompts label messages, linked messages,
-notes and worker results as untrusted data that cannot override the rules. Links are followed only
-into configured channels, at most three per message.
+configured channels in the bound workspace are processed. The prompts label messages, attached files,
+linked messages, notes and worker results as untrusted data that cannot override the rules. Links are
+followed only into configured channels, at most three per message. Attached text files are read by the
+daemon (workers never hold the token), and the token goes only to ``https://files.slack.com`` with no
+port, no credentials in the URL and no redirects. With unknown scopes an HTML answer is never taken for
+a file, since it may be Slack's sign-in page. Cleaning a thread erases the stored private URLs.
 
 **Daemon → parent.** The parent is a tool-less, stateless structured-output call. It cannot read
 files, run commands or reach the network through tools. The worst a manipulated parent can do is

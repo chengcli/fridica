@@ -321,6 +321,7 @@ def defaults() -> dict[str, dict]:
 
 def context_budgets() -> dict[str, int]:
     from fridica.parent import schemas
+    from fridica.slack import files
     from fridica.threads import context
     from fridica.workers import result
     return {"history_messages": context.HISTORY_LIMIT, "channel_messages": context.CHANNEL_LIMIT,
@@ -328,7 +329,8 @@ def context_budgets() -> dict[str, int]:
             "max_decisions": schemas.MAX_DECISIONS, "reply_chars": schemas.REPLY_CHARS,
             "details_chars": schemas.DETAILS_CHARS, "brief_chars": schemas.BRIEF_CHARS,
             "result_summary": result.SUMMARY_LIMIT, "result_report": result.REPORT_LIMIT,
-            "max_artifacts": result.MAX_ARTIFACTS}
+            "max_artifacts": result.MAX_ARTIFACTS, "max_files": files.MAX_FILES, "file_kb": files.FILE_LIMIT // 1024,
+            "files_total_kb": files.TOTAL_LIMIT // 1024}
 
 
 def machines(config_path: Path | None) -> list[dict]:

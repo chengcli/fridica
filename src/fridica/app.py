@@ -214,6 +214,9 @@ async def serve(config: Config, *, observe_only: bool = False) -> None:
         slack = SlackClient(config, web)
         await slack.validate()
         daemon = Daemon(config, slack, observe_only=observe_only)
+        daemon.store.db.set_meta("slack_scopes", "unknown" if slack.scopes is None else ",".join(sorted(slack.scopes)))
+        if slack.scopes is not None and "files:read" not in slack.scopes:
+            logger.warning("the Slack token lacks files:read; attached files are shown to the parent by name only")
         socket = SocketModeClient(app_token=app_token, web_client=web)
 
         async def receive(client, request):

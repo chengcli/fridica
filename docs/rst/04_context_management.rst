@@ -46,6 +46,11 @@ What the parent sees
 * **Linked messages**: Slack permalinks in the message or history (at most 3 distinct links, 20,000
   characters in total) are fetched, but only from configured channels, so a link cannot expose a
   channel that the requester might not be able to read.
+* **Attached files**: with the ``files:read`` scope, the text of attachments on the trigger and in the
+  thread (text types only, at most 3 files and 64 KB per reply, the trigger's files first). Files
+  Fridica uploaded itself (details files, artifacts) are skipped and a file shared twice is read once.
+  Attached text shares ``context_chars`` with the history: it gets what the history leaves and is cut
+  with a marker beyond that. Without the scope, the parent sees only the file names.
 * **Session**: status, turns, rolling summary, decisions and sticky context.
 * **Workers**: each worker of the thread with machine, workspace, backend, role, status, a short
   summary and its last result *without* the report field.
@@ -61,8 +66,8 @@ and the trigger.
 
 .. include:: generated/t11_budgets.rst
 
-Note that ``context_chars`` (default 24,000) bounds the *conversation* part of the prompt, not the
-prompt as a whole: the contract, the machine registry, worker summaries and results come on top. The
+Note that ``context_chars`` (default 24,000) bounds the thread history and attached text, not the
+prompt as a whole (channel context and linked messages have their own caps, listed above): the contract, the machine registry, worker summaries and results come on top. The
 measured decide prompt averages |decide_prompt_mean| characters (maximum |decide_prompt_max|), and the
 triage prompt |triage_prompt_mean|.
 
