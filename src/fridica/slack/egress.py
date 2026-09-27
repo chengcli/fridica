@@ -22,6 +22,7 @@ LINKED_REPLY_LIMIT = 50
 PAGES = 10
 DOWNLOAD_CACHE = 32
 FAILURE_TTL = 300.0
+FAILURE_CACHE = 256
 AMBIGUOUS_ERRORS = {"internal_error", "fatal_error", "request_timeout", "service_unavailable"}
 
 
@@ -172,11 +173,11 @@ class SlackClient:
                     data += chunk
                 size = response.content_length or 0
         except FileUnavailable as error:
-            self.failures[url] = (time.monotonic() + FAILURE_TTL, str(error))
+            self._remember_failure(url, str(error))
             raise
         except (aiohttp.ClientError, TimeoutError) as error:
             message = f"download failed ({type(error).__name__})"
-            self.failures[url] = (time.monotonic() + FAILURE_TTL, message)
+            self._remember_failure(url, message)
             raise FileUnavailable(message) from None
         finally:
             if owned:
@@ -185,6 +186,14 @@ class SlackClient:
             self.downloads.pop(next(iter(self.downloads)))
         self.downloads[url] = (bytes(data), size)
         return self.downloads[url]
+
+    def _remember_failure(self, url: str, message: str) -> None:
+        """Keep a failed download from being retried for FAILURE_TTL; expired and excess entries are dropped."""
+        now = time.monotonic()
+        self.failures = {key: value for key, value in self.failures.items() if value[0] > now}
+        while len(self.failures) >= FAILURE_CACHE:
+            self.failures.pop(next(iter(self.failures)))
+        self.failures[url] = (now + FAILURE_TTL, message)
 
     async def recent(self, channel: str, oldest: float, threads: tuple[str, ...] = ()) -> list[dict]:
         """Messages since ``oldest`` (top level, replies in recent roots, and replies in ``threads``) as payloads.

@@ -8,6 +8,8 @@
      - last 60 messages, ≤ context_chars/2 = 12,000 characters
    * - Channel context (new threads only)
      - 10 messages, ≤ 4,000 characters
+   * - Attached text files per reply (files:read)
+     - ≤ 3 files, ≤ 64 KB each and ≤ 64 KB in total, within what context_chars leaves
    * - Triage call history
      - last 15 messages
    * - Rolling thread summary

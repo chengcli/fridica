@@ -23,22 +23,32 @@ def message_view(message: Message, attachments: list[dict] | None = None) -> dic
     return data
 
 
+def _marker(kept: int, total: int) -> str:
+    return f"\n[… truncated to fit the context budget: first {kept:,} of {total:,} characters]"
+
+
 def fit_attachments(views: list[dict], remaining: int) -> int:
-    """Cut attached text to what is left of the context budget, in order; returns what is left afterwards."""
+    """Cut attached text to what is left of the context budget, in order; returns what is left afterwards.
+
+    A cut text keeps its marker inside the budget, so the rendered text never exceeds ``remaining``.
+    """
     for view in views:
         text = view.get("text")
         if not isinstance(text, str):
             continue
-        if remaining <= 0:
+        if len(text) <= remaining:
+            remaining -= len(text)
+            continue
+        kept = remaining - len(_marker(remaining, len(text)))
+        kept = max(kept - (len(_marker(max(kept, 0), len(text))) - len(_marker(remaining, len(text)))), 0)
+        if kept <= 0 or remaining <= 0:
             view.pop("text")
             view["note"] = "not included: over the context budget (context_chars)"
-        elif len(text) > remaining:
-            view["text"] = text[:remaining] + (f"\n[… truncated to fit the context budget: first {remaining:,} of "
-                                               f"{len(text):,} characters]")
-            view["truncated"] = True
             remaining = 0
-        else:
-            remaining -= len(text)
+            continue
+        view["text"] = text[:kept] + _marker(kept, len(text))
+        view["truncated"] = True
+        remaining = 0
     return remaining
 
 

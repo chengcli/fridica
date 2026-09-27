@@ -121,7 +121,7 @@ Foundation: store, core, config
 **Store** (``store/``). One SQLite database in WAL mode, owned by one daemon (an exclusive lock file).
 ``store/schema.py`` is the only module that runs DDL. Its migrations are versioned and each runs in one
 transaction with the version bump: v1 created the schema, v2 added retry ``attempts`` to inbox items,
-v3 added the worker ``slot``. Each table has one repository class, and ``Store.recover`` settles work a
+v3 added the worker ``slot``, v4 added message attachments and an index on outbox uploads. Each table has one repository class, and ``Store.recover`` settles work a
 previous daemon left in flight.
 
 .. include:: generated/t4_schema.rst

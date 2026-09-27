@@ -230,6 +230,8 @@ def tables(s: dict) -> None:
                     f"≤ context_chars/2 = {defaults['parent']['context_chars'] // 2:,} characters"],
                    ["Channel context (new threads only)", f"{budgets['channel_messages']} messages, ≤ {budgets['channel_chars']:,} "
                     "characters"],
+                   ["Attached text files per reply (files:read)", f"≤ {budgets['max_files']} files, ≤ {budgets['file_kb']} KB "
+                    f"each and ≤ {budgets['files_total_kb']} KB in total, within what context_chars leaves"],
                    ["Triage call history", "last 15 messages"],
                    ["Rolling thread summary", f"≤ {budgets['summary_chars']:,} characters"],
                    ["Decisions kept per thread", f"last {budgets['max_decisions']}"],

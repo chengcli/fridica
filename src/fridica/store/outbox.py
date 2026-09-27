@@ -35,7 +35,9 @@ class Outbox:
 
         A sent upload's sent_ts holds its Slack file id. An upload whose outcome was unknown (ambiguous, or
         retried after a first attempt that landed) has no id, so a file is also counted as ours when an upload
-        of the same name went to the same thread. Callers pass only files posted from the owner's account.
+        of the same name and *without* a recorded id went to the same thread; a confirmed upload never claims a
+        file with another id, so the owner's own manual upload of a same-named file is still read. Callers pass
+        only files posted from the owner's account.
         """
         own: set[str] = set()
         for index in range(0, len(candidates), 200):
@@ -45,8 +47,8 @@ class Outbox:
                 f"SELECT sent_ts FROM outbox WHERE kind='upload' AND sent_ts IN ({','.join('?' * len(ids))})", tuple(ids))}
             for file_id, channel, thread, filename in batch:
                 if file_id not in own and self.db.one(
-                        "SELECT 1 FROM outbox WHERE kind='upload' AND channel=? AND thread_ts=? AND filename=? LIMIT 1",
-                        (channel, thread, filename)):
+                        "SELECT 1 FROM outbox WHERE kind='upload' AND channel=? AND thread_ts=? AND filename=?"
+                        " AND (sent_ts IS NULL OR sent_ts = '') LIMIT 1", (channel, thread, filename)):
                     own.add(file_id)
         return own
 

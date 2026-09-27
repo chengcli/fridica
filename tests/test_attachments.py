@@ -410,3 +410,57 @@ def test_a_sign_in_page_gives_the_name_only_when_scopes_are_unknown(config):
     assert all("text" not in view for view in views)
     assert views[0]["note"] == "not read: Slack did not return the file"
     assert views[1]["note"] == "not read: the token's scopes are unknown, so an HTML answer may be Slack's sign-in page"
+
+
+def test_a_manual_owner_file_named_like_a_confirmed_upload_is_still_read(config, store):
+    """Reviewer finding: a confirmed upload's name must not claim a different file the owner shared by hand."""
+    harness = Harness(config, store, lambda kind, data: action("Reviewed."))
+
+    async def scenario():
+        harness.daemon.receive(human_file("100.000001", "FROOT", "start.md", b"# start", harness, text="start"))
+        await harness.settle()
+        uploaded(store, "TTEAM:CROOM:100.000001", "FOWN1", "details-1.md")  # confirmed: sent_ts holds FOWN1
+        harness.daemon.receive(human_file("100.000010", "FMANUAL", "details-1.md", b"# my own notes", harness,
+                                          sender="UOWNER", thread="100.000001", text="my notes, by hand"))
+        await harness.settle()
+        harness.message("<@UOWNER> what do your notes say?", thread="100.000001", ts="100.000020")
+        await harness.settle()
+        await harness.daemon.close()
+    asyncio.run(scenario())
+    manual = next(item for item in harness.llm.calls[-1][1]["history"] if item["ts"] == "100.000010")
+    assert manual["attachments"][0]["name"] == "details-1.md" and manual["attachments"][0]["text"] == "# my own notes"
+
+
+def test_the_truncation_marker_stays_inside_the_budget():
+    """Reviewer finding: the rendered text, marker included, never exceeds what the budget allowed."""
+    from fridica.threads.context import fit_attachments
+
+    text = "x" * 3000
+    for remaining in (1, 10, 60, 75, 76, 77, 100, 500, 1234, 2999, 3000, 3001):
+        views = [{"text": text}]
+        left = fit_attachments(views, remaining)
+        if "text" in views[0]:
+            assert len(views[0]["text"]) <= remaining, remaining
+            assert left == (remaining - 3000 if remaining >= 3000 else 0)
+            if remaining < 3000:
+                assert views[0]["truncated"] is True and "truncated to fit the context budget" in views[0]["text"]
+        else:
+            assert views[0]["note"].startswith("not included") and left == 0
+    two = [{"text": "a" * 100}, {"text": "b" * 300}]
+    assert fit_attachments(two, 250) == 0 and 0 < len(two[1]["text"]) <= 150
+    tight = [{"text": "a" * 100}, {"text": "b" * 100}]
+    assert fit_attachments(tight, 150) == 0 and "text" not in tight[1]  # 50 left cannot hold text plus a marker
+
+
+def test_remembered_failures_expire_and_are_capped(config, monkeypatch):
+    from fridica.slack import egress
+
+    client = SlackClient(config, type("Web", (), {"token": "xoxp-x"})())
+    clock = [1000.0]
+    monkeypatch.setattr(egress.time, "monotonic", lambda: clock[0])
+    for index in range(egress.FAILURE_CACHE + 10):
+        client._remember_failure(f"https://files.slack.com/f{index}", "no")
+    assert len(client.failures) == egress.FAILURE_CACHE
+    clock[0] += egress.FAILURE_TTL + 1
+    client._remember_failure("https://files.slack.com/new", "no")
+    assert list(client.failures) == ["https://files.slack.com/new"]
