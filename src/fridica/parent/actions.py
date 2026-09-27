@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from ..core.errors import MatchError
 from ..core.models import ThreadSession, WorkerRecord
 from ..machines.match import Placement, Selector, resolve
-from ..machines.registry import Registry
+from ..machines.registry import Registry, valid_fetch_ref
 from .schemas import BRIEF_CHARS, DELIVERABLES, DETAILS_CHARS, MAX_DECISIONS, NOTE_KINDS, ROLES, SUMMARY_CHARS
 
 LIVE_STATES = ("idle", "queued", "running", "awaiting_approval", "lost", "failed")
@@ -35,6 +35,8 @@ class Delegation:
     role: str = "general"
     ephemeral: bool = False
     deliverable: str = "report"
+    fetch_repo: str = ""
+    fetch_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ def validate(raw: dict, rules: Rules) -> tuple[Action, list[str]]:
         role = item.get("role") if item.get("role") in ROLES else "general"
         deliverable = item.get("deliverable") if item.get("deliverable") in DELIVERABLES else "report"
         worker_id = _text(item.get("worker_id"), 64)
+        placement = None
         if worker_id:
             worker = workers.get(worker_id)
             if worker is None:
@@ -110,25 +113,44 @@ def validate(raw: dict, rules: Rules) -> tuple[Action, list[str]]:
             if worker.status == "stopped":
                 errors.append(f"{label}: worker {worker_id} was stopped; delegate to a new worker instead")
                 continue
-            delegations.append(Delegation(brief, worker_id=worker_id, role=worker.role, deliverable=deliverable))
-            continue
-        tags = tuple(tag for tag in item.get("tags", []) if isinstance(tag, str) and tag) if isinstance(item.get("tags"), list) else ()
-        selector = Selector(machine=_text(item.get("machine"), 64), tags=tags, workspace=_text(item.get("workspace"), 64),
-                            backend=item.get("backend") if item.get("backend") in ("claude", "codex") else "")
-        try:
-            placement = resolve(rules.registry, selector, sticky_machine=sticky.machine,
-                                sticky_workspace=sticky.workspace, busy=rules.busy)
-        except MatchError as error:
-            errors.append(f"{label}: {error}" + (f" (candidates: {', '.join(error.candidates)})" if error.candidates else ""))
-            continue
-        active = sum(1 for worker in rules.workers if worker.status in LIVE_STATES and not worker.ephemeral)
-        if not item.get("ephemeral") and active + new_workers >= rules.max_workers:
-            errors.append(f"{label}: this thread already has {active} workers (limit {rules.max_workers});"
-                          " continue an existing worker by worker_id or stop one first")
-            continue
-        new_workers += 0 if item.get("ephemeral") else 1
-        delegations.append(Delegation(brief, placement=placement, role=role, ephemeral=item.get("ephemeral") is True,
-                                      deliverable=deliverable))
+            machine = rules.registry.get(worker.machine)
+            workspace = machine.workspace(worker.workspace) if machine else None
+            if workspace is None:
+                errors.append(f"{label}: worker workspace is no longer configured")
+                continue
+            role = worker.role
+        else:
+            tags = tuple(tag for tag in item.get("tags", []) if isinstance(tag, str) and tag) if isinstance(item.get("tags"), list) else ()
+            selector = Selector(machine=_text(item.get("machine"), 64), tags=tags, workspace=_text(item.get("workspace"), 64),
+                                backend=item.get("backend") if item.get("backend") in ("claude", "codex") else "")
+            try:
+                placement = resolve(rules.registry, selector, sticky_machine=sticky.machine,
+                                    sticky_workspace=sticky.workspace, busy=rules.busy)
+            except MatchError as error:
+                errors.append(f"{label}: {error}" + (f" (candidates: {', '.join(error.candidates)})" if error.candidates else ""))
+                continue
+            workspace = placement.workspace
+            active = sum(1 for worker in rules.workers if worker.status in LIVE_STATES and not worker.ephemeral)
+            if not item.get("ephemeral") and active + new_workers >= rules.max_workers:
+                errors.append(f"{label}: this thread already has {active} workers (limit {rules.max_workers});"
+                              " continue an existing worker by worker_id or stop one first")
+                continue
+        repo = _text(item.get("fetch_repo"), 150)
+        ref = _text(item.get("fetch_ref"), 200)
+        if repo or ref:
+            granted = next((entry for entry in workspace.policy.fetch_repos if entry.casefold() == repo.casefold()), "")
+            if not granted:
+                errors.append(f"{label}: repository {repo!r} is not granted for fetch in {workspace.name}")
+                continue
+            if not valid_fetch_ref(ref):
+                errors.append(f"{label}: fetch_ref must name HEAD, a branch, a pull-request ref, or a commit SHA")
+                continue
+            repo = granted
+        if not worker_id:
+            new_workers += 0 if item.get("ephemeral") else 1
+        delegations.append(Delegation(brief, worker_id=worker_id, placement=placement, role=role,
+                                      ephemeral=not worker_id and item.get("ephemeral") is True,
+                                      deliverable=deliverable, fetch_repo=repo, fetch_ref=ref))
     if len(items) > rules.max_delegations:
         errors.append(f"at most {rules.max_delegations} delegations per turn; {len(items) - rules.max_delegations} dropped")
 

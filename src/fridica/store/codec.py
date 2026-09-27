@@ -67,6 +67,7 @@ def job(row: sqlite3.Row) -> Job:
     return Job(
         id=row["id"], worker_id=row["worker_id"], session_id=row["session_id"], brief=row["brief"],
         join_group=row["join_group"], inbox_id=row["inbox_id"], deliverable=row["deliverable"],
+        fetch_repo=row["fetch_repo"], fetch_ref=row["fetch_ref"],
         status=row["status"], attempt=row["attempt"], reported=bool(row["reported"]),
         result=result_from(row["result_json"]), error=row["error"],
         queued_at=row["queued_at"], started_at=row["started_at"], finished_at=row["finished_at"],

@@ -223,7 +223,12 @@ ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';
 CREATE INDEX outbox_uploads ON outbox (kind, channel, thread_ts, filename, sent_ts);
 """
 
-MIGRATIONS: tuple[str, ...] = (V1, V2, V3, V4)
+V5 = """
+ALTER TABLE jobs ADD COLUMN fetch_repo TEXT NOT NULL DEFAULT '';
+ALTER TABLE jobs ADD COLUMN fetch_ref TEXT NOT NULL DEFAULT '';
+"""
+
+MIGRATIONS: tuple[str, ...] = (V1, V2, V3, V4, V5)
 
 
 def version(connection: sqlite3.Connection) -> int:

@@ -239,6 +239,12 @@ def _machine(name: str, data: dict, default_policy: Policy, parent_backend: str,
                               "drop one of them")
     workspaces = tuple(replace(workspace, policy=replace(workspace.policy, gpu_confine=_confined(workspace.policy, resources)))
                        for workspace in workspaces)
+    for workspace in workspaces:
+        grant = workspace.policy
+        if grant.fetch_repos and (grant.mode != "write" or grant.network or grant.approvals == "auto"
+                                  or grant.auto_approve or grant.gpu_confine):
+            raise ConfigError(f"{label} workspace {workspace.name}: fetch_repos needs write mode, no worker network, "
+                              "non-auto approvals, no auto-approved commands, and no GPU confinement")
     policy = replace(policy, gpu_confine=bool(policy.gpu_confine))
     description = data.get("description", "")
     if not isinstance(description, str) or len(description) > 1000:

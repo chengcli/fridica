@@ -20,6 +20,7 @@ from .result import SUMMARIZE_PROMPT, fallback, parse
 
 logger = logging.getLogger(__name__)
 STDERR_LIMIT = 64 * 1024
+EOF_WAIT = 1.0
 RESUME_FAILURES = ("No conversation found with session ID", "no rollout found for thread id")
 
 
@@ -162,11 +163,24 @@ class JsonlWorker:
         while True:
             line = await self.lines.get()
             if line is None:
-                status = self.process.returncode if self.process is not None else None
-                detail = diagnostic(bytes(self.stderr))
+                # EOF can precede the child watcher's exit notification. Bind this
+                # process before awaiting: close/start may detach it meanwhile.
+                process, stderr_task, stderr = self.process, self.stderr_task, self.stderr
+                if process is not None:
+                    try:
+                        async with asyncio.timeout(EOF_WAIT):
+                            await process.wait()
+                            if stderr_task is not None:
+                                await asyncio.shield(stderr_task)
+                    except TimeoutError:
+                        pass  # A child may close stdout while continuing to run.
+                status = process.returncode if process is not None else None
+                detail = diagnostic(bytes(stderr))
                 if any(marker in detail for marker in RESUME_FAILURES):
                     raise SessionUnavailable(detail)
-                raise BackendError(f"worker process exited (status {status}): {self.transport.failure(status or 0, detail)}")
+                if status is None:
+                    raise BackendError(f"worker output closed before exit status was available: {detail}")
+                raise BackendError(f"worker process exited (status {status}): {self.transport.failure(status, detail)}")
             try:
                 message = json.loads(line)
             except ValueError:

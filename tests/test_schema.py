@@ -25,6 +25,17 @@ def test_newer_schema_is_refused(tmp_path):
         migrate(connection)
 
 
+def test_attachment_v4_upgrades_to_scoped_fetch_v5(tmp_path):
+    connection = sqlite3.connect(tmp_path / "v4.sqlite3", isolation_level=None)
+    for script in MIGRATIONS[:4]:
+        connection.executescript(script)
+    connection.execute("INSERT INTO meta VALUES ('schema_version', '4')")
+    migrate(connection)
+    assert version(connection) == 5
+    assert "attachments_json" in {row[1] for row in connection.execute("PRAGMA table_info(messages)")}
+    assert {"fetch_repo", "fetch_ref"} <= {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+
+
 def test_no_ddl_outside_the_schema_module():
     root = Path(fridica.__file__).parent
     offenders = []

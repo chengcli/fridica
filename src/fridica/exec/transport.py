@@ -53,8 +53,8 @@ class Transport(ABC):
                 + (f" ({detail})" if detail else ""))
 
     async def run(self, command: list[str], cwd: PurePath, *, stdin: bytes = b"", timeout: float,
-                  env: dict[str, str] | None = None) -> Completed:
-        spec = self.launch(command, cwd, env=env, timeout=timeout)
+                  env: dict[str, str] | None = None, create: bool = False) -> Completed:
+        spec = self.launch(command, cwd, env=env, timeout=timeout, create=create)
         return await process.run_once(spec.argv, stdin=stdin, cwd=spec.cwd, env=spec.env, timeout=timeout + 10)
 
     async def spawn(self, command: list[str], cwd: PurePath, *, env: dict[str, str] | None = None,

@@ -36,6 +36,7 @@ worker_idle = 1800                # seconds an idle worker process is kept for f
 [policy]                          # defaults for every machine; machines and workspaces override
 mode = "write"                    # read-only | write | full
 network = ["github.com", "pypi.org", "files.pythonhosted.org"]
+# fetch_repos = ["chengcli/snapy", "UCzhangxi/snapy"]   # requires network = [], approvals != auto, no GPU confinement
 approvals = "auto"                # auto (the backend's AI reviewer decides) | on-request | untrusted | never
 approval_timeout = 1800
 auto_approve = []                 # command prefixes approved without asking, e.g. ["pytest", "git status"]

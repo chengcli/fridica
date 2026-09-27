@@ -49,6 +49,8 @@ DELEGATION = strict({
     "ephemeral": {"type": "boolean", "description": "Retire the worker after this one job."},
     "brief": string(f"The self-contained job description, at most {BRIEF_CHARS} characters."),
     "deliverable": enum(DELIVERABLES),
+    "fetch_repo": string("Empty, or an owner/repo from the chosen workspace's fetch_repos grant."),
+    "fetch_ref": string("Empty, or HEAD, refs/heads/<branch>, refs/pull/<number>/head, or a commit SHA."),
 })
 
 WORKER_CONTROL = strict({"worker_id": string(), "op": enum(("interrupt", "stop"))})

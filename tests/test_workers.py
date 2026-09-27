@@ -96,6 +96,36 @@ def test_codex_lost_thread_starts_a_new_one(tmp_path, fake_agents, monkeypatch):
     assert len(fake_agents("thread/start")) == 1
 
 
+def test_codex_repo_fetch_policy_rejects_inherited_mcp(tmp_path, fake_agents, monkeypatch):
+    monkeypatch.setenv("FAKE_MCP_CONFIG", "1")
+    policy = Policy(fetch_repos=("chengcli/snapy",), approvals="on-request")
+
+    async def scenario():
+        worker = CodexWorker(spec(tmp_path, policy=policy))
+        try:
+            with pytest.raises(BackendError, match="MCP"):
+                await worker.run("Review the fetched ref")
+        finally:
+            await worker.close()
+
+    run(scenario())
+    assert not fake_agents("thread/start")
+
+
+def test_codex_repo_fetch_policy_accepts_clean_config(tmp_path, fake_agents):
+    policy = Policy(fetch_repos=("chengcli/snapy",), approvals="on-request")
+
+    async def scenario():
+        worker = CodexWorker(spec(tmp_path, policy=policy))
+        try:
+            return await worker.run("Review the fetched ref")
+        finally:
+            await worker.close()
+
+    assert run(scenario()).result.status == "done"
+    assert len(fake_agents("config/read")) == 1
+
+
 @pytest.mark.parametrize("decision, answer", [(ALLOW_ONCE, "accept"), (ALLOW_SESSION, "acceptForSession"), (DENY, "decline")])
 def test_codex_approvals_go_to_the_handler(tmp_path, fake_agents, decision, answer):
     handler = Handler(decision)
@@ -416,3 +446,42 @@ def test_on_request_keeps_claude_in_accept_edits(tmp_path):
     worker.prepare("")
     argv = worker.command()
     assert argv[argv.index("--permission-mode") + 1] == "acceptEdits" and "--permission-prompt-tool" in argv
+
+
+def test_eof_reaps_delayed_exit_and_drains_stderr(tmp_path):
+    class Process:
+        returncode = None
+
+        async def wait(self):
+            await asyncio.sleep(0.01)
+            self.returncode = 7
+            return 7
+
+    async def scenario():
+        worker = CodexWorker(spec(tmp_path))
+        worker.process = Process()
+        async def stderr():
+            await asyncio.sleep(0.02)
+            worker.stderr.extend(b"last diagnostic")
+        worker.stderr_task = asyncio.create_task(stderr())
+        worker.lines.put_nowait(None)
+        with pytest.raises(BackendError, match=r"status 7.*last diagnostic"):
+            await worker.receive()
+    run(scenario())
+
+
+def test_eof_without_exit_is_bounded_and_does_not_claim_success(tmp_path, monkeypatch):
+    monkeypatch.setattr("fridica.workers.base.EOF_WAIT", 0.01)
+    class Process:
+        returncode = None
+
+        async def wait(self):
+            await asyncio.sleep(3600)
+
+    async def scenario():
+        worker = CodexWorker(spec(tmp_path))
+        worker.process = Process()
+        worker.lines.put_nowait(None)
+        with pytest.raises(BackendError, match="before exit status was available"):
+            await asyncio.wait_for(worker.receive(), 1)
+    run(scenario())

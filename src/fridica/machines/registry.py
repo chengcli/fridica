@@ -20,6 +20,13 @@ CLAUDE_PROMPTS = ("host", "none")
 SSH_HOST = re.compile(r"(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9_.-]*")
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 DOMAIN = re.compile(r"\*|(?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+GITHUB_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}")
+GITHUB_REF = re.compile(r"HEAD|refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*|refs/pull/[1-9][0-9]*/head|[a-fA-F0-9]{40,64}")
+
+
+def valid_fetch_ref(ref: str) -> bool:
+    return (bool(GITHUB_REF.fullmatch(ref)) and ".." not in ref and "//" not in ref
+            and not ref.endswith(("/", ".", ".lock")))
 
 
 @dataclass(frozen=True)
@@ -33,6 +40,8 @@ class Policy:
     """never: refuse anything outside the policy; on-request: ask the owner when the worker needs more than its
     sandbox; untrusted: ask for edits and most commands too; auto: the backend's own AI reviewer decides (Claude's
     auto permission mode, Codex's auto_review), and whatever it escalates comes to the owner."""
+    fetch_repos: tuple[str, ...] = ()
+    """GitHub owner/repo names that Fridica may fetch for this workspace without asking."""
     approval_timeout: float = 1800.0
     auto_approve: tuple[str, ...] = ()
     auto_deny: tuple[str, ...] = ()
@@ -56,7 +65,7 @@ class Policy:
             raise ValueError("policy.gpu_confine must be true or false")
         if not _positive(self.approval_timeout):
             raise ValueError("policy.approval_timeout must be a positive number of seconds")
-        for name in ("network", "auto_approve", "auto_deny"):
+        for name in ("network", "fetch_repos", "auto_approve", "auto_deny"):
             value = getattr(self, name)
             if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) and item for item in value):
                 raise ValueError(f"policy.{name} must be a list of nonempty strings")
@@ -64,6 +73,10 @@ class Policy:
         for domain in self.network:
             if not DOMAIN.fullmatch(domain):
                 raise ValueError(f"policy.network entry {domain!r} is not a host name or *.pattern")
+        if any(not GITHUB_REPO.fullmatch(repo) or repo.split("/", 1)[1] in (".", "..") for repo in self.fetch_repos):
+            raise ValueError("policy.fetch_repos entries must be GitHub owner/repo names")
+        if len({repo.casefold() for repo in self.fetch_repos}) != len(self.fetch_repos):
+            raise ValueError("policy.fetch_repos contains a duplicate repository")
 
     def override(self, values: dict) -> Policy:
         unknown = set(values) - set(POLICY_FIELDS)
@@ -76,7 +89,7 @@ class Policy:
         return "*" in self.network
 
 
-POLICY_FIELDS = ("mode", "network", "approvals", "approval_timeout", "auto_approve", "auto_deny", "gpu_confine",
+POLICY_FIELDS = ("mode", "network", "approvals", "fetch_repos", "approval_timeout", "auto_approve", "auto_deny", "gpu_confine",
                  "claude_prompts")
 
 
@@ -201,6 +214,8 @@ class Machine:
         data = {"name": self.name, "tags": list(self.tags), "backends": list(self.backends),
                 "default_backend": self.default_backend,
                 "workspaces": {item.name: item.policy.mode for item in self.workspaces},
+                "fetch_repos": {item.name: list(item.policy.fetch_repos) for item in self.workspaces
+                                if item.policy.fetch_repos},
                 "resources": self.resources.payload(), "busy_jobs": busy, "max_jobs": self.max_jobs}
         if self.description:
             data["description"] = self.description

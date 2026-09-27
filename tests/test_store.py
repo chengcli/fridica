@@ -72,8 +72,10 @@ def test_workers_jobs_and_results_round_trip(store, message):
     session_id, _ = store.messages.intake(message(ts="100.000001"), 1.0)
     worker = store.workers.add(WorkerRecord("w1", session_id, "snowy", "exocubed", "codex"), 1.0)
     assert worker.status == "idle"
-    job = store.jobs.add(Job("j1", "w1", session_id, "fix it", join_group="g1"), 1.0)
+    job = store.jobs.add(Job("j1", "w1", session_id, "fix it", join_group="g1",
+                             fetch_repo="chengcli/snapy", fetch_ref="refs/heads/main"), 1.0)
     assert store.jobs.queued() == [job] and store.jobs.start("j1", 2.0) and not store.jobs.start("j1", 2.0)
+    assert (job.fetch_repo, job.fetch_ref) == ("chengcli/snapy", "refs/heads/main")
     result = WorkerResult("done", "Fixed CUDA init.", report="Fixed it.")
     store.jobs.finish("j1", "done", 3.0, result=result)
     store.workers.record_result("w1", result, "thread-9", "idle", 3.0)

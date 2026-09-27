@@ -341,7 +341,7 @@ sees machine names, tags, workspace names, and load, never filesystem paths.
 | `mode` | Codex worker | Claude worker |
 | --- | --- | --- |
 | `read-only` | `readOnly` sandbox | only Read, Glob, and Grep |
-| `write` | `workspaceWrite` sandbox in the workspace | edits accepted, Bash sandboxed with `network` as its domain allowlist |
+| `write` | `workspaceWrite` sandbox in the workspace | edits accepted, Bash sandboxed; `network` pre-allows listed hosts |
 | `full` | no sandbox | no sandbox (`bypassPermissions` when `approvals = "never"`) |
 
 Codex supports network access only as all or nothing, so any `network` entry gives
@@ -468,6 +468,14 @@ Two things to weigh before enabling it:
   There is no per-repository allowlist.
 - The daemon itself calls `api.github.com`. Machine network policies govern workers,
   not this traffic. Set `enabled = false` to keep the daemon off the network.
+
+The shared repository list is not a permission grant. To let workers review a public
+GitHub ref without general network access, set `fetch_repos` in the workspace policy
+(for example, `["chengcli/snapy", "UCzhangxi/snapy"]`), with `network = []` and
+`approvals = "on-request"`. A delegated job may name one listed repo and ref;
+Fridica fetches it into a new bare repository and supplies its path and commit SHA.
+This requires write mode without GPU confinement. Push requires separate approval;
+private repository credentials are not supported by scoped fetch.
 
 ## Run
 

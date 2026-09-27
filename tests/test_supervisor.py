@@ -102,6 +102,80 @@ async def settle():
         await asyncio.sleep(0)
 
 
+@pytest.mark.parametrize("backend", ["codex", "claude"])
+def test_requested_repo_is_fetched_before_either_backend_runs(harness, monkeypatch, backend):
+    fetched = []
+
+    async def fetch(*args, **kwargs):
+        fetched.append((args, kwargs))
+        return "/workspace/fetched.git", "a" * 40
+
+    monkeypatch.setattr("fridica.workers.supervisor.fetch_repo", fetch, raising=False)
+    harness.add("review", machine="local", workspace="project", backend=backend, jobs=0)
+    harness.store.jobs.add(Job("review-j0", "review", harness.session.id, "Review this ref",
+                               fetch_repo="chengcli/snapy", fetch_ref="refs/heads/main"), 1.0)
+
+    async def scenario():
+        harness.supervisor.schedule()
+        await settle()
+        worker = harness.fakes["review"]
+        worker.release.set()
+        await settle()
+        await harness.supervisor.close()
+        return worker.calls
+
+    calls = asyncio.run(scenario())
+    assert len(fetched) == 1
+    assert "chengcli/snapy" in str(fetched[0])
+    assert "/workspace/fetched.git" in calls[0][0] and "a" * 40 in calls[0][0]
+
+
+def test_policy_reload_replaces_live_worker(harness):
+    harness.add("review", machine="local", workspace="project", jobs=0)
+    record = harness.store.workers.get("review")
+
+    async def scenario():
+        old = harness.supervisor._worker(record)
+        machine = harness.config.machines["local"]
+        spaces = tuple(replace(space, policy=replace(space.policy, network=(), approvals="on-request",
+                                                      fetch_repos=("chengcli/snapy",)))
+                       if space.name == "project" else space for space in machine.workspaces)
+        machines = replace(harness.config.machines, machines=tuple(
+            replace(item, workspaces=spaces) if item.name == "local" else item
+            for item in harness.config.machines.machines))
+        harness.supervisor.config = replace(harness.config, machines=machines)
+        current = harness.supervisor._worker(record)
+        await settle()
+        return old, current
+
+    old, current = asyncio.run(scenario())
+    assert current is not old and old.closed
+    assert current.spec.workspace.policy.fetch_repos == ("chengcli/snapy",)
+
+
+def test_interrupt_during_fetch_stops_before_worker_run(harness, monkeypatch):
+    started = asyncio.Event()
+
+    async def pending_fetch(*args, **kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("fridica.workers.supervisor.fetch_repo", pending_fetch)
+    harness.add("review", machine="local", workspace="project", jobs=0)
+    harness.store.jobs.add(Job("review-j0", "review", harness.session.id, "Review this ref",
+                               fetch_repo="chengcli/snapy", fetch_ref="HEAD"), 1.0)
+
+    async def scenario():
+        harness.supervisor.schedule()
+        await started.wait()
+        assert await harness.supervisor.interrupt("review")
+        await settle()
+        assert not harness.fakes["review"].calls
+
+    asyncio.run(scenario())
+    assert harness.store.jobs.get("review-j0").status == "interrupted"
+
+
 def test_limits_one_job_per_worker_per_machine_and_global(harness):
     harness.add("a", jobs=2)
     harness.add("b")
