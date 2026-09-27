@@ -171,6 +171,7 @@ impl Supervisor {
         {
             bail!("invalid worker deadline");
         }
+        self.approvals.reconfigure(config.clone()).await?;
         s.config = config;
         Ok(())
     }

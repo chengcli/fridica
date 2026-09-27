@@ -176,6 +176,24 @@ pub enum ApprovalDecision {
     Session,
     Deny,
 }
+/// Private request contents belong in the state database, never diagnostic logs.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: String,
+    pub worker_id: String,
+    pub job_id: String,
+    pub session_id: String,
+    pub backend_request_id: String,
+    pub kind: String,
+    pub summary: String,
+    pub detail: Value,
+    pub status: String,
+    pub scope: String,
+    pub decided_by: String,
+    pub created: f64,
+    pub decided_at: f64,
+    pub expires_at: f64,
+}
 pub fn retry_same_session(failure: Failure, attempt: u32, session: &str) -> bool {
     failure == Failure::Execution && attempt == 0 && !session.is_empty()
 }

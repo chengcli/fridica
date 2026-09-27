@@ -1,4 +1,5 @@
 //! One bounded queue and one dedicated SQLite thread; callers never share a connection.
+pub mod approvals;
 pub mod migration;
 pub mod outbox;
 pub mod schema;

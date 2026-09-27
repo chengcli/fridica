@@ -1,6 +1,8 @@
 //! Configuration transformations preserve comments and never silently discard keys.
+pub mod contract;
 pub mod loader;
 pub mod registry;
+pub mod repos;
 pub mod schema;
 pub use loader::{load, LoadContext};
 pub use schema::Config;

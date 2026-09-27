@@ -35,6 +35,13 @@ pub struct RunRequest {
     pub resume: String,
 }
 pub trait ApprovalHandler: Send + Sync {
+    /// Called before supervisor configuration changes become visible.
+    fn reconfigure(
+        &self,
+        _config: Arc<crate::config::Config>,
+    ) -> AdapterFuture<'_, anyhow::Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
     fn request(
         &self,
         worker: WorkerRecord,

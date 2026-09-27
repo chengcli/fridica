@@ -581,19 +581,16 @@ async fn approvals_timeout_to_denial_and_unrecognized_server_requests_are_declin
     assert_eq!(h.logs("elicit-answer")[0]["data"]["error"]["code"], -32601);
     h.worker.close().await.unwrap();
 }
-struct OwnerInstructions;
-impl fridica::workers::jsonl::Instructions for OwnerInstructions {
-    fn build(&self, _: &fridica::config::Config, _: &WorkerRecord) -> anyhow::Result<String> {
-        Ok("Speak as the owner.".into())
-    }
-}
 #[tokio::test]
 async fn durable_supervisor_runs_real_protocol_adapters_and_records_wire_events() {
     use fridica::{
+        approvals::Broker,
         config::{loader, registry::Registry, LoadContext},
         core::time::ReplayClock,
+        core::Authority,
         store::{work, Store},
         workers::{
+            instructions::OwnerInstructions,
             jsonl::{BackendFactory, StoreWireRecorder},
             supervisor::{Options as SupervisorOptions, Supervisor},
         },
@@ -638,11 +635,20 @@ async fn durable_supervisor_runs_real_protocol_adapters_and_records_wire_events(
                 clock: clock.clone(),
             }),
         });
+        let config = Arc::new(config);
+        let (notifications, mut pending) = tokio::sync::mpsc::channel(1);
+        let approvals = Arc::new(Broker::new(
+            store.clone(),
+            config.clone(),
+            clock.clone(),
+            Arc::new(SequenceIds::default()),
+            Some(notifications),
+        ));
         let supervisor = Supervisor::new(
             store.clone(),
-            Arc::new(config),
+            config,
             factory,
-            Arc::new(DenyApprovals),
+            approvals.clone(),
             Arc::new(NoJobIo),
             clock.clone(),
             SupervisorOptions::default(),
@@ -652,7 +658,7 @@ async fn durable_supervisor_runs_real_protocol_adapters_and_records_wire_events(
         work::enqueue(
             &store,
             serde_json::from_value(
-                json!({"id":"j1","worker_id":"w1","session_id":"thread","brief":"Build and test"}),
+                json!({"id":"j1","worker_id":"w1","session_id":"thread","brief":if backend=="codex" {"APPROVE:make"}else{"TOOL:make"}}),
             )
             .unwrap(),
             1.,
@@ -660,6 +666,26 @@ async fn durable_supervisor_runs_real_protocol_adapters_and_records_wire_events(
         .await
         .unwrap();
         assert_eq!(supervisor.schedule().await.unwrap(), vec!["j1"]);
+        let approval = tokio::time::timeout(Duration::from_secs(3), pending.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            work::get_worker(&store, "w1".into()).await.unwrap().status,
+            "awaiting_approval"
+        );
+        assert!(approvals
+            .decide(approval.clone(), ApprovalDecision::Once, Authority::Owner)
+            .await
+            .unwrap());
+        assert_eq!(
+            fridica::store::approvals::get(&store, approval)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "approved"
+        );
         tokio::time::timeout(Duration::from_secs(5), async {
             while work::get_job(&store, "j1".into()).await.unwrap().status != "done" {
                 tokio::time::sleep(Duration::from_millis(10)).await;

@@ -46,6 +46,7 @@ jobs:
           PYTHONPATH=spec python scripts/capture_supervisor.py
           PYTHONPATH=spec python scripts/capture_transport.py
           PYTHONPATH=spec python scripts/capture_workers.py
+          PYTHONPATH=spec python scripts/capture_approval_instructions.py
           git diff --exit-code -- tests/corpus/
 
   test:

@@ -1,3 +1,4 @@
+pub mod approvals;
 pub mod attention;
 pub mod config;
 pub mod core;
