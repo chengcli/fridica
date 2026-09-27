@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
+from ..core.ids import Identifiers
 
 from ..config.schema import Config
 from ..core.clock import Clock
@@ -23,10 +23,11 @@ DECISIONS = {ALLOW_ONCE: ("approved", "once"), ALLOW_SESSION: ("approved", "sess
 
 
 class ApprovalBroker:
-    def __init__(self, config: Config, store: Store, *, clock: Clock | None = None, notify=None):
+    def __init__(self, config: Config, store: Store, *, clock: Clock | None = None, notify=None, ids: Identifiers | None = None):
         self.config = config
         self.store = store
         self.clock = clock or Clock()
+        self.ids = ids or Identifiers()
         self.notify = notify
         """Optional callable(Approval) for desktop notifications or a Slack notice."""
         self.waiters: dict[str, asyncio.Future] = {}
@@ -44,7 +45,7 @@ class ApprovalBroker:
             self.store.audit.record("policy", "approval." + ("allow" if automatic != DENY else "deny"), now,
                                     target=worker.id, details={"kind": request.kind})
             return automatic
-        approval = Approval(id=uuid.uuid4().hex[:12], worker_id=worker.id, job_id=job.id, session_id=job.session_id,
+        approval = Approval(id=self.ids.hex("approval", 12), worker_id=worker.id, job_id=job.id, session_id=job.session_id,
                             kind=request.kind, summary=request.summary, detail=request.detail,
                             backend_request_id=request.backend_request_id, created=now,
                             expires_at=now + policy.approval_timeout)

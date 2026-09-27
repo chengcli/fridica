@@ -14,7 +14,6 @@ import logging
 import os
 import re
 from typing import Any, Protocol
-import uuid
 
 from ..config.schema import Config
 from ..core.models import FridicaMeta, InboxItem, Job, OutboxItem, ThreadSession, WorkerRecord
@@ -45,6 +44,7 @@ class Runtime(Protocol):
     store: Store
     bus: Any
     clock: Any
+    ids: Any
     parent: Any
     slack: Any
     supervisor: Any
@@ -373,12 +373,12 @@ class ThreadActor:
             worker_id = delegation.worker_id
             if not worker_id:
                 placement = delegation.placement
-                worker_id = "w" + uuid.uuid4().hex[:8]
+                worker_id = "w" + self.rt.ids.hex("worker", 8)
                 workers.append(WorkerRecord(worker_id, session.id, placement.machine.name, placement.workspace.name,
                                             placement.backend, role=delegation.role, ephemeral=delegation.ephemeral))
                 if not delegation.ephemeral:
                     context.update(machine=placement.machine.name, workspace=placement.workspace.name)
-            jobs.append(Job("j" + uuid.uuid4().hex[:10], worker_id, session.id, delegation.brief, join_group=group,
+            jobs.append(Job("j" + self.rt.ids.hex("job", 10), worker_id, session.id, delegation.brief, join_group=group,
                             inbox_id=item.id, deliverable=delegation.deliverable,
                             fetch_repo=delegation.fetch_repo, fetch_ref=delegation.fetch_ref))
         still_working = any(job.id not in reported for job in self.store.jobs.active_in_session(session.id))
@@ -475,7 +475,7 @@ class ThreadActor:
         retry = [job for job in jobs if job.status == "interrupted" and job.error == "daemon stopped" and job.attempt <= 1]
         if not retry or len(retry) != len(jobs):
             return False
-        copies = tuple(replace(job, id="j" + uuid.uuid4().hex[:10], status="queued", attempt=job.attempt,
+        copies = tuple(replace(job, id="j" + self.rt.ids.hex("job", 10), status="queued", attempt=job.attempt,
                                result=None, error="", inbox_id=job.inbox_id) for job in retry)
         self.commit(item, Outcome(session=session, jobs=copies, reported=tuple(job.id for job in retry)))
         return True

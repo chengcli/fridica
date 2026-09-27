@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 import logging
-import uuid
+from ..core.ids import Identifiers
 
 from ..config.schema import Config
 from ..core.bus import Bus
@@ -58,7 +58,7 @@ class Running:
 class Supervisor:
     def __init__(self, config: Config, store: Store, bus: Bus, *, instructions: Callable[[WorkerRecord], str],
                  approvals: ApprovalGate | None = None, factory: WorkerFactory = default_factory,
-                 clock: Clock | None = None):
+                 clock: Clock | None = None, ids: Identifiers | None = None):
         self.config = config
         self.store = store
         self.bus = bus
@@ -66,6 +66,7 @@ class Supervisor:
         self.approvals = approvals or ApprovalGate()
         self.factory = factory
         self.clock = clock or Clock()
+        self.ids = ids or Identifiers()
         self.live: dict[str, Worker] = {}
         self.running: dict[str, Running] = {}
         self._closing: set[asyncio.Task] = set()
@@ -179,7 +180,7 @@ class Supervisor:
                           instructions=self.instructions(record), model="", reasoning_effort="",
                           job_timeout=self.config.limits.job_timeout, idle_timeout=self.config.limits.worker_idle,
                           excluded_env=self.config.secret_env(),
-                          slot=record.slot)
+                          slot=record.slot, ids=self.ids)
 
     def _worker(self, record: WorkerRecord) -> Worker:
         worker = self.live.get(record.id)
@@ -259,7 +260,7 @@ class Supervisor:
                 worker_status = "stopped" if stop else "idle"
                 self.store.workers.record_result(record.id, result, session, worker_status, now)
             for item in artifacts:
-                self.store.artifacts.add(uuid.uuid4().hex, job, record.machine, item.ref, data=item.data,
+                self.store.artifacts.add(self.ids.hex("artifact"), job, record.machine, item.ref, data=item.data,
                                          error=item.error)
             self.store.inbox.add(job.session_id, "worker_result", now, ref=job.id)
         self.bus.thread(job.session_id)

@@ -81,7 +81,7 @@ class ClaudeWorker(JsonlWorker):
     def prepare(self, resume: str) -> None:
         # --resume continues an earlier session; --session-id names a new one up front.
         self.resume = resume
-        self.session = resume or str(uuid.uuid4())
+        self.session = resume or str(uuid.UUID(hex=self.spec.ids.hex("backend_session"), version=4))
 
     def job_prompt(self, brief: str) -> str:
         return f"{brief}\n\n{FORMAT_NOTE}"

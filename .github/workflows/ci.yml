@@ -15,6 +15,37 @@ permissions:
   contents: read
 
 jobs:
+  rust:
+    name: Rust foundation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Formatting, layering, migrations and replay
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          python scripts/verify_baseline.py
+          PYTHONPATH=spec python scripts/capture_gates.py
+          python -m pip install "aiohttp>=3.10,<4" "slack-sdk>=3.33,<4"
+          PYTHONPATH=spec python scripts/capture_outbox.py
+          PYTHONPATH=spec python scripts/capture_config.py
+          PYTHONPATH=spec python scripts/capture_placement.py
+          PYTHONPATH=spec python scripts/capture_supervisor.py
+          git diff --exit-code -- tests/corpus/
+
   test:
     name: Test (${{ matrix.os }}, Python 3.11)
     runs-on: ${{ matrix.os }}

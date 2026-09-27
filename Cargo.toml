@@ -1,0 +1,42 @@
+[package]
+name = "fridica"
+version = "0.4.0-dev.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Durable Slack agent coordination"
+default-run = "fridica"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fridica"
+path = "src/bin/fridica.rs"
+
+[[bin]]
+name = "fridica-overseer"
+path = "src/bin/fridica-overseer.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
+rusqlite = { version = "0.38", features = ["bundled", "backup", "serde_json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "net", "signal"] }
+toml_edit = "0.25"
+uuid = { version = "1", features = ["v4", "serde"] }
+unicode-normalization = "0.1"
+unicode-casefold = "0.2"
+users = "0.11"
+
+[dev-dependencies]
+tempfile = "3"
+syn = { version = "2", features = ["full", "visit"] }
+
+[lints.rust]
+unsafe_code = "forbid"
