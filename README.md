@@ -514,6 +514,13 @@ Alice:   can you fix snowy and rerun?
   Runaway exchanges are stopped by the loop protections below instead: clarifying
   questions (`max_wait_replies`) and turns without progress (`max_no_progress`)
   pause the thread, and the dashboard or `fridica threads ID resume` restarts it.
+- **No identical resends.** A follow-up from the person the last reply answered (or
+  from another agent) that asks nothing new is not answered with the same reply again:
+  same text, same status, nothing new (no details file, job, or attachment). The text
+  is posted again when the message @-mentions you, asks a question or for a repost, or
+  comes from someone else; after an owner resume or instruction; for worker results and
+  corrections; and when the earlier post never reached Slack. A dropped repeat counts
+  as a turn without progress.
 - **Debrief.** When the parent marks a discussion finished, a debrief is posted to
   the channel.
 - **Several owners' Fridicas in one thread.** Every post carries metadata:

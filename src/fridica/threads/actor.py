@@ -209,7 +209,33 @@ class ThreadActor:
         action = await self.decide(self.context(session, trigger, linked=linked, github=github, attachments=attached),
                                    session, ledger)
         self.apply(item, session, action, turn=verdict.turn, requester=message.sender, ledger=ledger,
-                   unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason))
+                   unsolicited=verdict.kind == "triage" and session.turns == 0, verdict=("respond", verdict.reason),
+                   repeat_ok=self._repeat_ok(item, message, session))
+
+    def _repeat_ok(self, item: InboxItem, message, session: ThreadSession) -> bool:
+        """Whether this message may be answered with the thread's last reply again.
+
+        A pure repeat is dropped only for a follow-up from the person the last reply answered (or from a peer
+        agent) that asks nothing new. An @-mention, a repost request, an owner resume, someone else asking, a
+        question, or a last reply that never reached Slack all get the text again.
+        """
+        if policy.repost_requested(message, self.config.owner.slack_user) or item.payload.get("resumed"):
+            return True
+        last, answered = self._last_reply(session)
+        if last is None or last.state in ("failed", "ambiguous"):
+            return True
+        if message.generated:
+            return False
+        return message.sender != answered or "?" in message.text
+
+    def _last_reply(self, session: ThreadSession):
+        """The thread's newest reply post and the sender it answered ('' when unknown, e.g. an owner instruction)."""
+        replies = [post for post in self.store.outbox.for_session(session.id) if post.kind == "reply"]
+        if not replies:
+            return None, ""
+        last = replies[-1]
+        head = last.idem_key.split(":", 1)[0]
+        return last, (self._requester_of(int(head)) if head.isdigit() else "")
 
     async def attachment_texts(self, message, history) -> dict[str, list[dict]]:
         """Views of attached files for a decide call, trigger first; bounded by ATTACHMENT_WAIT."""
@@ -273,14 +299,26 @@ class ThreadActor:
 
     def apply(self, item: InboxItem, session: ThreadSession, action: Action, *, turn: int, requester: str,
               ledger: list, unsolicited: bool = False, verdict: tuple[str, str] | None = None, reported: tuple[str, ...] = (),
-              kind: str = "reply", artifacts: tuple[dict, ...] = ()) -> ThreadSession:
+              kind: str = "reply", artifacts: tuple[dict, ...] = (), repeat_ok: bool = False) -> ThreadSession:
+        """Apply the parent's action.
+
+        A reply that repeats the thread's last one (same text and status, nothing else new: no details, jobs, or
+        artifacts, not a correction) is not resent unless ``repeat_ok`` (see ``_repeat_ok``; always true for the
+        owner's own instruction and for worker results)."""
         config, reply = self.config, action.reply
         posts: list[OutboxItem] = []
-        text = ""
+        text = details = ""
         if reply.send:
             people = render.participants(config.owner.slack_user, self.store.messages.thread(session.key, limit=100))
             text, details = render.reply_text(reply.text, reply.details, status=reply.status, requester=requester,
                                               people=people, limit=config.limits.reply_chars)
+            if (policy.reply_hash(text) == session.last_reply_hash and reply.status == session.status
+                    and not (repeat_ok or artifacts or details or action.delegations)
+                    and action.note.get("kind") != "correction"):
+                logger.info("thread %s: not resending an identical reply", session.id)
+                action = replace(action, reply=replace(reply, send=False, text="", details=""), suppressed=True)
+                reply, text = action.reply, ""
+        if reply.send:
             key = f"{item.id}:{kind}"
             posts.append(self.post(session, key, kind, text, status=reply.status, turn=max(session.turns, turn)))
             if details:
@@ -368,7 +406,7 @@ class ThreadActor:
             action = await self.decide(self.context(session, trigger, github=github), session, ledger)
             kind = "report"
         self.apply(item, session, action, turn=session.turns, requester=requester, ledger=ledger, reported=ids,
-                   kind=kind, artifacts=artifacts)
+                   kind=kind, artifacts=artifacts, repeat_ok=True)
 
     def _result_view(self, job: Job) -> dict:
         worker = self.store.workers.get(job.worker_id)
@@ -377,7 +415,11 @@ class ThreadActor:
                 "brief": job.brief[:1000], "result": job.result.to_dict() if job.result else None}
 
     def _requester(self, job: Job) -> str:
-        origin = self.store.inbox.get(job.inbox_id) if job.inbox_id else None
+        return self._requester_of(job.inbox_id)
+
+    def _requester_of(self, inbox_id: int | None) -> str:
+        """The sender of the message an inbox item goes back to, through worker-result chains; '' when none."""
+        origin = self.store.inbox.get(inbox_id) if inbox_id else None
         while origin is not None and origin.kind != "message":
             first = self.store.jobs.get(origin.ref) if origin.kind in ("worker_result", "worker_interrupted") else None
             origin = self.store.inbox.get(first.inbox_id) if first and first.inbox_id else None
@@ -433,7 +475,7 @@ class ThreadActor:
         github = await self.github_state(session, first=item.payload["text"])
         action = await self.decide(self.context(session, trigger, github=github), session, ledger)
         self.apply(item, session, action, turn=session.turns + 1,
-                   requester=self.config.owner.slack_user, ledger=ledger)
+                   requester=self.config.owner.slack_user, ledger=ledger, repeat_ok=True)
 
     async def on_control(self, item: InboxItem) -> None:
         session = self.store.threads.get(self.session_id)
@@ -476,7 +518,7 @@ class ThreadActor:
 
 def _action_record(action: Action) -> dict:
     return {"reply": {"send": action.reply.send, "status": action.reply.status, "discussion": action.reply.discussion,
-                      "chars": len(action.reply.text)},
+                      "chars": len(action.reply.text), "suppressed_repeat": action.suppressed},
             "delegations": [{"worker_id": item.worker_id,
                              "machine": item.placement.machine.name if item.placement else "",
                              "workspace": item.placement.workspace.name if item.placement else "",
