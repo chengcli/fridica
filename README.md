@@ -52,6 +52,9 @@ configured channels) can start work on your machines.
 
 ## Install
 
+Upgrading from v0.2? The config and database formats changed; see
+[`docs/upgrade-v0.2.md`](docs/upgrade-v0.2.md).
+
 Use macOS or Linux with Python 3.11 or newer. On the machine that runs the daemon,
 install and sign in to the CLI the parent uses:
 [Claude Code](https://code.claude.com/docs/en/setup) (default) or

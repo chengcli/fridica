@@ -21,6 +21,7 @@ Numbers and charts come from Fridica's own state database.
 
 | Path | Contents |
 |---|---|
+| `upgrade-v0.2.md` | Upgrading a v0.2 installation: steps and the config key map |
 | `architecture.md` | Short architecture overview (points to the PDF for detail) |
 | `images/` | Screenshots used by the top-level README |
 | `fridica-design.pdf` | The built design document |
