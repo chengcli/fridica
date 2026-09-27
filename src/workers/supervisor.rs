@@ -265,7 +265,10 @@ impl Supervisor {
             });
             // Retiring or changed-policy processes must be confirmed closed first.
             if let Some(i) = s.live.iter().position(|l| l.worker_id == w.id) {
-                let changed = spec.as_ref().map_or(true, |spec| spec != &s.live[i].spec);
+                let expired = w.updated != 0.
+                    && now - w.updated > config.limits.session_timeout
+                    && j.retry_of.is_empty();
+                let changed = expired || spec.as_ref().map_or(true, |spec| spec != &s.live[i].spec);
                 if (changed || s.live[i].retiring || !s.live[i].worker.alive())
                     && !self.close_live(&mut s, i).await?
                 {

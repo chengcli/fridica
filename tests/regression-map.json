@@ -1970,102 +1970,142 @@
     {
       "python": "tests/test_worker_result.py::test_schema_is_strict_for_codex",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/worker_results.rs",
+      "coverage_scope": "Frozen result coercion/parsing/schema fixtures remain scoped projections; retain Python until full daemon parity."
     },
     {
       "python": "tests/test_worker_result.py::test_parses_bare_json_and_the_last_fenced_block",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/worker_results.rs",
+      "coverage_scope": "Frozen result coercion/parsing/schema fixtures remain scoped projections; retain Python until full daemon parity."
     },
     {
       "python": "tests/test_worker_result.py::test_coerce_bounds_and_filters",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/worker_results.rs",
+      "coverage_scope": "Frozen result coercion/parsing/schema fixtures remain scoped projections; retain Python until full daemon parity."
     },
     {
       "python": "tests/test_worker_result.py::test_missing_structure_is_none_and_fallback_is_partial",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/worker_results.rs",
+      "coverage_scope": "Frozen result coercion/parsing/schema fixtures remain scoped projections; retain Python until full daemon parity."
     },
     {
       "python": "tests/test_worker_result.py::test_prose_keeps_code_blocks_that_are_not_the_result",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/worker_results.rs",
+      "coverage_scope": "Frozen result coercion/parsing/schema fixtures remain scoped projections; retain Python until full daemon parity."
     },
     {
       "python": "tests/test_workers.py::test_codex_job_returns_a_structured_result_and_maps_policy",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_follow_up_reuses_the_process_and_a_new_process_resumes_the_thread",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_lost_thread_starts_a_new_one",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_repo_fetch_policy_rejects_inherited_mcp",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_repo_fetch_policy_accepts_clean_config",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_approvals_go_to_the_handler[once-accept]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_approvals_go_to_the_handler[session-acceptForSession]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_approvals_go_to_the_handler[deny-decline]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_allow_for_session_is_remembered_by_the_worker",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_permission_requests_and_unsupported_requests",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_interrupt_stops_the_turn",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_prose_is_followed_by_a_summarize_turn",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_failures_raise_and_close[FAIL-model refused]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_failures_raise_and_close[EXIT-status 3]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_read_only_and_gpu_confined_policies",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_worker_over_ssh",
@@ -2075,37 +2115,51 @@
     {
       "python": "tests/test_workers.py::test_idle_worker_closes_itself",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_job_session_and_command_shape",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_tool_approvals_use_the_control_protocol[once-allow]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_tool_approvals_use_the_control_protocol[deny-deny]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_without_approvals_denies_prompts_outright",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_lost_session_retries_fresh",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_interrupt_and_failure",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_workspace_path_types",
@@ -2115,7 +2169,9 @@
     {
       "python": "tests/test_workers.py::test_interrupt_while_an_approval_is_pending_denies_it",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_codex_interrupt_before_the_turn_id_is_known_is_sent_later",
@@ -2125,27 +2181,37 @@
     {
       "python": "tests/test_workers.py::test_auto_approvals_use_the_backends_own_reviewers",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_claude_warns_when_auto_mode_falls_back",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_on_request_keeps_claude_in_accept_edits",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_eof_reaps_delayed_exit_and_drains_stderr",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     },
     {
       "python": "tests/test_workers.py::test_eof_without_exit_is_bounded_and_does_not_claim_success",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/backends.rs",
+      "coverage_scope": "Real local fake-CLI subprocess tests plus frozen policy/result projections in tests/worker_results.rs. Full daemon wiring, real CLI version conformance and live SSH parity remain outstanding."
     }
   ]
 }

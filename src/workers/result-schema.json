@@ -1,0 +1,156 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "partial",
+        "failed",
+        "needs_input"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1500
+    },
+    "changes": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "added",
+              "modified",
+              "deleted"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change",
+          "note"
+        ]
+      }
+    },
+    "validation": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "command",
+          "outcome",
+          "detail"
+        ]
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "png",
+              "pdf",
+              "md"
+            ]
+          },
+          "caption": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "caption"
+        ]
+      }
+    },
+    "machine_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "branch",
+        "commit",
+        "dirty",
+        "notes"
+      ]
+    },
+    "unresolved": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "string"
+      }
+    },
+    "question": {
+      "type": "string"
+    },
+    "report": {
+      "type": "string",
+      "maxLength": 4000
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "changes",
+    "validation",
+    "artifacts",
+    "machine_state",
+    "unresolved",
+    "question",
+    "report"
+  ]
+}

@@ -1,3 +1,7 @@
 pub mod artifacts;
+pub mod claude;
+pub mod codex;
+pub mod jsonl;
 pub mod protocol;
+pub mod result;
 pub mod supervisor;
