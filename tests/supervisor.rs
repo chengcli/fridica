@@ -1013,3 +1013,78 @@ async fn missing_fetch_adapter_refuses_before_backend_start() {
     );
     h.supervisor.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn local_artifacts_are_read_validated_and_committed_with_the_result() {
+    use fridica::workers::artifacts::LocalJobIo;
+    let files = tempfile::tempdir().unwrap();
+    let root = files.path().join("workspace");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("report.md"), "# Actual report").unwrap();
+    std::fs::write(root.join("bad.pdf"), "wrong magic").unwrap();
+    std::fs::write(files.path().join("outside.md"), "private").unwrap();
+    let h = Harness::with_io(Arc::new(LocalJobIo {
+        home: files.path().into(),
+    }))
+    .await;
+    let mut config = (*h.config).clone();
+    let machine = config
+        .machines
+        .machines
+        .iter_mut()
+        .find(|m| m.name == "gpu")
+        .unwrap();
+    machine.transport = "local".into();
+    let workspace = machine
+        .workspaces
+        .iter_mut()
+        .find(|w| w.name == "unique")
+        .unwrap();
+    workspace.path = root.clone();
+    workspace.subfolders = false;
+    h.supervisor.reconfigure(Arc::new(config)).await.unwrap();
+    h.add("a", "gpu", 0, false, 1).await;
+    let mut outcome = result();
+    outcome.result.artifacts = [
+        (root.join("report.md"), "md"),
+        (root.join("bad.pdf"), "pdf"),
+        (files.path().join("outside.md"), "md"),
+    ]
+    .into_iter()
+    .map(|(path, kind)| ArtifactRef {
+        path: path.to_str().unwrap().into(),
+        kind: kind.into(),
+        caption: "attachment".into(),
+    })
+    .collect();
+    h.factory
+        .script("a")
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Ok(outcome));
+    h.supervisor.schedule().await.unwrap();
+    h.factory.latest("a").release.add_permits(1);
+    h.wait_status("a-0", "done").await;
+    assert_eq!(
+        h.scalar("SELECT CAST(blob AS TEXT) FROM artifacts WHERE status='ready'")
+            .await,
+        "# Actual report"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM artifacts WHERE status='rejected'")
+            .await,
+        "2"
+    );
+    assert_eq!(
+        h.scalar("SELECT error FROM artifacts WHERE kind='pdf'")
+            .await,
+        "artifact_invalid_pdf"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='worker_result'")
+            .await,
+        "1"
+    );
+    h.supervisor.close().await.unwrap();
+}

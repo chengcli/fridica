@@ -1735,7 +1735,9 @@
     {
       "python": "tests/test_supervisor.py::test_artifacts_are_read_from_the_workspace",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/supervisor.rs",
+      "coverage_scope": "Local adapter with real file reads, type checks, rejections and atomic result storage; remote reads remain unported."
     },
     {
       "python": "tests/test_supervisor.py::test_unconfigured_machine_cancels_the_job",
@@ -1796,27 +1798,37 @@
     {
       "python": "tests/test_transport.py::test_ssh_command_shape_and_control_directory",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_script_quotes_arguments_env_and_home_relative_cwd[bash]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_script_quotes_arguments_env_and_home_relative_cwd[sh]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_confinement_binds_writable_roots_and_keeps_settings_read_only",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_local_launch_scrubs_tokens_and_adds_resource_limits",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_confinement_prepares_settings_without_clobbering",
@@ -1826,12 +1838,16 @@
     {
       "python": "tests/test_transport.py::test_ssh_round_trip_runs_on_the_host_in_the_workspace",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_ssh_failures_are_explained",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_spawned_process_speaks_over_stdio",
@@ -1841,7 +1857,9 @@
     {
       "python": "tests/test_transport.py::test_read_file_stays_inside_roots[False]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_read_file_stays_inside_roots[True]",
@@ -1856,17 +1874,23 @@
     {
       "python": "tests/test_transport.py::test_run_once_kills_the_process_group_on_timeout",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_run_once_bounds_output",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_diagnostic_is_a_bounded_single_line",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_read_works_with_bsd_realpath",
@@ -1881,12 +1905,16 @@
     {
       "python": "tests/test_transport.py::test_a_cancelled_run_releases_its_subprocess_before_the_loop_closes",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_teardown_releases_pipes_held_by_an_escaped_grandchild",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_long_lived_remote_agents_die_with_their_channel[bash]",
@@ -1901,12 +1929,16 @@
     {
       "python": "tests/test_transport.py::test_a_long_lived_agent_that_exits_passes_its_status[bash]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_a_long_lived_agent_that_exits_passes_its_status[sh]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_a_signalled_wrapper_stops_its_agent_and_cleans_up[bash]",
@@ -1921,7 +1953,9 @@
     {
       "python": "tests/test_transport.py::test_slot_subfolders_are_created_before_the_agent_starts",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/transport.rs",
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
     },
     {
       "python": "tests/test_upgrade_note.py::test_every_v03_setting_named_in_the_key_map_exists",
