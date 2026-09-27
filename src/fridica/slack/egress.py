@@ -161,6 +161,9 @@ class SlackClient:
                 if response.status != 200 or (response.content_type == "text/html" and not html):
                     # Without files:read Slack answers with its sign-in page instead of the file.
                     raise FileUnavailable("Slack did not return the file")
+                if response.content_type == "text/html" and self.scopes is None:
+                    # With unknown scopes an HTML answer may be that sign-in page, even for an HTML file.
+                    raise FileUnavailable("the token's scopes are unknown, so an HTML answer may be Slack's sign-in page")
                 data = bytearray()
                 while len(data) <= limit:  # read() returns what is buffered, not the whole request
                     chunk = await response.content.read(limit + 1 - len(data))

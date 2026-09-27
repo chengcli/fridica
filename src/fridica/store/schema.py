@@ -220,6 +220,7 @@ ALTER TABLE workers ADD COLUMN slot INTEGER NOT NULL DEFAULT 0;
 
 V4 = """
 ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';
+CREATE INDEX outbox_uploads ON outbox (kind, channel, thread_ts, filename, sent_ts);
 """
 
 MIGRATIONS: tuple[str, ...] = (V1, V2, V3, V4)

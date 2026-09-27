@@ -23,6 +23,25 @@ def message_view(message: Message, attachments: list[dict] | None = None) -> dic
     return data
 
 
+def fit_attachments(views: list[dict], remaining: int) -> int:
+    """Cut attached text to what is left of the context budget, in order; returns what is left afterwards."""
+    for view in views:
+        text = view.get("text")
+        if not isinstance(text, str):
+            continue
+        if remaining <= 0:
+            view.pop("text")
+            view["note"] = "not included: over the context budget (context_chars)"
+        elif len(text) > remaining:
+            view["text"] = text[:remaining] + (f"\n[… truncated to fit the context budget: first {remaining:,} of "
+                                               f"{len(text):,} characters]")
+            view["truncated"] = True
+            remaining = 0
+        else:
+            remaining -= len(text)
+    return remaining
+
+
 def bounded(items: list[dict], budget: int) -> tuple[dict, ...]:
     """The newest items that fit in ``budget`` characters of text, oldest first."""
     kept, used = [], 0
@@ -53,9 +72,21 @@ def build(store: Store, config: Config, session: ThreadSession, trigger: dict, *
         recent = store.messages.channel_recent(session.key.workspace, session.key.channel, session.key.root_ts,
                                                limit=CHANNEL_LIMIT)
         channel = bounded([message_view(item) for item in recent], CHANNEL_CHARS)
+    history = bounded(history, budget // 2)
+    # Attached text shares context_chars with the thread: what history leaves, the trigger's files first.
+    remaining = budget - sum(len(item.get("text", "")) + 80 for item in history)
+    message = trigger.get("message")
+    if isinstance(message, dict) and message.get("attachments"):
+        trigger = {**trigger, "message": {**message, "attachments": [dict(view) for view in message["attachments"]]}}
+        remaining = fit_attachments(trigger["message"]["attachments"], remaining)
+    history = tuple({**item, "attachments": [dict(view) for view in item["attachments"]]} if item.get("attachments")
+                    else item for item in history)
+    for item in reversed(history):  # newest first
+        if item.get("attachments"):
+            remaining = fit_attachments(item["attachments"], remaining)
     return ParentContext(
         owner=config.owner.slack_user, profile=config.owner.profile, session=session, trigger=trigger,
-        history=bounded(history, budget // 2), channel=channel, linked=linked,
+        history=history, channel=channel, linked=linked,
         workers=tuple(worker_view(record) for record in store.workers.for_session(session.id)),
         machines=tuple(config.machines.payload(busy)), repositories=repositories,
         notes=store.notes.current(session.id)[1], delegation_allowed=config.slack.may_delegate(session.key.channel),

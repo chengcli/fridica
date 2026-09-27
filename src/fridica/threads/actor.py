@@ -213,7 +213,11 @@ class ThreadActor:
         if not any(item.attachments for item in messages):
             return {}
         try:
-            return await asyncio.wait_for(files.read(self.rt.slack, messages), ATTACHMENT_WAIT)
+            owner = self.config.owner.slack_user
+            own = self.store.outbox.own_files([(attachment.id, item.channel, item.root_ts, attachment.name)
+                                               for item in messages if item.sender == owner
+                                               for attachment in item.attachments])
+            return await asyncio.wait_for(files.read(self.rt.slack, messages, own=own), ATTACHMENT_WAIT)
         except Exception as error:
             logger.warning("thread %s: attachments unavailable (%s)", self.session_id, type(error).__name__)
             return {}

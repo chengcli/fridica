@@ -261,3 +261,152 @@ def test_messages_stored_before_schema_v4_still_load(tmp_path):
     store = Store(path)
     assert store.messages.get("e1").attachments == () and store.db.meta("schema_version") == str(len(MIGRATIONS))
     store.close()
+
+
+def human_file(ts, file_id, name, data, harness, *, sender="UALICE", thread=None, text="the file"):
+    url = f"https://files.slack.com/files-pri/T1-{file_id}/{name}"
+    harness.slack.files[url] = data
+    return Message(f"event-{ts}", "TTEAM", "CROOM", ts, thread, sender, text,
+                   attachments=(Attachment(file_id, name, "text/markdown" if name.endswith(".md") else "text/x-diff",
+                                           len(data), url),))
+
+
+def uploaded(store, session_id, file_id, name):
+    """An upload this daemon made: its outbox row holds the Slack file id as sent_ts."""
+    from fridica.core.models import OutboxItem
+
+    store.outbox.enqueue(OutboxItem(f"up-{file_id}", session_id, "upload", "CROOM", "100.000001", filename=name,
+                                    blob=b"x"), 1.0)
+    item = store.outbox.get(f"up-{file_id}")
+    store.outbox.claim(item.id)
+    store.outbox.sent(item.id, file_id)
+
+
+def test_own_upload_echoes_do_not_take_the_slots_of_a_human_file(config, store):
+    """Fix item 1: echoed details.md files next to an older human .diff; the diff must be in context."""
+    harness = Harness(config, store, lambda kind, data: action("Reviewed."))
+
+    async def scenario():
+        harness.daemon.receive(human_file("100.000001", "FHUMAN", "fix.diff", DIFF, harness, text="here is the fix"))
+        await harness.settle()
+        for index in range(3):  # the daemon's own uploads, echoed back as the owner's messages
+            name = f"details-{index}.md"
+            uploaded(store, "TTEAM:CROOM:100.000001", f"FOWN{index}", name)
+            harness.daemon.receive(human_file(f"100.00001{index}", f"FOWN{index}", name, b"# details", harness,
+                                              sender="UOWNER", thread="100.000001", text=""))
+        harness.message("<@UOWNER> is the diff above right?", thread="100.000001", ts="100.000020")  # no file
+        await harness.settle()
+        await harness.daemon.close()
+    asyncio.run(scenario())
+    data = harness.llm.calls[-1][1]
+    root = next(item for item in data["history"] if item["ts"] == "100.000001")
+    assert root["attachments"][0]["text"] == DIFF.decode()  # the older human diff is read from the thread
+    views = [view for item in data["history"] for view in item.get("attachments", [])]
+    own = [view for view in views if view["name"].startswith("details-")]
+    assert len(own) == 3 and all(view["note"] == "not read: a file this Fridica posted itself" for view in own)
+
+
+def test_a_file_shared_twice_is_read_once_and_ambiguous_own_uploads_are_recognised(config, store):
+    from fridica.core.models import OutboxItem
+
+    harness = Harness(config, store, lambda kind, data: action("Reviewed."))
+
+    async def scenario():
+        harness.daemon.receive(human_file("100.000001", "FDIFF", "fix.diff", DIFF, harness, text="the fix"))
+        await harness.settle()
+        # an upload whose outcome was unknown: no file id was recorded, but its echo arrived
+        store.outbox.enqueue(OutboxItem("up-amb", "TTEAM:CROOM:100.000001", "upload", "CROOM", "100.000001",
+                                        filename="details-9.md", blob=b"x"), 1.0)
+        item = store.outbox.get("up-amb")
+        store.outbox.claim(item.id)
+        store.outbox.fail(item.id, "ambiguous", "daemon stopped while sending")
+        harness.daemon.receive(human_file("100.000010", "FECHO", "details-9.md", b"# mine", harness,
+                                          sender="UOWNER", thread="100.000001", text=""))
+        harness.daemon.receive(human_file("100.000020", "FDIFF", "fix.diff", DIFF, harness, thread="100.000001",
+                                          text="<@UOWNER> same diff again"))
+        await harness.settle()
+        await harness.daemon.close()
+    asyncio.run(scenario())
+    data = harness.llm.calls[-1][1]
+    views = [view for item in data["history"] for view in item.get("attachments", [])]
+    views += data["trigger"]["message"].get("attachments", [])
+    assert sum(1 for view in views if view.get("text") == DIFF.decode()) == 1
+    assert any(view.get("note") == "not read again: the same file is read from a newer message" for view in views)
+    echo = next(view for view in views if view["name"] == "details-9.md")
+    assert echo["note"] == "not read: a file this Fridica posted itself"
+
+
+def test_clean_erases_attachments_so_nothing_is_read_after_restore(config, store):
+    """Fix item 2: clean, restore, @-mention; no file is re-read."""
+    downloads = []
+    harness = Harness(config, store, lambda kind, data: action("Reviewed."))
+    original = harness.slack.download
+
+    async def counting(url, limit, *, html=False):
+        downloads.append(url)
+        return await original(url, limit, html=html)
+
+    harness.slack.download = counting
+
+    async def scenario():
+        harness.daemon.receive(human_file("100.000001", "FDIFF", "fix.diff", DIFF, harness,
+                                          text="<@UOWNER> review this"))
+        await harness.settle()
+        session = store.threads.list()[0].id
+        await harness.daemon.thread_action(session, "clean", "owner")
+        await harness.settle()
+        await harness.daemon.thread_action(session, "restore", "owner")
+        await harness.settle()
+        harness.message("<@UOWNER> anything else?", thread="100.000001")
+        await harness.settle()
+        await harness.daemon.close()
+    asyncio.run(scenario())
+    assert len(downloads) == 1  # only the first reply read the file
+    stored = store.messages.get("event-100.000001")
+    assert stored.attachments == () and stored.files == ()
+    assert "files.slack.com" not in str(harness.llm.calls[-1][1])
+
+
+def test_attached_text_counts_toward_the_context_budget(config, store):
+    """Fix item 3: an attachment over the remaining budget is truncated with the marker."""
+    big = ("x" * 99 + "\n").encode() * 400  # 40,000 characters, under the 64 KB file cap
+    harness = Harness(config, store, lambda kind, data: action("Reviewed."))
+    run(harness, human_file("100.000001", "FBIG", "big.diff", big, harness, text="<@UOWNER> look"))
+    view = harness.llm.calls[0][1]["trigger"]["message"]["attachments"][0]
+    budget = config.parent.context_chars
+    assert "truncated to fit the context budget" in view["text"] and view["truncated"] is True
+    assert len(view["text"]) < budget + 200
+
+
+def test_a_sign_in_page_gives_the_name_only_when_scopes_are_unknown(config):
+    """Fix item 4: with unknown scopes an HTML answer is never taken for the file, not even for an HTML file."""
+    class Response:
+        status, content_type, content_length = 200, "text/html", 30
+
+        class content:
+            @staticmethod
+            async def read(limit):
+                return b"<html>Sign in to Slack</html>"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class Web:
+        token = "xoxp-secret"
+
+        class session:
+            @staticmethod
+            def get(url, **kwargs):
+                return Response()
+
+    client = SlackClient(config, Web())
+    assert client.scopes is None
+    diff = Attachment("F1", "fix.diff", "text/x-diff", 30, URL)
+    page = Attachment("F2", "report.html", "text/html", 30, URL.replace("fix.diff", "report.html"))
+    views = asyncio.run(files.read(client, [message(diff, page)]))["e1"]
+    assert all("text" not in view for view in views)
+    assert views[0]["note"] == "not read: Slack did not return the file"
+    assert views[1]["note"] == "not read: the token's scopes are unknown, so an HTML answer may be Slack's sign-in page"

@@ -76,8 +76,10 @@ class Messages:
         return [codec.message(row) for row in reversed(rows)]
 
     def wipe(self, key: ThreadKey) -> int:
-        """Erase the text of every message in a thread (the dashboard's clean action)."""
-        return self.db.execute("UPDATE messages SET text='', files_json='[]' WHERE workspace=? AND channel=? AND root_ts=?",
+        """Erase the text, file names and attachments (with their private URLs) of every message in a thread
+        (the dashboard's clean action)."""
+        return self.db.execute("UPDATE messages SET text='', files_json='[]', attachments_json='[]'"
+                               " WHERE workspace=? AND channel=? AND root_ts=?",
                                (key.workspace, key.channel, key.root_ts)).rowcount
 
     def latest_unanswered(self, key: ThreadKey) -> Message | None:

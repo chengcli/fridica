@@ -48,21 +48,28 @@ def utf8(data: bytes, *, cut: bool) -> str | None:
     return None
 
 
-async def read(slack, messages: list[Message]) -> dict[str, list[dict]]:
+async def read(slack, messages: list[Message], *, own: set[str] | frozenset[str] = frozenset()) -> dict[str, list[dict]]:
     """For each message with attachments (in the given order, each message once), a view per file.
 
-    Up to MAX_FILES text files are downloaded concurrently; their text is then kept in order until TOTAL_LIMIT.
+    Files this daemon uploaded itself (``own``: details files, artifacts) are skipped, and a file shared twice is
+    read once, so people's files get the MAX_FILES slots. Up to MAX_FILES text files are downloaded concurrently;
+    their text is then kept in order until TOTAL_LIMIT.
     """
     views: dict[str, list[dict]] = {}
     chosen: list[tuple[Attachment, dict]] = []
     seen: set[str] = set()
+    files_seen: set[str] = set()
     for message in messages:
         if message.event_id in seen:
             continue
         seen.add(message.event_id)
         for attachment in message.attachments:
             view = {"name": attachment.name, "mimetype": attachment.mimetype, "size": attachment.size}
-            if not is_text(attachment):
+            if attachment.id in own:
+                view["note"] = "not read: a file this Fridica posted itself"
+            elif attachment.id in files_seen:
+                view["note"] = "not read again: the same file is read from a newer message"
+            elif not is_text(attachment):
                 view["note"] = "not read: not a text file"
             elif not attachment.url:
                 view["note"] = "not read: no Slack download URL"
@@ -70,6 +77,7 @@ async def read(slack, messages: list[Message]) -> dict[str, list[dict]]:
                 view["note"] = f"not read: only {MAX_FILES} files are read per reply"
             else:
                 chosen.append((attachment, view))
+            files_seen.add(attachment.id)
             views.setdefault(message.event_id, []).append(view)
     results = await asyncio.gather(*(_text(slack, attachment) for attachment, _ in chosen))
     used = 0

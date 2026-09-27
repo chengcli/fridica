@@ -54,6 +54,13 @@ mapping is visible in the database schema.
      - ``outbox`` item of kind *upload*
      - Long replies overflow into a ``details-….md`` file; validated worker artifacts (PNG, PDF,
        Markdown) are uploaded after the reply they belong to.
+   * - Attached file
+     - ``Attachment`` on the message (name, type, size, private URL)
+     - With ``files:read``, text attachments are read for the parent as untrusted data once a message is
+       to be answered: at most 3 files and 64 KB of text per reply, and within what ``context_chars``
+       leaves after the thread history. Files Fridica posted itself are skipped, a file shared twice is
+       read once, and the owner's token is sent only to ``files.slack.com``. Cleaning a thread erases the
+       attachments with the text.
    * - Channel post (top level)
      - Debrief
      - When a discussion finishes, a short debrief is posted to the channel, ordered after the final

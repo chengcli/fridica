@@ -30,6 +30,26 @@ class Outbox:
         )
         return cursor.rowcount == 1
 
+    def own_files(self, candidates: list[tuple[str, str, str, str]]) -> set[str]:
+        """Which of ``candidates`` (file id, channel, thread root, filename) this daemon uploaded itself.
+
+        A sent upload's sent_ts holds its Slack file id. An upload whose outcome was unknown (ambiguous, or
+        retried after a first attempt that landed) has no id, so a file is also counted as ours when an upload
+        of the same name went to the same thread. Callers pass only files posted from the owner's account.
+        """
+        own: set[str] = set()
+        for index in range(0, len(candidates), 200):
+            batch = candidates[index:index + 200]
+            ids = [item[0] for item in batch]
+            own |= {row[0] for row in self.db.all(
+                f"SELECT sent_ts FROM outbox WHERE kind='upload' AND sent_ts IN ({','.join('?' * len(ids))})", tuple(ids))}
+            for file_id, channel, thread, filename in batch:
+                if file_id not in own and self.db.one(
+                        "SELECT 1 FROM outbox WHERE kind='upload' AND channel=? AND thread_ts=? AND filename=? LIMIT 1",
+                        (channel, thread, filename)):
+                    own.add(file_id)
+        return own
+
     def get(self, idem_key: str) -> OutboxItem | None:
         row = self.db.one("SELECT * FROM outbox WHERE idem_key=?", (idem_key,))
         return codec.outbox(row) if row else None

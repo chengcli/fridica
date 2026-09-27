@@ -160,13 +160,19 @@ the file. Limits:
 
 - only text types are read;
 - at most three files and 64 KB of text per reply, the triggering message's files
-  first;
-- longer files are cut with a marker;
+  first, and a file over 64 KB is cut with a marker;
+- attached text shares `[parent] context_chars` with the thread history, and is cut
+  with a marker beyond what the history leaves;
+- files Fridica uploaded itself are skipped, and a file shared twice is read once;
 - downloads give up after 30 seconds.
 
 Workers never hold the Slack token, and it is only ever sent to `files.slack.com`.
-Without the scope the parent sees file names only, and `fridica doctor` warns once the
-daemon has started.
+Cleaning a thread erases its attachments along with its text.
+
+`files:read` is in the shipped manifest, because reading attachments is the point of this
+feature. To turn it off, leave the scope out when you install the app. The parent then
+sees file names only, and `fridica doctor` reports the missing scope once the daemon has
+started.
 
 **Bot Token Scopes and bot event subscriptions are not used.** You do not need a
 public Request URL with Socket Mode.
