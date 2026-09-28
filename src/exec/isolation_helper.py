@@ -1,4 +1,4 @@
-"""Fixed local launch helper: no backend startup before the private mount view.
+"""Fixed launch helper: no backend startup before the private mount view.
 
 All directory traversal uses no-follow descriptors. Only approved workspace and
 backend-state descriptors survive exec; bwrap consumes them as mount sources.
@@ -76,10 +76,29 @@ def default(value, data):
 
 def main():
     request = json.loads(sys.argv[1])
-    home, workspace = path(request["home"]), path(request["workspace"])
-    private = [path(p) for p in request["private"]]
+    if sys.platform != "linux":
+        raise Refused()
+    remote = request["home"] is None
+    home = path(os.environ["HOME"] if remote else request["home"])
+
+    def target(value):
+        if remote and isinstance(value, str) and value.startswith("~/"):
+            value = home + "/" + value[2:]
+        return path(value)
+
+    workspace = target(request["workspace"])
+    private = [target(p) for p in request["private"]]
     if home == "/" or not private or not sys.argv[2:]:
         raise Refused()
+    # SSH login/AcceptEnv can introduce credentials absent from the daemon's
+    # outgoing environment. Scrub on the target as well, before backend exec.
+    excluded = request.get("excluded_env", [])
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in excluded and "SLACK" not in key.upper()
+        and not key.upper().startswith("FRIDICA_")
+        and not value.startswith(("xoxp-", "xoxb-", "xapp-", "xoxe-"))
+    }
     # Resolve private aliases too, but never use them as worker mount sources.
     private += [path(os.path.realpath(p)) for p in private]
     # A second hard-link name could live outside every masked directory. Do not
@@ -140,7 +159,7 @@ def main():
     words += ["--chdir", workspace, "--"] + sys.argv[2:]
     for fd in fds:
         os.set_inheritable(fd, True)
-    os.execve(words[0], words, os.environ)
+    os.execve(words[0], words, environment)
 
 
 try:

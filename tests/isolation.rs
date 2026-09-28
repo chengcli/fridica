@@ -9,6 +9,10 @@ use std::collections::BTreeMap;
 use std::{path::PathBuf, time::Duration};
 
 #[cfg(target_os = "linux")]
+#[path = "support/remote_isolation.rs"]
+mod remote;
+
+#[cfg(target_os = "linux")]
 struct Fixture {
     _dir: tempfile::TempDir,
     config: Config,

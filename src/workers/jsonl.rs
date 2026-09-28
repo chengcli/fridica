@@ -46,8 +46,6 @@ pub struct SystemLauncher {
 }
 impl Launcher for SystemLauncher {
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
-        let roots = vec![spec.workspace.path.to_string_lossy().into_owned()];
-        let confine = spec.confined().then_some(roots.as_slice());
         let launch = match spec.machine.transport.as_str() {
             "local" => {
                 let transport = LocalTransport {
@@ -74,22 +72,33 @@ impl Launcher for SystemLauncher {
                     )
                 }
             }
-            "ssh" => SshTransport {
-                machine: spec.machine.clone(),
-                excluded_env: spec.excluded_env.clone(),
-                control_directory: self.ssh_control_directory.clone(),
+            "ssh" => {
+                let transport = SshTransport {
+                    machine: spec.machine.clone(),
+                    excluded_env: spec.excluded_env.clone(),
+                    control_directory: self.ssh_control_directory.clone(),
+                };
+                if spec.confined() {
+                    self.isolation.launch_remote(
+                        &transport,
+                        command,
+                        &spec.workspace.path.to_string_lossy(),
+                        self.environment.clone(),
+                        spec.create_cwd(),
+                    )
+                } else {
+                    transport.launch(
+                        command,
+                        &spec.workspace.path.to_string_lossy(),
+                        self.environment.clone(),
+                        &BTreeMap::new(),
+                        LaunchOptions {
+                            create: spec.create_cwd(),
+                            ..LaunchOptions::default()
+                        },
+                    )
+                }
             }
-            .launch(
-                command,
-                &spec.workspace.path.to_string_lossy(),
-                self.environment.clone(),
-                &BTreeMap::new(),
-                LaunchOptions {
-                    confine,
-                    create: spec.create_cwd(),
-                    timeout: None,
-                },
-            ),
             _ => return Err(failure(Failure::Refusal, "transport_unavailable", "")),
         };
         launch.map_err(|_| failure(Failure::Refusal, "backend_launch_configuration_failed", ""))
