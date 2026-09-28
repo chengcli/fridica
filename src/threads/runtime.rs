@@ -46,6 +46,9 @@ pub struct Runtime<P: Parent, D: Delivery> {
     pass: Mutex<()>,
 }
 impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
+    pub fn observe_only(&self) -> bool {
+        self.dispatcher.observe_only
+    }
     /// Startup only: caller supplies an exclusively opened Store and adapters
     /// whose constructors perform no external I/O. Recover before any startup.
     pub async fn start(
@@ -161,5 +164,29 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     pub async fn close(&self) -> Result<()> {
         let _pass = self.pass.lock().await;
         self.supervisor.close().await
+    }
+}
+
+impl<P: Parent + 'static> Runtime<P, crate::slack::web::WebClient> {
+    /// Build the live service with one authenticated client for history and
+    /// delivery, and the runtime's receiver for Socket Mode intake.
+    pub fn slack_service(
+        self,
+        app_token: String,
+        socket_options: crate::slack::socket::Options,
+        options: super::service::Options,
+    ) -> Result<
+        super::service::Service<P, crate::slack::web::WebClient, crate::slack::web::WebClient>,
+        super::service::Failure,
+    > {
+        let web = self.dispatcher.delivery.clone();
+        super::service::Service::new(
+            self,
+            web.clone(),
+            move |receiver| {
+                crate::slack::socket::SocketMode::new(web, receiver, app_token, socket_options)
+            },
+            options,
+        )
     }
 }

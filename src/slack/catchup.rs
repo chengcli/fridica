@@ -54,6 +54,15 @@ pub enum HistoryFailure {
     Rejected,
     RateLimited { retry_after: f64 },
 }
+impl std::fmt::Display for HistoryFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Slack history request failed: {self:?}; watermark unchanged"
+        )
+    }
+}
+impl std::error::Error for HistoryFailure {}
 pub trait History: Send + Sync {
     fn page(
         &self,
@@ -316,8 +325,7 @@ impl<H: History> Catchup<H> {
             tx.execute("UPDATE replay_events SET complete=? WHERE seq=?",params![complete,call])?;
             tx.commit()?; Ok(())
         }).await?;
-        let response = result
-            .map_err(|_| anyhow::anyhow!("Slack history request failed; watermark unchanged"))?;
+        let response = result.map_err(anyhow::Error::new)?;
         if response["ok"] != true {
             bail!("Slack history rejected request; watermark unchanged");
         }

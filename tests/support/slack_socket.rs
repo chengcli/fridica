@@ -62,6 +62,12 @@ impl TicketServer {
                     json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"})
                 } else if path.starts_with("/api/conversations.info?") {
                     json!({"ok":true,"channel":{"id":"CROOM","is_member":true}})
+                } else if path.starts_with("/api/conversations.history?")
+                    || path.starts_with("/api/conversations.replies?")
+                {
+                    json!({"ok":true,"messages":[]})
+                } else if path == "/api/chat.postMessage" {
+                    json!({"ok":true,"channel":"CROOM","ts":"200.1"})
                 } else {
                     assert_eq!(path, "/api/apps.connections.open");
                     queue
@@ -144,6 +150,7 @@ impl WsServer {
 struct Harness {
     _dir: tempfile::TempDir,
     store: Store,
+    clock: Arc<ReplayClock>,
     http: TicketServer,
     ws: WsServer,
     mode: Arc<SocketMode>,
@@ -197,7 +204,7 @@ path="{}"
         let receiver = Receiver::new(
             store.clone(),
             config,
-            clock,
+            clock.clone(),
             Arc::new(SequenceIds::default()),
         );
         let mut mode =
@@ -206,6 +213,7 @@ path="{}"
         Self {
             _dir: dir,
             store,
+            clock,
             http,
             ws,
             mode: Arc::new(mode),
@@ -674,4 +682,176 @@ async fn connect_recording_failure_prevents_the_websocket_handshake() {
     assert_eq!(task.await.unwrap(), Err(Failure::Storage));
     assert!(h.ws.connections.try_recv().is_err());
     assert_eq!(h.count("messages").await, 0);
+}
+
+struct ServiceParent;
+impl crate::core::parent::Parent for ServiceParent {
+    fn decide(
+        &self,
+        request: crate::core::parent::ParentRequest,
+    ) -> crate::core::delivery::AdapterFuture<
+        '_,
+        std::result::Result<Value, crate::core::parent::ParentFailure>,
+    > {
+        Box::pin(async move {
+            let answers: Vec<_> = request
+                .obligations
+                .iter()
+                .map(|o| o["id"].clone())
+                .collect();
+            Ok(json!({"reply":{"text":"Answer","status":"complete","answers":answers}}))
+        })
+    }
+}
+struct NoServiceWorkers;
+impl crate::workers::protocol::Factory for NoServiceWorkers {
+    fn instructions(
+        &self,
+        _: &crate::config::Config,
+        _: &crate::core::worker::WorkerRecord,
+    ) -> anyhow::Result<String> {
+        panic!("this service scenario must not prepare a worker")
+    }
+    fn create(
+        &self,
+        _: crate::workers::protocol::WorkerSpec,
+    ) -> std::result::Result<
+        Arc<dyn crate::workers::protocol::Worker>,
+        crate::core::worker::WorkerFailure,
+    > {
+        panic!("this service scenario must not start a worker")
+    }
+}
+#[tokio::test]
+async fn service_composes_real_socket_history_and_delivery_across_a_reconnect() {
+    use crate::threads::{
+        runtime::{Adapters, Runtime},
+        service::{Options as ServiceOptions, Service},
+    };
+    let mut h = Harness::new(options()).await;
+    h.clock.set(10000.);
+    let receiver = h.mode.receiver.clone();
+    let web = h.mode.web.clone();
+    let runtime = Runtime::start(
+        h.store.clone(),
+        receiver.config.clone(),
+        Adapters {
+            parent: Arc::new(ServiceParent),
+            delivery: web.clone(),
+            workers: Arc::new(NoServiceWorkers),
+            job_io: Arc::new(crate::workers::protocol::NoJobIo),
+        },
+        receiver.clock.clone(),
+        receiver.ids.clone(),
+        false,
+    )
+    .await
+    .unwrap();
+    let origin = h.ws.url.clone();
+    let service = Service::new(
+        runtime,
+        web.clone(),
+        move |receiver| {
+            let mut mode = SocketMode::new(web, receiver, "xapp-app-secret".into(), options())?;
+            mode.test_origin = Some(origin);
+            Ok(mode)
+        },
+        ServiceOptions {
+            pass_interval: Duration::from_millis(10),
+            ..ServiceOptions::default()
+        },
+    )
+    .unwrap();
+    h.ticket();
+    h.ticket();
+    let (stop, rx) = watch::channel(false);
+    let task = tokio::spawn(service.run(rx));
+    let mut first = h.ws.accept().await;
+    text(&mut first, json!({"type":"hello"})).await;
+    text(&mut first, event()).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&next(&mut first).await.into_text().unwrap()).unwrap(),
+        json!({"envelope_id":"env1"})
+    );
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let done: bool = h
+                .store
+                .call(|c| {
+                    Ok(c.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM obligations WHERE state='answered')",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            if done {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    text(
+        &mut first,
+        json!({"type":"disconnect","reason":"refresh_requested"}),
+    )
+    .await;
+    let mut second = h.ws.accept().await;
+    text(&mut second, json!({"type":"hello"})).await;
+    text(&mut second, event()).await;
+    let _ = next(&mut second).await;
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let passes: i64 = h
+                .store
+                .call(|c| {
+                    Ok(c.query_row(
+                        "SELECT count(*) FROM replay_events WHERE kind='service_catchup'",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            if passes >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(4), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(h.count("obligations").await, 1);
+    assert_eq!(h.count("outbox").await, 1);
+    let calls = h.http.calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(path, _)| path == "/api/chat.postMessage")
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(path, _)| path == "/api/apps.connections.open")
+            .count(),
+        2
+    );
+    assert!(
+        calls
+            .iter()
+            .filter(|(path, _)| path.starts_with("/api/conversations.history?"))
+            .count()
+            >= 2
+    );
 }
