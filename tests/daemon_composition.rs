@@ -162,6 +162,7 @@ control_socket="private/control.sock"
 [isolation]
 mcp_aliases=["owner-fridica"]
 "#;
+        std::fs::write(root.join("config.toml"), source).unwrap();
         let config = Arc::new(
             loader::parse(
                 source,
@@ -648,5 +649,61 @@ async fn unrestricted_mcp_settings_refusal_is_durable_without_backend_start_or_r
     assert!(!serde_json::to_string(&*f.slack.sent.lock().unwrap())
         .unwrap()
         .contains("private-source"));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn live_configuration_rebuilds_real_parent_adapter_and_prompt_limits() {
+    let f = Fixture::new().await;
+    let mut execution = f.execution("Unused worker".into(), false);
+    execution.parent.environment.insert(
+        "PARENT_ACTION".into(),
+        json!({"reply":{"text":"Updated settings applied.","status":"complete"}})
+            .to_string()
+            .into(),
+    );
+    let runtime = f.start(Mode::Active(Box::new(execution))).await;
+    runtime
+        .update_configuration(
+            "parent",
+            json!({"model":"fixture-new-model", "triage_model":"fixture-fast"}),
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    runtime
+        .update_configuration(
+            "limits",
+            json!({"max_delegations_per_turn":1}),
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    f.receive(&runtime).await;
+    runtime.pass().await.unwrap();
+    let log = std::fs::read_to_string(f.dir.path().join("parent.log")).unwrap();
+    let calls: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(!calls.is_empty());
+    assert!(calls.iter().any(|call| call["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "fixture-new-model")));
+    assert!(calls.iter().all(|call| call["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("\"max_delegations\":1")));
+    assert_eq!(f.scalar("SELECT count(*) FROM jobs").await, 0);
+    assert_eq!(
+        f.scalar(
+            "SELECT count(*) FROM replay_events WHERE kind='configuration_edit' AND complete=0"
+        )
+        .await,
+        0
+    );
+    assert!(!f.dir.path().join("worker.log").exists());
     runtime.close().await.unwrap();
 }

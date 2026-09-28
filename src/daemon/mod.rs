@@ -140,7 +140,14 @@ pub async fn observe(
     credentials: Credentials,
     stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    run(config, credentials, stop, None).await
+    run(
+        config,
+        credentials,
+        stop,
+        None,
+        crate::config::LoadContext::current()?,
+    )
+    .await
 }
 
 /// Active host wiring for the candidate. The CLI rollout gate remains closed.
@@ -181,11 +188,12 @@ pub async fn active(
         credentials,
         stop,
         Some(composition::Host {
-            home: context.home,
+            home: context.home.clone(),
             environment,
             ssh_control_directory: ssh,
             parent_temporary_root: temporary.path().to_owned(),
         }),
+        context,
     )
     .await;
     drop(temporary);
@@ -197,6 +205,7 @@ async fn run(
     credentials: Credentials,
     stop: watch::Receiver<bool>,
     host: Option<composition::Host>,
+    context: crate::config::LoadContext,
 ) -> Result<()> {
     if *stop.borrow() {
         return Ok(());
@@ -221,8 +230,9 @@ async fn run(
     } else {
         composition::Mode::ObserveOnly
     };
-    let runtime =
-        composition::start(config.clone(), store, web, clock, Arc::new(RandomIds), mode).await?;
+    let runtime = composition::start(config.clone(), store, web, clock, Arc::new(RandomIds), mode)
+        .await?
+        .with_configuration_context(context);
     let service = runtime.slack_service(
         credentials.app,
         socket::Options::default(),

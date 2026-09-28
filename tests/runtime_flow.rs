@@ -164,9 +164,8 @@ impl Harness {
     async fn with_io(responses: Vec<Value>, observe: bool, job_io: Arc<dyn JobIo>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("project")).unwrap();
-        let config = loader::parse(
-            &format!(
-                r#"
+        let source = format!(
+            r#"
 [owner]
 slack_user="UOWNER"
 [slack]
@@ -181,9 +180,12 @@ project="{}"
 [state]
 path="{}"
 "#,
-                dir.path().join("project").display(),
-                dir.path().join("db").display()
-            ),
+            dir.path().join("project").display(),
+            dir.path().join("db").display()
+        );
+        std::fs::write(dir.path().join("config.toml"), &source).unwrap();
+        let config = loader::parse(
+            &source,
             &dir.path().join("config.toml"),
             &LoadContext {
                 home: dir.path().into(),
@@ -214,7 +216,19 @@ path="{}"
             observe,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_configuration_editor(
+            {
+                let parent = parent.clone();
+                Arc::new(move |_| Ok(parent.clone()))
+            },
+            LoadContext {
+                home: dir.path().into(),
+                runtime_dir: None,
+                uid: 1,
+                protected: vec![],
+            },
+        );
         Self {
             dir,
             store,
@@ -2753,4 +2767,308 @@ async fn idle_parent_interrupt_is_visible_and_observe_only_defers_reconciliation
     );
     assert!(h.worker.calls.lock().unwrap().is_empty());
     assert!(h.sink.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn owner_configuration_edits_are_durable_and_reject_unauthorized_or_invalid_changes() {
+    let h = Harness::new(vec![], false).await;
+    let fingerprint = h.config.fingerprint.clone();
+    h.store.call(move |c| { c.execute("INSERT INTO runtime(id,pid,started_at,heartbeat_at,slack_status,observe_only,config_fingerprint) VALUES(1,123,1,2,'connected',0,?)", [fingerprint])?; Ok(()) }).await.unwrap();
+    let original = std::fs::read_to_string(&h.config.path).unwrap();
+    for authority in [Authority::Overseer, Authority::DesktopReadOnly] {
+        assert_eq!(
+            control_call(
+                &h,
+                "PATCH",
+                "/config/limits",
+                json!({"max_jobs":1}),
+                authority
+            )
+            .await
+            .status,
+            403
+        );
+    }
+    assert_eq!(
+        control_call(
+            &h,
+            "PATCH",
+            "/config/limits",
+            json!({"max_no_progress":1}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        400
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "PATCH",
+            "/config/limits",
+            json!({"max_jobs":0}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        400
+    );
+    assert_eq!(std::fs::read_to_string(&h.config.path).unwrap(), original);
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='configuration_edit'"
+        )
+        .await,
+        "0"
+    );
+    let response = control_call(
+        &h,
+        "PATCH",
+        "/config/limits",
+        json!({"max_jobs":1}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.body["limits"]["max_jobs"], 1);
+    assert_eq!(h.runtime.config().limits.max_jobs, 1);
+    assert_eq!(
+        control_call(&h, "GET", "/config", json!({}), Authority::DesktopReadOnly)
+            .await
+            .body["limits"]["max_jobs"],
+        1
+    );
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='configuration_edit' AND complete=0").await, "0");
+    assert_eq!(h.scalar("SELECT json_extract(payload_json,'$.outcome') FROM replay_events WHERE kind='configuration_result'").await, "applied");
+    assert_eq!(
+        h.scalar("SELECT config_fingerprint FROM runtime").await,
+        h.runtime.config().fingerprint
+    );
+    let fingerprint = h.runtime.config().fingerprint.clone();
+    assert_eq!(
+        control_call(
+            &h,
+            "PATCH",
+            "/config/limits",
+            json!({"max_jobs":1}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    assert_eq!(h.runtime.config().fingerprint, fingerprint);
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='configuration_edit'"
+        )
+        .await,
+        "1"
+    );
+    std::fs::write(
+        &h.config.path,
+        format!(
+            "{}\n# external change\n",
+            std::fs::read_to_string(&h.config.path).unwrap()
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        control_call(
+            &h,
+            "PATCH",
+            "/config/parent",
+            json!({"model":"new"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    assert_eq!(h.runtime.config().parent.model, "");
+}
+
+#[tokio::test]
+async fn lost_configuration_ack_rebuilds_actor_limits_before_the_next_turn() {
+    use fridica::{config::editor::Prepared, store::configuration};
+    let mut two = delegate();
+    two["delegations"]
+        .as_array_mut()
+        .unwrap()
+        .push(delegate()["delegations"][0].clone());
+    let h = Harness::new(
+        vec![
+            two,
+            json!({"reply":{"text":"Adjusted plan.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    let context = LoadContext {
+        home: h.dir.path().into(),
+        runtime_dir: None,
+        uid: 1,
+        protected: vec![],
+    };
+    // File replacement completed while its caller disappeared; no runtime update.
+    let edit = Prepared::new(
+        &h.config,
+        "limits",
+        &json!({"max_delegations_per_turn":1}),
+        &context,
+    )
+    .unwrap();
+    configuration::replace(&h.store, edit, 20.).await.unwrap();
+    assert_eq!(h.runtime.config().limits.max_delegations_per_turn, 3);
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.runtime.config().limits.max_delegations_per_turn, 1);
+    assert!(configuration::pending(&h.store).await.unwrap().is_none());
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "0"
+    );
+    assert!(
+        h.parent
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.call == "repair"
+                && r.errors.iter().any(|e| e.contains("too many delegations")))
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn configuration_waits_for_parent_turn_but_does_not_block_owner_pause() {
+    let h = Harness::new(vec![delegate()], false).await;
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    h.intake(false).await;
+    let runtime = h.runtime.clone();
+    let pass = tokio::spawn(async move { runtime.pass().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.parent.calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let runtime = h.runtime.clone();
+    let edit = tokio::spawn(async move {
+        runtime
+            .update_configuration("parent", json!({"model":"changed"}), Authority::Owner)
+            .await
+    });
+    h.runtime
+        .control(
+            SESSION.into(),
+            Control::Pause {
+                reason: "owner review".into(),
+            },
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(h.runtime.config().parent.model, "");
+    gate.add_permits(1);
+    pass.await.unwrap().unwrap();
+    edit.await.unwrap().unwrap();
+    assert_eq!(h.runtime.config().parent.model, "changed");
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "paused");
+    assert!(h.worker.calls.lock().unwrap().is_empty());
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn configuration_faults_leave_reconcilable_intent_and_never_acknowledge_early() {
+    let h = Harness::new(vec![], false).await;
+    let original = std::fs::read_to_string(&h.config.path).unwrap();
+    h.store.call(|c| { c.execute_batch("CREATE TRIGGER reject_config_intent BEFORE INSERT ON replay_events WHEN NEW.kind='configuration_edit' BEGIN SELECT RAISE(ABORT,'fixture intent failure'); END;")?; Ok(()) }).await.unwrap();
+    assert_eq!(
+        control_call(
+            &h,
+            "PATCH",
+            "/config/parent",
+            json!({"model":"first"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    assert_eq!(std::fs::read_to_string(&h.config.path).unwrap(), original);
+    assert_eq!(h.runtime.config().parent.model, "");
+    h.store.call(|c| { c.execute_batch("DROP TRIGGER reject_config_intent; CREATE TRIGGER reject_config_ack BEFORE INSERT ON replay_events WHEN NEW.kind='configuration_result' BEGIN SELECT RAISE(ABORT,'fixture acknowledgement failure'); END;")?; Ok(()) }).await.unwrap();
+    assert_eq!(
+        control_call(
+            &h,
+            "PATCH",
+            "/config/parent",
+            json!({"model":"first"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    assert_eq!(h.runtime.config().parent.model, "first");
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='configuration_edit' AND complete=0").await, "1");
+    assert!(h.runtime.pass().await.is_err());
+    h.store
+        .call(|c| {
+            c.execute_batch("DROP TRIGGER reject_config_ack;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='configuration_result'"
+        )
+        .await,
+        "1"
+    );
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='configuration_edit' AND complete=0").await, "0");
+    assert!(h.parent.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn configuration_changes_keep_running_jobs_and_observers_inert() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.worker.calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.runtime
+        .update_configuration(
+            "limits",
+            json!({"max_jobs":1, "job_timeout":1, "worker_idle":1}),
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(h.scalar("SELECT status FROM jobs").await, "running");
+    assert_eq!(h.worker.interruptions.load(Ordering::SeqCst), 0);
+    assert_eq!(h.runtime.config().limits.job_timeout, 1.);
+    h.worker.release.add_permits(1);
+    h.runtime.close().await.unwrap();
+    let observer = Harness::new(vec![], true).await;
+    observer.intake(false).await;
+    observer
+        .runtime
+        .update_configuration("parent", json!({"model":"unused"}), Authority::Owner)
+        .await
+        .unwrap();
+    observer.runtime.pass().await.unwrap();
+    assert!(observer.parent.calls.lock().unwrap().is_empty());
+    assert!(observer.worker.calls.lock().unwrap().is_empty());
+    assert!(observer.sink.calls.lock().unwrap().is_empty());
 }

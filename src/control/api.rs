@@ -115,7 +115,36 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             return Response::error(400, "invalid_body_or_query");
         }
         if request.method == "PATCH" && parts.first().is_some_and(|p| p == "config") {
-            return Response::error(501, "live_configuration_updates_not_implemented");
+            if authority != Authority::Owner {
+                return Response::error(403, "owner_required");
+            }
+            if parts.len() != 2 || !matches!(parts[1].as_str(), "parent" | "limits") {
+                return Response::error(404, "not_found");
+            }
+            if !crate::config::editor::valid_patch(&parts[1], &request.body) {
+                return Response::error(400, "configuration_field_not_editable");
+            }
+            if !self.runtime.configuration_editable() {
+                return Response::error(503, "configuration_editor_unavailable");
+            }
+            return match self
+                .runtime
+                .update_configuration(&parts[1], request.body, authority)
+                .await
+            {
+                Ok(config) => {
+                    let value = if parts[1] == "parent" {
+                        json!({"parent":{"backend":config.parent.backend,"model":config.parent.model,"triage_model":config.parent.triage_model,"reasoning_effort":config.parent.reasoning_effort}})
+                    } else {
+                        json!({"limits":config.limits})
+                    };
+                    Response::ok(value)
+                }
+                Err(error) if error.is::<crate::config::editor::InvalidPatch>() => {
+                    Response::error(400, "invalid_configuration_values")
+                }
+                Err(_) => Response::error(409, "configuration_update_refused_or_pending"),
+            };
         }
         if request.method != "POST" {
             return Response::error(405, "method_not_allowed");

@@ -23,6 +23,7 @@ use std::{
 
 /// Trusted host construction only. These values never come from model output.
 /// No Debug implementation: inherited authentication values may be private.
+#[derive(Clone)]
 pub struct Options {
     pub codex: String,
     pub claude: String,

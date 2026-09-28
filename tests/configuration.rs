@@ -482,3 +482,126 @@ fn mcp_source_inventory_resolves_local_files_and_requires_safe_target_paths() {
         .is_err());
     }
 }
+
+#[test]
+fn editor_preserves_comments_validates_and_refuses_external_edits() {
+    use config::editor::Prepared;
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    let path = dir.path().join("etc/config.toml");
+    let source = format!("# owner config\n{}\n[parent] # parent settings\nmodel = 'old' # keep inline\n# workload\n[limits]\nmax_jobs = 3 # capacity\n", basic(dir.path()));
+    std::fs::write(&path, &source).unwrap();
+    let ctx = context(dir.path());
+    let current = config::load(&path, &ctx).unwrap();
+    for (section, patch) in [
+        ("limits", json!({"max_jobs":0})),
+        ("limits", json!({"max_jobs":true})),
+        ("limits", json!({"max_jobs":1.5})),
+        ("limits", json!({"max_wait_replies":3})),
+        ("parent", json!({"model":null})),
+        ("parent", json!({"backend":"bogus"})),
+        // Implicit machine backends must not change through a parent control.
+        ("parent", json!({"backend":"codex"})),
+        ("parent", json!({"timeout":1})),
+        ("owner", json!({"profile":"new"})),
+    ] {
+        assert!(
+            Prepared::new(&current, section, &patch, &ctx).is_err(),
+            "{patch}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    }
+    let edit = Prepared::new(
+        &current,
+        "parent",
+        &json!({"model":"new", "triage_model":"fast"}),
+        &ctx,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    edit.commit().unwrap();
+    let changed = std::fs::read_to_string(&path).unwrap();
+    for comment in [
+        "# owner config",
+        "# parent settings",
+        "# keep inline",
+        "# workload",
+        "# capacity",
+    ] {
+        assert!(changed.contains(comment), "lost {comment}: {changed}");
+    }
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let current = config::load(&path, &ctx).unwrap();
+    assert_eq!(current.parent.model, "new");
+    assert_eq!(current.parent.triage_model, "fast");
+    let edit = Prepared::new(&current, "limits", &json!({"max_jobs":2}), &ctx).unwrap();
+    std::fs::write(&path, format!("{changed}\n# concurrent owner edit\n")).unwrap();
+    assert!(edit.commit().is_err());
+    assert!(Prepared::new(&current, "limits", &json!({"max_jobs":2}), &ctx).is_err());
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .ends_with("# concurrent owner edit\n"));
+    assert!(
+        !std::fs::read_dir(path.parent().unwrap()).unwrap().any(|p| p
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".fridica-config-"))
+    );
+}
+
+#[tokio::test]
+async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflicts() {
+    use config::editor::Prepared;
+    use fridica::store::{configuration as journal, Store};
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    let path = dir.path().join("etc/config.toml");
+    std::fs::write(&path, basic(dir.path())).unwrap();
+    let ctx = context(dir.path());
+    let current = config::load(&path, &ctx).unwrap();
+    let store = Store::open(dir.path().join("db")).await.unwrap();
+    // Commit file, lose runtime acknowledgement, then restart with the new file.
+    let edit = Prepared::new(&current, "limits", &json!({"max_jobs":2}), &ctx).unwrap();
+    journal::replace(&store, edit, 10.).await.unwrap();
+    assert!(journal::pending(&store).await.unwrap().is_some());
+    assert!(journal::recover_startup(&store, &current, 11.)
+        .await
+        .is_err());
+    let updated = config::load(&path, &ctx).unwrap();
+    journal::recover_startup(&store, &updated, 12.)
+        .await
+        .unwrap();
+    journal::recover_startup(&store, &updated, 13.)
+        .await
+        .unwrap();
+    assert!(journal::pending(&store).await.unwrap().is_none());
+    // Crash after intent but before rename. Startup records not_applied.
+    let edit = Prepared::new(&updated, "limits", &json!({"max_jobs":1}), &ctx).unwrap();
+    let intent = journal::Intent {
+        path: path.clone(),
+        before: updated.fingerprint.clone(),
+        after: edit.config.fingerprint,
+    };
+    let payload = serde_json::to_string(&intent).unwrap();
+    let id = store.call(move |c| { c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('configuration_edit',14,?,0)", [payload])?; Ok(c.last_insert_rowid()) }).await.unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{text}\n# unexpected edit\n")).unwrap();
+    let external = config::load(&path, &ctx).unwrap();
+    assert!(journal::recover_startup(&store, &external, 15.)
+        .await
+        .is_err());
+    assert_eq!(journal::pending(&store).await.unwrap().unwrap().0, id);
+    std::fs::write(&path, text).unwrap();
+    journal::recover_startup(&store, &updated, 16.)
+        .await
+        .unwrap();
+    let outcomes: Vec<String> = store.call(|c| Ok(c.prepare("SELECT json_extract(payload_json,'$.outcome') FROM replay_events WHERE kind='configuration_result' ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)).await.unwrap();
+    assert_eq!(outcomes, ["applied", "not_applied"]);
+}

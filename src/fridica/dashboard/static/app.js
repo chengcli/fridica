@@ -417,7 +417,7 @@ function field(label, id, value, help = "", type = "text") {
 function settingsView(data) {
   const config = data.config, parent = config.parent, limits = config.limits;
   const parentKeys = ["backend", "model", "triage_model", "reasoning_effort"];
-  const limitKeys = ["max_wait_replies", "max_no_progress", "max_delegations_per_turn", "max_workers_per_thread", "max_jobs", "job_timeout", "worker_idle"];
+  const limitKeys = ["max_wait_replies", "max_no_progress", "max_delegations_per_turn", "max_workers_per_thread", "max_jobs", "job_timeout", "worker_idle"].filter((key) => Object.hasOwn(limits, key));
   return [page("Settings", "Current behavior for this local Fridica instance."),
     panel("Agent model", [el("p", { class: "small muted" }, "Blank model fields use the backend default."),
       el("div", { class: "form-grid" },
@@ -434,12 +434,12 @@ function settingsView(data) {
         await act("PATCH", "/config/parent", changes, "Save model settings?",
           "New settings apply when Fridica picks up the updated configuration.");
       }, "primary"))]),
-    panel("Loop and workload limits", [el("div", { class: "form-grid" }, limitKeys.map((key) =>
+    panel("Workload limits", [el("div", { class: "form-grid" }, limitKeys.map((key) =>
       field(key.replaceAll("_", " "), key, limits[key], key.includes("timeout") || key === "worker_idle" ? "Seconds" : "", "number"))),
     el("div", { class: "form-actions" }, button("Save limits", async () => {
         const changes = Object.fromEntries(limitKeys.map((key) => [key, Number(document.getElementById(key).value)]));
         await act("PATCH", "/config/limits", changes, "Save workload limits?",
-          "These values govern reply loops and concurrent work. Invalid values will be rejected.");
+          "These values govern concurrent work and worker deadlines. Invalid values will be rejected.");
       }, "primary"))])];
 }
 
@@ -517,4 +517,4 @@ function start() {
 }
 
 if (typeof document !== "undefined") start();
-if (typeof module !== "undefined") module.exports = { el, ago, statusPill, filteredThreads, attention, networkSummary };
+if (typeof module !== "undefined") module.exports = { el, ago, statusPill, filteredThreads, attention, networkSummary, settingsView };

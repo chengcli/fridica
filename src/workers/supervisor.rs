@@ -164,6 +164,13 @@ impl Supervisor {
         }
         Ok(closed)
     }
+    pub async fn validate_reconfiguration(&self, config: &Config) -> Result<()> {
+        if self.state.lock().await.closing {
+            bail!("supervisor is closing");
+        }
+        Duration::try_from_secs_f64(config.limits.job_timeout)?;
+        self.factory.validate_config(config)
+    }
     pub async fn reconfigure(&self, config: Arc<Config>) -> Result<()> {
         let mut s = self.state.lock().await;
         if s.closing {

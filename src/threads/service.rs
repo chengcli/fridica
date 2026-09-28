@@ -351,7 +351,7 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
         if !started.is_finite() {
             return Err(Failure::Configuration);
         }
-        let fingerprint = self.receiver.config.fingerprint.clone();
+        let fingerprint = self.runtime.config().fingerprint.clone();
         let observe = self.runtime.observe_only();
         self.receiver.store.call(move|c| {
             let tx=c.transaction()?;

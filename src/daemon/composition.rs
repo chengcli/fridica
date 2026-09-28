@@ -13,7 +13,7 @@ use crate::{
     parent::{self, CliParent},
     slack::{files::Downloader, links::Reader},
     store::Store,
-    threads::runtime::{Adapters, Runtime},
+    threads::runtime::{Adapters, ParentFactory, Runtime},
     workers::{
         artifacts::SystemJobIo,
         fetch::ScopedJobIo,
@@ -128,7 +128,9 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
     ids: Arc<dyn Identifiers>,
     mode: Mode,
 ) -> Result<ComposedRuntime<S>> {
-    let (adapters, observe_only) = match mode {
+    let context = crate::config::LoadContext::current()?;
+    let (adapters, observe_only, parent_factory): (_, _, ParentFactory<ComposedParent>) = match mode
+    {
         Mode::ObserveOnly => (
             Adapters {
                 parent: Arc::new(ComposedParent(Arc::new(Disabled))),
@@ -137,29 +139,41 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                 job_io: Arc::new(NoJobIo),
             },
             true,
+            Arc::new(|_| Ok(Arc::new(ComposedParent(Arc::new(Disabled))))),
         ),
         Mode::Active(execution) => {
             if config.github.enabled && execution.github.is_none() {
                 bail!("enabled GitHub context requires an API adapter");
             }
-            let mut parent = CliParent::new(
-                config.clone(),
-                store.clone(),
-                clock.clone(),
-                execution.parent,
-            )
-            .with_slack_context(slack.clone());
-            if config.github.enabled {
-                parent = parent.with_github(Arc::new(
-                    Links::new(
-                        execution.github.unwrap(),
+            let parent_factory: ParentFactory<ComposedParent> = {
+                let (store, clock, slack) = (store.clone(), clock.clone(), slack.clone());
+                let options = execution.parent;
+                let github = execution.github;
+                Arc::new(move |config| {
+                    let mut parent = CliParent::new(
+                        config.clone(),
                         store.clone(),
                         clock.clone(),
-                        config.github.cache_seconds,
+                        options.clone(),
                     )
-                    .map_err(|_| anyhow::anyhow!("GitHub context configuration failed"))?,
-                ));
-            }
+                    .with_slack_context(slack.clone());
+                    if config.github.enabled {
+                        parent = parent.with_github(Arc::new(
+                            Links::new(
+                                github
+                                    .clone()
+                                    .ok_or_else(|| anyhow::anyhow!("GitHub adapter unavailable"))?,
+                                store.clone(),
+                                clock.clone(),
+                                config.github.cache_seconds,
+                            )
+                            .map_err(|_| anyhow::anyhow!("GitHub context configuration failed"))?,
+                        ));
+                    }
+                    Ok(Arc::new(ComposedParent(Arc::new(parent))))
+                })
+            };
+            let parent = parent_factory(config.clone())?;
             let factory = BackendFactory {
                 launcher: execution.launcher,
                 instructions: Arc::new(OwnerInstructions),
@@ -178,15 +192,20 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
             };
             (
                 Adapters {
-                    parent: Arc::new(ComposedParent(Arc::new(parent))),
+                    parent,
                     delivery: slack,
                     workers: Arc::new(factory),
                     job_io: Arc::new(io),
                 },
                 false,
+                parent_factory,
             )
         }
     };
     // Runtime supplies one durable approval broker to the supervisor and controls.
-    Runtime::start(store, config, adapters, clock, ids, observe_only).await
+    Ok(
+        Runtime::start(store, config, adapters, clock, ids, observe_only)
+            .await?
+            .with_configuration_editor(parent_factory, context),
+    )
 }
