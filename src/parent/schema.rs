@@ -31,6 +31,7 @@ pub fn decision() -> Value {
     );
     object(
         json!({"reply":{"anyOf":[reply,{"type":"null"}]},"delegations":{"type":"array","items":delegation},"summary":string(),
+        "worker_control":{"type":"array","items":object(json!({"worker_id":string(),"op":{"type":"string","enum":["interrupt","stop"]}}))},
         "context":object(json!({"machine":string(),"workspace":string(),"repo":string(),"branch":string()})),
         "note":object(json!({"kind":{"type":"string","enum":["result","question","status","ack","correction"]},"repo":string(),"assignee":string(),"next_step":string(),"blocker":string()})),"decisions":strings(),
         "dispositions":{"type":"array","items":{"anyOf":[declined,deferred]}},"asks":{"type":"array","items":object(json!({"summary":string(),"due":{"type":"number"}}))},"reopen_blocked":{"type":"boolean"}}),

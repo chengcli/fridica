@@ -1207,3 +1207,30 @@ async fn incompatible_adapter_configuration_is_rejected_before_publication() {
     h.wait_status("a-0", "done").await;
     h.supervisor.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn stop_closes_a_warm_process_when_the_job_finishes_before_the_signal() {
+    let h = Harness::new().await;
+    h.add("a", "gpu", 0, false, 1).await;
+    h.supervisor.schedule().await.unwrap();
+    let worker = h.factory.latest("a");
+    worker.release.add_permits(1);
+    // Deliberately do not reap: stop must own and close the process even if
+    // its finished task returns a normal outcome which did not retire it.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while work::get_job(&h.store, "a-0".into()).await.unwrap().status != "done" {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(worker.alive());
+    h.supervisor.stop("a").await.unwrap();
+    assert!(!worker.alive());
+    assert!(h.supervisor.processes().await.is_empty());
+    assert_eq!(
+        h.scalar("SELECT status FROM workers WHERE id='a'").await,
+        "stopped"
+    );
+    h.supervisor.close().await.unwrap();
+}

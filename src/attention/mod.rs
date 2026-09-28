@@ -187,6 +187,9 @@ pub async fn reserve(
 pub async fn claim_due(store: &Store, session: String, now: f64) -> Result<Option<(i64, String)>> {
     store.call(move |c| {
         let tx=c.transaction()?;
+        // Keep the control barrier and inbox claim in the same snapshot. An
+        // actor's earlier advisory check can race another actor's commit.
+        if crate::store::worker_controls::pending_tx(&tx,&session)? {return Ok(None);}
         let item:Option<(i64,String)>=tx.query_row("SELECT id,kind FROM thread_inbox WHERE session_id=? AND state='pending' AND not_before<=?
             AND NOT EXISTS(SELECT 1 FROM thread_inbox busy WHERE busy.session_id=thread_inbox.session_id AND busy.state='processing') ORDER BY id LIMIT 1",
             params![session,now],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;

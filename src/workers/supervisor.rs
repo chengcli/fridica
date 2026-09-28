@@ -39,6 +39,7 @@ struct Live {
 }
 struct Running {
     worker_id: String,
+    attempt: u32,
     control: watch::Sender<Signal>,
     task: JoinHandle<Result<TaskEnd>>,
 }
@@ -120,8 +121,9 @@ impl Supervisor {
         }
         let mut error = None;
         for id in done {
+            let result = (&mut s.running.get_mut(&id).unwrap().task).await;
             let r = s.running.remove(&id).unwrap();
-            match r.task.await {
+            match result {
                 Ok(Ok(end)) => {
                     if end.retire {
                         if end.closed {
@@ -383,6 +385,7 @@ impl Supervisor {
                 job.id.clone(),
                 Running {
                     worker_id: record.id.clone(),
+                    attempt: job.attempt,
                     control,
                     task,
                 },
@@ -435,6 +438,11 @@ impl Supervisor {
     pub async fn stop(&self, worker_id: &str) -> Result<()> {
         let mut s = self.state.lock().await;
         work::stop(&self.store, worker_id.into(), self.clock.now()).await?;
+        self.finish_stop(&mut s, worker_id).await
+    }
+
+    /// Process-only cleanup for a stop whose durable effects already committed.
+    async fn finish_stop(&self, s: &mut State, worker_id: &str) -> Result<()> {
         if let Some(id) = s
             .running
             .iter()
@@ -443,21 +451,95 @@ impl Supervisor {
         {
             s.running[&id].control.send_replace(Signal::Stop);
             // The task's adapter operations and close all have deadlines.
-            let r = s.running.remove(&id).unwrap();
-            let end = r.task.await??;
+            // Keep ownership in State while awaiting so cancelling the drain
+            // cannot detach an executing task from subsequent reconciliation.
+            let result = (&mut s.running.get_mut(&id).unwrap().task).await;
+            s.running.remove(&id);
+            let end = result??;
             if end.closed {
                 s.live.retain(|l| l.worker_id != worker_id);
-            } else if let Some(l) = s.live.iter_mut().find(|l| l.worker_id == worker_id) {
-                l.retiring = true;
+            } else if let Some(i) = s.live.iter().position(|l| l.worker_id == worker_id) {
+                // The job can finish normally just before receiving Stop. In
+                // that case its warm process still needs an actual close.
+                s.live[i].retiring |= end.retire;
+                self.close_live(s, i).await?;
             }
         } else if let Some(i) = s.live.iter().position(|l| l.worker_id == worker_id) {
-            self.close_live(&mut s, i).await?;
+            self.close_live(s, i).await?;
         }
         if s.live
             .iter()
             .any(|l| l.worker_id == worker_id && l.retiring)
         {
             bail!("worker process termination remains unconfirmed");
+        }
+        Ok(())
+    }
+
+    /// No model commands enter this boundary. Only committed actor intents may
+    /// select one of these fixed operations. Repeated drains reconcile outcomes
+    /// and never retarget an interrupt to a later job/attempt.
+    pub(crate) async fn reconcile_parent_controls(&self) -> Result<()> {
+        use crate::{core::parent::WorkerOperation, store::worker_controls};
+        let mut s = self.state.lock().await;
+        if s.observe_only {
+            return Ok(());
+        }
+        self.reap(&mut s).await?;
+        for (seq, intent) in worker_controls::pending(&self.store).await? {
+            let outcome = match intent.op {
+                WorkerOperation::Stop => {
+                    self.finish_stop(&mut s, &intent.worker).await?;
+                    Some("stopped")
+                }
+                WorkerOperation::Interrupt => {
+                    let running =
+                        intent
+                            .job
+                            .as_ref()
+                            .and_then(|id| s.running.get(id))
+                            .filter(|r| {
+                                r.worker_id == intent.worker && Some(r.attempt) == intent.attempt
+                            });
+                    if let Some(r) = running {
+                        // A concurrent owner stop/interrupt takes precedence;
+                        // do not downgrade its signal or resend a received one.
+                        if *r.control.borrow() == Signal::Run {
+                            r.control.send_replace(Signal::Interrupt);
+                        }
+                        None
+                    } else if intent.job.is_none() {
+                        Some("idle_noop")
+                    } else {
+                        let target =
+                            work::get_job(&self.store, intent.job.clone().unwrap()).await?;
+                        if Some(target.attempt) == intent.attempt && target.status == "running" {
+                            bail!("worker outcome remains unconfirmed");
+                        }
+                        // Interrupted tasks may retain an unconfirmed process.
+                        // Finish its retirement before releasing this intent.
+                        if !s.running.values().any(|r| r.worker_id == intent.worker) {
+                            if let Some(i) = s
+                                .live
+                                .iter()
+                                .position(|l| l.worker_id == intent.worker && l.retiring)
+                            {
+                                if !self.close_live(&mut s, i).await? {
+                                    bail!("worker process termination remains unconfirmed");
+                                }
+                            }
+                        }
+                        Some(if Some(target.attempt) == intent.attempt {
+                            "target_finished"
+                        } else {
+                            "target_superseded"
+                        })
+                    }
+                }
+            };
+            if let Some(outcome) = outcome {
+                worker_controls::complete(&self.store, seq, outcome, self.clock.now()).await?;
+            }
         }
         Ok(())
     }

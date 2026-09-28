@@ -238,8 +238,10 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         let _pass = self.pass.lock().await;
         self.supervisor.settle().await?;
         self.stop_closed_workers().await?;
+        self.supervisor.reconcile_parent_controls().await?;
         attention::sweep(&self.store, self.clock.now()).await?;
         let turns = self.manager.sweep().await?;
+        self.supervisor.reconcile_parent_controls().await?;
         let delivered = self.dispatcher.drain(100).await?;
         let started = self.supervisor.schedule().await?.len();
         Ok(Progress {

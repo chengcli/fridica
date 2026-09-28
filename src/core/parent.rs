@@ -142,6 +142,8 @@ pub struct Ask {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Decision {
+    #[serde(default)]
+    pub worker_control: Vec<WorkerControl>,
     #[serde(default, alias = "delegate")]
     pub delegations: Vec<Delegation>,
     #[serde(default)]
@@ -160,6 +162,20 @@ pub struct Decision {
     pub asks: Vec<Ask>,
     #[serde(default)]
     pub reopen_blocked: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerControl {
+    pub worker_id: String,
+    pub op: WorkerOperation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerOperation {
+    Interrupt,
+    Stop,
 }
 
 /// A placement request contains configured names only, never execution paths.

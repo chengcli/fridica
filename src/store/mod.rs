@@ -5,6 +5,7 @@ pub mod migration;
 pub mod outbox;
 pub mod schema;
 pub mod work;
+pub mod worker_controls;
 
 use anyhow::{anyhow, Context, Result};
 use fs2::FileExt;

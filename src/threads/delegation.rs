@@ -3,7 +3,7 @@
 use crate::{
     config::{registry::valid_fetch_ref, Config},
     core::{
-        parent::{Decision, ParentRequest},
+        parent::{Decision, ParentRequest, WorkerOperation},
         time::Identifiers,
         worker::{Job, WorkerRecord},
     },
@@ -11,7 +11,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use unicode_casefold::UnicodeCaseFold;
 
 #[derive(Default)]
@@ -31,6 +31,28 @@ pub(super) fn prepare(
         context: super::effects::context(decision, request, config)?,
         ..Work::default()
     };
+    let existing: Vec<WorkerRecord> =
+        serde_json::from_value(request.session["work"]["workers"].clone())?;
+    let mut controlled = HashSet::new();
+    for control in &decision.worker_control {
+        if !existing.iter().any(|w| {
+            w.id == control.worker_id
+                && w.session_id == request.session["id"].as_str().unwrap_or("")
+        }) {
+            bail!("controlled worker is not in this thread");
+        }
+        if !controlled.insert(&control.worker_id) {
+            bail!("only one control per worker per turn");
+        }
+        if control.op == WorkerOperation::Stop
+            && decision
+                .delegations
+                .iter()
+                .any(|d| d.worker_id == control.worker_id)
+        {
+            bail!("cannot delegate to a worker being stopped");
+        }
+    }
     if decision.delegations.is_empty() {
         return Ok(work);
     }
@@ -44,8 +66,6 @@ pub(super) fn prepare(
     if decision.delegations.len() > config.limits.max_delegations_per_turn {
         bail!("too many delegations in one turn");
     }
-    let existing: Vec<WorkerRecord> =
-        serde_json::from_value(request.session["work"]["workers"].clone())?;
     let busy: BTreeMap<String, usize> =
         serde_json::from_value(request.session["work"]["busy"].clone())?;
     let mut live = existing

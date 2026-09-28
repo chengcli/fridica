@@ -43,6 +43,16 @@ pub struct Actor<P: Parent> {
 
 impl<P: Parent> Actor<P> {
     pub async fn step(&self, session: String) -> Result<Step> {
+        if !self.observe_only {
+            let pending_session = session.clone();
+            if self
+                .store
+                .call(move |c| crate::store::worker_controls::pending_tx(c, &pending_session))
+                .await?
+            {
+                return Ok(Step::Deferred);
+            }
+        }
         let Some((id, kind)) =
             attention::claim_due(&self.store, session.clone(), self.clock.now()).await?
         else {
@@ -554,7 +564,8 @@ async fn commit(
         let is_result=matches!(request.trigger["kind"].as_str(),Some("worker_result"|"worker_interrupted"));
         let result_stale=if is_result {super::results::load(&tx,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
         let notes_changed=super::effects::notes(&tx,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
-        if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed {
+        let controls_current=crate::store::worker_controls::current_tx(&tx,&request,&decision.worker_control)?;
+        if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed || !controls_current {
             tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
             tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
             tx.commit()?;return Ok(Step::Stale);
@@ -594,6 +605,7 @@ async fn commit(
         }
         for w in &work.workers {work::add_worker_tx(&tx,w,now)?;}
         for j in &work.jobs {work::enqueue_tx(&tx,j,now)?;}
+        crate::store::worker_controls::enqueue_tx(&tx,&request,&decision.worker_control,now)?;
         if is_result {
             for r in request.trigger["results"].as_array().context("missing results")? {
                 tx.execute("UPDATE jobs SET reported=1 WHERE id=? AND session_id=?",params![r["id"].as_str(),session])?;

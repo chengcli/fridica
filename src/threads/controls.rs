@@ -181,7 +181,10 @@ fn apply_tx(
                 [&session],
                 |r| r.get(0),
             )?;
-            if stopping || (matches!(control.as_str(), "closed" | "archived" | "cleaned") && live) {
+            if stopping
+                || crate::store::worker_controls::pending_tx(tx, &session)?
+                || (matches!(control.as_str(), "closed" | "archived" | "cleaned") && live)
+            {
                 bail!("thread worker cleanup is pending");
             }
             ("active", "restore", ThreadControl::Active)

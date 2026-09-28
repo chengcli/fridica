@@ -63,7 +63,9 @@ pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Va
         .collect::<std::result::Result<_, _>>()?;
     let busy: BTreeMap<String,i64> = c.prepare("SELECT w.machine,count(*) FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.status IN ('queued','running') GROUP BY w.machine")?
         .query_map([], |r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-    Ok(json!({"workers":workers,"busy":busy}))
+    Ok(
+        json!({"workers":workers,"busy":busy,"jobs":super::worker_controls::jobs_tx(c,session)?,"controls":super::worker_controls::recent_tx(c,session)?}),
+    )
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -137,7 +139,7 @@ pub async fn claim(
             let head:Option<(String,String)>=tx.query_row("SELECT head_sha,head_tree FROM work_items WHERE id=?",[&j.work_item_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
             if head!=Some((j.target_sha.clone(),j.target_tree.clone())){cancel(&tx,&j,"work item head changed",now)?;tx.commit()?;return Ok(None);}
         }
-        if !active{return Ok(None);}
+        if !active || super::worker_controls::pending_tx(&tx,&j.session_id)? {return Ok(None);}
         if slot==0 || slot>m.max_jobs || (w.slot>0 && w.slot<=m.max_jobs && w.slot!=slot){bail!("invalid or changed sticky slot");}
         let (total,machine_count,worker_count,occupied):(i64,i64,i64,i64)=tx.query_row(
             "SELECT COUNT(*),COALESCE(SUM(w.machine=?),0),COALESCE(SUM(j.worker_id=?),0),COALESCE(SUM(w.machine=? AND w.slot=?),0) FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.status='running'",
@@ -185,11 +187,12 @@ pub async fn complete(
             Ok(o)=>("done",Some(&o.result),o.backend_session_id.as_str(),String::new()),
             Err(e)=>(match e.kind {Failure::Cancelled=>"cancelled",Failure::Interrupted=>"interrupted",_=>"failed"},None,e.backend_session_id.as_str(),safe_code(&e.code)),
         };
-        if completion.interrupted && status!="cancelled" {status="interrupted";}
+        let interrupted=completion.interrupted || super::worker_controls::interrupt_pending_tx(&tx,&id,attempt)?;
+        if interrupted && status!="cancelled" {status="interrupted";}
         if stopped && status=="done"{status="interrupted";}
         let resume=if session.is_empty(){w.backend_session_id.as_str()}else{session};
         let control:String=tx.query_row("SELECT control FROM threads WHERE id=?",[&j.session_id],|r|r.get(0))?;
-        let retry=completion.allow_retry && !stopped && !completion.interrupted && j.attempt==1 && !resume.is_empty() && control=="active" &&
+        let retry=completion.allow_retry && !stopped && !interrupted && j.attempt==1 && !resume.is_empty() && control=="active" &&
             matches!(&completion.outcome,Err(e) if e.kind==Failure::Execution);
         let result_json=result.map(serde_json::to_string).transpose()?;
         let summary=result.map(|r|r.summary.as_str()).unwrap_or("");
@@ -228,16 +231,37 @@ fn safe_code(s: &str) -> String {
     }
 }
 pub async fn stop(store: &Store, worker_id: String, now: f64) -> Result<()> {
-    store.call(move|c|{
-    let tx=c.transaction()?;
-    let queued:Vec<String>=tx.prepare("SELECT id FROM jobs WHERE worker_id=? AND status='queued' ORDER BY queued_at,rowid")?.query_map([&worker_id],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    for id in queued{cancel(&tx,&job(&tx,&id)?,"worker stopped",now)?;}
-    tx.execute("UPDATE workers SET status='stopped',updated=? WHERE id=?",params![now,worker_id])?;
-    tx.execute("UPDATE threads SET version=version+1,updated=? WHERE id=(SELECT session_id FROM workers WHERE id=?)",params![now,worker_id])?;
-    tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'owner','worker.stop',?,'{}')",params![now,worker_id])?;
-    tx.execute("UPDATE approvals SET status='cancelled',decided_by='system',decided_at=? WHERE worker_id=? AND status='pending'",params![now,worker_id])?;
-    tx.commit()?;Ok(())
-}).await
+    store
+        .call(move |c| {
+            let tx = c.transaction()?;
+            stop_tx(&tx, &worker_id, "owner", now)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+}
+
+pub(crate) fn stop_tx(c: &Connection, worker_id: &str, actor: &str, now: f64) -> Result<()> {
+    let queued: Vec<String> = c
+        .prepare(
+            "SELECT id FROM jobs WHERE worker_id=? AND status='queued' ORDER BY queued_at,rowid",
+        )?
+        .query_map([&worker_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for id in queued {
+        cancel(c, &job(c, &id)?, "worker stopped", now)?;
+    }
+    c.execute(
+        "UPDATE workers SET status='stopped',updated=? WHERE id=?",
+        params![now, worker_id],
+    )?;
+    c.execute("UPDATE threads SET version=version+1,updated=? WHERE id=(SELECT session_id FROM workers WHERE id=?)",params![now,worker_id])?;
+    c.execute(
+        "INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'worker.stop',?,'{}')",
+        params![now, actor, worker_id],
+    )?;
+    c.execute("UPDATE approvals SET status='cancelled',decided_by='system',decided_at=? WHERE worker_id=? AND status='pending'",params![now,worker_id])?;
+    Ok(())
 }
 /// Startup only, after acquiring the daemon lock and before creating any backend.
 pub async fn recover(store: &Store, now: f64) -> Result<usize> {

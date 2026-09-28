@@ -1095,7 +1095,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/runtime_flow.rs",
-      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Legacy parent worker controls and complete differential action parity remain open; Python regression is retained."
+      "coverage_scope": "Parent memory and worker controls validate before repair. Foreign/duplicate controls, unknown operations and stop/delegate conflicts have no effects. Worker-control intent, cancellations, notes and replies commit together; active-job snapshots and owner controls fence late actions. Durable interrupt targets include job and attempt; cleanup and acknowledgement faults are reconciled without stopping newer work. Full differential action parity remains open; Python regression is retained."
     },
     {
       "python": "tests/test_parent_agent.py::test_decide_repairs_once_then_drops",
@@ -1273,7 +1273,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/runtime_flow.rs",
-      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Legacy parent worker controls and complete differential action parity remain open; Python regression is retained."
+      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Durable parent worker controls have separate runtime fixture coverage; complete differential action parity remains open; Python regression is retained."
     },
     {
       "python": "tests/test_policy.py::test_advance_pauses_loops_and_stalls",
@@ -1883,7 +1883,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/runtime_flow.rs",
-      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Legacy parent worker controls and complete differential action parity remain open; Python regression is retained."
+      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Durable parent worker controls have separate runtime fixture coverage; complete differential action parity remains open; Python regression is retained."
     },
     {
       "python": "tests/test_store.py::test_failed_prerequisites_block_dependents_visibly_and_retry_unblocks",
@@ -1970,7 +1970,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/supervisor.rs",
-      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity."
+      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity. Additional tests/runtime_flow.rs coverage: parent-requested stops and exact-attempt interrupts, cancellation-safe task ownership, queued-job/approval cancellation, retry suppression, acknowledgement recovery, observe-only and owner-pause preservation. Pending controls fence admission; failed process termination stays unacknowledged. Python regression remains retained."
     },
     {
       "python": "tests/test_supervisor.py::test_idle_workers_are_evicted_to_respect_max_workers",
@@ -2012,21 +2012,21 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/supervisor.rs",
-      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity."
+      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity. Additional tests/runtime_flow.rs coverage: parent-requested stops and exact-attempt interrupts, cancellation-safe task ownership, queued-job/approval cancellation, retry suppression, acknowledgement recovery, observe-only and owner-pause preservation. Pending controls fence admission; failed process termination stays unacknowledged. Python regression remains retained."
     },
     {
       "python": "tests/test_supervisor.py::test_an_interrupted_job_that_returns_normally_is_recorded_as_interrupted",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/supervisor.rs",
-      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity."
+      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity. Additional tests/runtime_flow.rs coverage: parent-requested stops and exact-attempt interrupts, cancellation-safe task ownership, queued-job/approval cancellation, retry suppression, acknowledgement recovery, observe-only and owner-pause preservation. Pending controls fence admission; failed process termination stays unacknowledged. Python regression remains retained."
     },
     {
       "python": "tests/test_supervisor.py::test_stop_that_times_out_finishes_the_job_once",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/supervisor.rs",
-      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity."
+      "coverage_scope": "Injectable supervisor scheduling, atomic completions and interruption faults; transport, backend, broker and instruction providers have separate Rust coverage. Scoped fetch has separate library coverage; full worker-result orchestration remains unported. Frozen scheduling fixtures do not assert full lifecycle parity. Additional tests/runtime_flow.rs coverage: parent-requested stops and exact-attempt interrupts, cancellation-safe task ownership, queued-job/approval cancellation, retry suppression, acknowledgement recovery, observe-only and owner-pause preservation. Pending controls fence admission; failed process termination stays unacknowledged. Python regression remains retained."
     },
     {
       "python": "tests/test_supervisor.py::test_jobs_get_sticky_slots_with_their_own_subfolder_and_gpus",

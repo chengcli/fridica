@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -72,6 +72,9 @@ struct WorkerScript {
     calls: Mutex<Vec<RunRequest>>,
     outcomes: Mutex<VecDeque<Result<Outcome, WorkerFailure>>>,
     release: Semaphore,
+    interrupt_wakes: AtomicBool,
+    interruptions: AtomicUsize,
+    close_fails: AtomicBool,
 }
 impl Default for WorkerScript {
     fn default() -> Self {
@@ -79,6 +82,9 @@ impl Default for WorkerScript {
             calls: Mutex::new(vec![]),
             outcomes: Mutex::new(VecDeque::new()),
             release: Semaphore::new(0),
+            interrupt_wakes: AtomicBool::new(false),
+            interruptions: AtomicUsize::new(0),
+            close_fails: AtomicBool::new(false),
         }
     }
 }
@@ -107,10 +113,23 @@ impl Worker for Fake {
         })
     }
     fn interrupt(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async {
+            self.script.interruptions.fetch_add(1, Ordering::SeqCst);
+            if self.script.interrupt_wakes.load(Ordering::SeqCst) {
+                self.script.release.add_permits(1);
+            }
+            Ok(())
+        })
     }
     fn close(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
         Box::pin(async {
+            if self.script.close_fails.load(Ordering::SeqCst) {
+                return Err(WorkerFailure {
+                    kind: Failure::Execution,
+                    code: "close_failed".into(),
+                    backend_session_id: String::new(),
+                });
+            }
             self.alive.store(false, Ordering::SeqCst);
             Ok(())
         })
@@ -2177,4 +2196,561 @@ async fn debrief_in_flight_is_fenced_by_owner_pause_or_clean() {
         );
         assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM reply_reservations WHERE state='reserved' AND outbox_id IS NULL").await,"0");
     }
+}
+
+fn control_actor(h: &Harness) -> fridica::threads::actor::Actor<ParentScript> {
+    fridica::threads::actor::Actor {
+        config: Some(h.config.clone()),
+        store: h.store.clone(),
+        parent: h.parent.clone(),
+        clock: h.clock.clone(),
+        ids: Arc::new(fridica::core::time::RandomIds),
+        owner: "UOWNER".into(),
+        limits: h.config.attention.clone(),
+        observe_only: false,
+        parent_timeout: Duration::from_secs(3),
+    }
+}
+fn worker_control(worker: &str, op: &str) -> Value {
+    json!({"worker_control":[{"worker_id":worker,"op":op}]})
+}
+async fn instruction(h: &Harness, action: Value) {
+    h.parent.responses.lock().unwrap().push_back(action);
+    h.runtime
+        .instruct(
+            SESSION.into(),
+            "Control worker".into(),
+            format!("control-{}", h.parent.calls.lock().unwrap().len()),
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+}
+async fn idle_control_worker(h: &Harness) {
+    work::add_worker(&h.store,serde_json::from_value(json!({"id":"owned","session_id":SESSION,"machine":"local","workspace":"project","backend":"codex"})).unwrap(),20.).await.unwrap();
+}
+
+#[tokio::test]
+async fn parent_worker_controls_repair_foreign_duplicate_and_conflicting_requests() {
+    for action in [
+        worker_control("foreign", "stop"),
+        json!({"worker_control":[{"worker_id":"owned","op":"interrupt"},{"worker_id":"owned","op":"stop"}]}),
+        json!({"worker_control":[{"worker_id":"owned","op":"stop"}],"delegations":[{"worker_id":"owned","brief":"New work"}]}),
+        worker_control("owned", "kill"),
+    ] {
+        let h = Harness::new(vec![action, json!({})], false).await;
+        h.intake(false).await;
+        idle_control_worker(&h).await;
+        h.store.call(|c| {c.execute("INSERT INTO threads(id,workspace,channel,root_ts,created,updated) VALUES('other','TTEAM','CROOM','200',20,20)",[])?;Ok(())}).await.unwrap();
+        work::add_worker(&h.store,serde_json::from_value(json!({"id":"foreign","session_id":"other","machine":"local","workspace":"project","backend":"codex"})).unwrap(),20.).await.unwrap();
+        h.runtime.pass().await.unwrap();
+        assert_eq!(h.parent.calls.lock().unwrap()[1].call, "repair");
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control'").await,"0");
+        assert_eq!(
+            h.scalar("SELECT CAST(count(*) AS TEXT) FROM workers WHERE status='idle'")
+                .await,
+            "2"
+        );
+    }
+}
+
+#[tokio::test]
+async fn parent_stop_cancels_queued_work_and_approvals_and_recovers_a_lost_ack() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.worker.interrupt_wakes.store(true, Ordering::SeqCst);
+    let worker = h.scalar("SELECT id FROM workers").await;
+    work::enqueue(
+        &h.store,
+        serde_json::from_value(
+            json!({"id":"queued","worker_id":worker,"session_id":SESSION,"brief":"later"}),
+        )
+        .unwrap(),
+        20.,
+    )
+    .await
+    .unwrap();
+    h.store.call(|c| {c.execute("INSERT INTO approvals(id,worker_id,job_id,session_id,kind,summary,created) SELECT 'pending',worker_id,id,session_id,'command','check',20 FROM jobs WHERE status='running'",[])?;
+        c.execute_batch("CREATE TRIGGER fail_parent_control_ack BEFORE INSERT ON replay_events WHEN NEW.kind='parent_worker_control_result' BEGIN SELECT RAISE(ABORT,'ack fault'); END;")?;Ok(())}).await.unwrap();
+    instruction(&h, worker_control(&worker, "stop")).await;
+    assert!(h.runtime.pass().await.is_err());
+    assert_eq!(
+        h.scalar("SELECT status FROM jobs WHERE id='queued'").await,
+        "cancelled"
+    );
+    assert_eq!(
+        h.scalar("SELECT status FROM approvals WHERE id='pending'")
+            .await,
+        "cancelled"
+    );
+    assert_eq!(h.scalar("SELECT status FROM workers").await, "stopped");
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control' AND complete=0").await,"1");
+    assert!(h.runtime.processes().await.is_empty());
+    assert_eq!(
+        h.scalar("SELECT actor FROM audit WHERE action='worker.stop'")
+            .await,
+        "parent"
+    );
+    assert_eq!(
+        control_actor(&h).step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Deferred
+    );
+    h.runtime
+        .control(
+            SESSION.into(),
+            Control::Pause {
+                reason: "Keep paused".into(),
+            },
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    h.runtime.close().await.unwrap();
+    h.store
+        .call(|c| {
+            c.execute_batch("DROP TRIGGER fail_parent_control_ack;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let runtime = Runtime::start(
+        h.store.clone(),
+        h.config.clone(),
+        Adapters {
+            parent: h.parent.clone(),
+            delivery: h.sink.clone(),
+            workers: Arc::new(Fakes(h.worker.clone())),
+            job_io: Arc::new(NoJobIo),
+        },
+        h.clock.clone(),
+        Arc::new(fridica::core::time::RandomIds),
+        false,
+    )
+    .await
+    .unwrap();
+    runtime.pass().await.unwrap();
+    runtime.pass().await.unwrap();
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control_result'").await,"1");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='worker.stop'")
+            .await,
+        "1"
+    );
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "paused");
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(h.worker.calls.lock().unwrap().len(), 1);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn parent_control_intent_fault_rolls_back_worker_memory_and_post_effects() {
+    let mut action = worker_control("owned", "stop");
+    action["reply"] = json!({"text":"Stopping","status":"complete"});
+    action["note"] = json!({"next_step":"Review"});
+    let h = Harness::new(vec![action], false).await;
+    h.intake(false).await;
+    idle_control_worker(&h).await;
+    work::enqueue(
+        &h.store,
+        serde_json::from_value(
+            json!({"id":"queued","worker_id":"owned","session_id":SESSION,"brief":"later"}),
+        )
+        .unwrap(),
+        20.,
+    )
+    .await
+    .unwrap();
+    h.store.call(|c| {c.execute_batch("CREATE TRIGGER fail_parent_control BEFORE INSERT ON replay_events WHEN NEW.kind='parent_worker_control' BEGIN SELECT RAISE(ABORT,'intent fault'); END;")?;Ok(())}).await.unwrap();
+    assert_eq!(
+        control_actor(&h).step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Failed
+    );
+    assert_eq!(h.scalar("SELECT status FROM workers").await, "idle");
+    assert_eq!(h.scalar("SELECT status FROM jobs").await, "queued");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM notes").await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE actor='parent'")
+            .await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn parent_interrupt_blocks_retry_and_admission_until_its_outcome_is_reconciled() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    let worker = h.scalar("SELECT id FROM workers").await;
+    let original = h.scalar("SELECT id FROM jobs").await;
+    work::enqueue(
+        &h.store,
+        serde_json::from_value(
+            json!({"id":"next","worker_id":worker,"session_id":SESSION,"brief":"Next"}),
+        )
+        .unwrap(),
+        20.,
+    )
+    .await
+    .unwrap();
+    instruction(&h, worker_control(&worker, "interrupt")).await;
+    assert_eq!(
+        control_actor(&h).step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Committed
+    );
+    instruction(&h, json!({})).await;
+    assert!(fridica::attention::claim_due(&h.store, SESSION.into(), 20.)
+        .await
+        .unwrap()
+        .is_none());
+    h.worker
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(WorkerFailure {
+            kind: Failure::Execution,
+            code: "execution_failed".into(),
+            backend_session_id: "reuse-me".into(),
+        }));
+    h.finish(1, 1).await;
+    assert_eq!(
+        h.scalar("SELECT status FROM jobs WHERE id!='next'").await,
+        "interrupted"
+    );
+    assert_eq!(h.worker.interruptions.load(Ordering::SeqCst), 0);
+    assert!(
+        work::claim(&h.store, "next".into(), 1, h.config.clone(), 20.)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    h.parent.responses.lock().unwrap().push_back(json!({}));
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT status FROM jobs WHERE id='next'").await,
+        "running"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='job.retry'")
+            .await,
+        "0"
+    );
+    // Replay a stale persisted interrupt while a different job owns the worker.
+    h.store.call(move|c| {c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_worker_control',20,?,0)",[json!({"session":SESSION,"inbox":1,"worker":worker,"op":"interrupt","job":original,"attempt":1}).to_string()])?;Ok(())}).await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT status FROM jobs WHERE id='next'").await,
+        "running"
+    );
+    assert_eq!(h.worker.interruptions.load(Ordering::SeqCst), 0);
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn parent_interrupt_signals_once_and_never_stops_the_reusable_worker_record() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    let worker = h.scalar("SELECT id FROM workers").await;
+    instruction(&h, worker_control(&worker, "interrupt")).await;
+    h.runtime.pass().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.worker.interruptions.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.worker.interruptions.load(Ordering::SeqCst), 1);
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    h.finish(1, 1).await;
+    h.parent.responses.lock().unwrap().push_back(json!({}));
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.scalar("SELECT status FROM workers").await, "idle");
+    assert_eq!(h.scalar("SELECT status FROM jobs").await, "interrupted");
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control_result'").await,"1");
+    assert_eq!(
+        h.scalar("SELECT actor FROM audit WHERE action='worker.interrupt'")
+            .await,
+        "parent"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_parent_stop_drain_retains_owned_process_until_reconciliation() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    let worker = h.scalar("SELECT id FROM workers").await;
+    instruction(&h, worker_control(&worker, "stop")).await;
+    assert_eq!(
+        control_actor(&h).step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Committed
+    );
+    let runtime = h.runtime.clone();
+    let drain = tokio::spawn(async move { runtime.pass().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.worker.interruptions.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drain.abort();
+    assert!(drain.await.unwrap_err().is_cancelled());
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control' AND complete=0").await,"1");
+    assert_eq!(h.runtime.processes().await.len(), 1);
+    h.worker.release.add_permits(1);
+    h.parent.responses.lock().unwrap().push_back(json!({}));
+    h.runtime.pass().await.unwrap();
+    assert!(h.runtime.processes().await.is_empty());
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control' AND complete=0").await,"0");
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn parent_control_snapshot_is_fenced_by_admission_or_owner_pause_during_the_call() {
+    for pause in [false, true] {
+        let h = Harness::new(vec![worker_control("owned", "stop")], false).await;
+        h.intake(false).await;
+        idle_control_worker(&h).await;
+        work::enqueue(
+            &h.store,
+            serde_json::from_value(
+                json!({"id":"queued","worker_id":"owned","session_id":SESSION,"brief":"Later"}),
+            )
+            .unwrap(),
+            20.,
+        )
+        .await
+        .unwrap();
+        let gate = Arc::new(Semaphore::new(0));
+        *h.parent.gate.lock().unwrap() = Some(gate.clone());
+        let actor = control_actor(&h);
+        let step = tokio::spawn(async move { actor.step(SESSION.into()).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while h.parent.calls.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if pause {
+            h.runtime
+                .control(
+                    SESSION.into(),
+                    Control::Pause {
+                        reason: "Hold".into(),
+                    },
+                    Authority::Owner,
+                )
+                .await
+                .unwrap();
+        } else {
+            assert!(
+                work::claim(&h.store, "queued".into(), 1, h.config.clone(), 20.)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        gate.add_permits(1);
+        assert_eq!(
+            step.await.unwrap().unwrap(),
+            fridica::threads::actor::Step::Stale
+        );
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control'").await,"0");
+        assert_ne!(h.scalar("SELECT status FROM workers").await, "stopped");
+    }
+}
+
+#[tokio::test]
+async fn observe_only_and_owner_pauses_never_apply_parent_worker_controls() {
+    for observe in [false, true] {
+        let h = Harness::new(vec![worker_control("owned", "stop")], observe).await;
+        h.intake(false).await;
+        idle_control_worker(&h).await;
+        if !observe {
+            h.runtime
+                .control(
+                    SESSION.into(),
+                    Control::Pause {
+                        reason: "Hold".into(),
+                    },
+                    Authority::Owner,
+                )
+                .await
+                .unwrap();
+        }
+        h.runtime.pass().await.unwrap();
+        assert!(h.parent.calls.lock().unwrap().is_empty());
+        assert_eq!(h.scalar("SELECT status FROM workers").await, "idle");
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control'").await,"0");
+    }
+}
+
+#[tokio::test]
+async fn stale_parent_interrupt_cannot_hit_a_new_attempt_of_the_same_job() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.worker
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(WorkerFailure {
+            kind: Failure::Execution,
+            code: "failed".into(),
+            backend_session_id: "reuse".into(),
+        }));
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.worker.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.scalar("SELECT status FROM jobs").await != "queued" {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT CAST(attempt AS TEXT) FROM jobs").await,
+        "2"
+    );
+    h.store.call(|c| {c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) SELECT 'parent_worker_control',20,json_object('session',session_id,'inbox',inbox_id,'worker',worker_id,'op','interrupt','job',id,'attempt',1),0 FROM jobs",[])?;Ok(())}).await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.scalar("SELECT status FROM jobs").await, "running");
+    assert_eq!(h.scalar("SELECT json_extract(payload_json,'$.outcome') FROM replay_events WHERE kind='parent_worker_control_result'").await,"target_superseded");
+    assert_eq!(h.worker.interruptions.load(Ordering::SeqCst), 0);
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unconfirmed_parent_stop_cleanup_stays_pending_and_blocks_restore() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.worker.interrupt_wakes.store(true, Ordering::SeqCst);
+    h.worker.close_fails.store(true, Ordering::SeqCst);
+    let worker = h.scalar("SELECT id FROM workers").await;
+    instruction(&h, worker_control(&worker, "stop")).await;
+    assert!(h.runtime.pass().await.is_err());
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control_result'").await,"0");
+    assert_eq!(h.runtime.processes().await.len(), 1);
+    assert!(h
+        .runtime
+        .control(SESSION.into(), Control::Restore, Authority::Owner)
+        .await
+        .is_err());
+    assert!(h.runtime.pass().await.is_err());
+    h.worker.close_fails.store(false, Ordering::SeqCst);
+    h.parent.responses.lock().unwrap().push_back(json!({}));
+    h.runtime.pass().await.unwrap();
+    assert!(h.runtime.processes().await.is_empty());
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control_result'").await,"1");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='worker.stop'")
+            .await,
+        "1"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn parent_stop_effects_roll_back_when_a_later_note_write_fails() {
+    let mut action = worker_control("owned", "stop");
+    action["note"] = json!({"next_step":"Review"});
+    let h = Harness::new(vec![action], false).await;
+    h.intake(false).await;
+    idle_control_worker(&h).await;
+    work::enqueue(
+        &h.store,
+        serde_json::from_value(
+            json!({"id":"queued","worker_id":"owned","session_id":SESSION,"brief":"later"}),
+        )
+        .unwrap(),
+        20.,
+    )
+    .await
+    .unwrap();
+    h.store.call(|c| {c.execute_batch("CREATE TRIGGER fail_notes_after_control BEFORE INSERT ON notes BEGIN SELECT RAISE(ABORT,'note fault'); END;")?;Ok(())}).await.unwrap();
+    assert_eq!(
+        control_actor(&h).step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Failed
+    );
+    assert_eq!(h.scalar("SELECT status FROM workers").await, "idle");
+    assert_eq!(h.scalar("SELECT status FROM jobs").await, "queued");
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control'"
+        )
+        .await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='worker_result'")
+            .await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE actor='parent'")
+            .await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn idle_parent_interrupt_is_visible_and_observe_only_defers_reconciliation() {
+    let h = Harness::new(vec![worker_control("owned", "interrupt")], false).await;
+    h.intake(false).await;
+    idle_control_worker(&h).await;
+    assert_eq!(
+        control_actor(&h).step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Committed
+    );
+    let route = format!("/threads/{SESSION}");
+    let before = control_call(&h, "GET", &route, json!({}), Authority::Owner).await;
+    assert_eq!(before.body["worker_controls"][0]["complete"], false);
+    assert_eq!(
+        before.body["worker_controls"][0]["request"]["job"],
+        Value::Null
+    );
+    let observer = Runtime::start(
+        h.store.clone(),
+        h.config.clone(),
+        Adapters {
+            parent: h.parent.clone(),
+            delivery: h.sink.clone(),
+            workers: Arc::new(Fakes(h.worker.clone())),
+            job_io: Arc::new(NoJobIo),
+        },
+        h.clock.clone(),
+        Arc::new(fridica::core::time::RandomIds),
+        true,
+    )
+    .await
+    .unwrap();
+    observer.pass().await.unwrap();
+    observer.close().await.unwrap();
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_worker_control_result'").await,"0");
+    h.runtime.pass().await.unwrap();
+    let after = control_call(&h, "GET", &route, json!({}), Authority::Owner).await;
+    assert_eq!(after.body["worker_controls"][0]["complete"], true);
+    assert_eq!(after.body["worker_controls"][0]["outcome"], "idle_noop");
+    instruction(&h, json!({})).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.parent.calls.lock().unwrap()[1].session["work"]["controls"][0]["outcome"],
+        "idle_noop"
+    );
+    assert!(h.worker.calls.lock().unwrap().is_empty());
+    assert!(h.sink.calls.lock().unwrap().is_empty());
 }

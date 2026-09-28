@@ -244,7 +244,7 @@ fn thread(
     let outbox = rows(c, &format!("{OUTBOX} WHERE session_id=? ORDER BY id"), [id])?;
     Ok(Some(
         json!({"session":session,"messages":messages,"workers":workers,
-        "jobs":jobs,"outbox":outbox,"instructions":instructions,"notes":notes}),
+        "jobs":jobs,"outbox":outbox,"instructions":instructions,"notes":notes,"worker_controls":crate::store::worker_controls::recent_tx(c,id)?}),
     ))
 }
 fn machines(
