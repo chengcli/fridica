@@ -75,6 +75,7 @@ pub struct WebClient {
 #[derive(Clone, Copy)]
 enum Api {
     Auth,
+    SocketUrl,
     Channel,
     Post,
     UploadUrl,
@@ -86,6 +87,7 @@ impl Api {
     fn name(self) -> &'static str {
         match self {
             Self::Auth => "auth.test",
+            Self::SocketUrl => "apps.connections.open",
             Self::Channel => "conversations.info",
             Self::Post => "chat.postMessage",
             Self::UploadUrl => "files.getUploadURLExternal",
@@ -141,6 +143,50 @@ impl WebClient {
             #[cfg(test)]
             upload_origin: None,
         })
+    }
+    pub(crate) fn is_validated(&self) -> bool {
+        self.validated.load(Ordering::Acquire)
+    }
+    pub(crate) fn matches_scope(&self, config: &Config) -> bool {
+        self.config.owner.slack_user == config.owner.slack_user
+            && self.config.slack.workspace == config.slack.workspace
+            && self.config.slack.channels == config.slack.channels
+    }
+    /// The short-lived URL is a credential. Only Socket Mode receives it; neither
+    /// HTTP records nor diagnostics retain the URL or app token.
+    pub(crate) async fn socket_url(&self, app_token: &str, connection: &str) -> Result<String> {
+        if !self.is_validated() {
+            return Err(Failure::NotValidated);
+        }
+        if !app_token.starts_with("xapp-")
+            || app_token.len() < 6
+            || app_token.bytes().any(|b| !b.is_ascii_graphic())
+        {
+            return Err(Failure::Configuration);
+        }
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {app_token}"))
+            .map_err(|_| Failure::Configuration)?;
+        authorization.set_sensitive(true);
+        let app = Self {
+            authorization,
+            ..self.clone()
+        };
+        let response = decode(
+            &app.api(
+                Api::SocketUrl,
+                json!({}),
+                Some(json!({"connection":connection})),
+            )
+            .await?,
+        )?;
+        response["url"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(Failure::InvalidResponse)
+    }
+    #[cfg(test)]
+    pub(crate) fn test_endpoint(&mut self, base: Url) {
+        self.base = base;
     }
     /// Read-only startup check; every configured channel must be accessible and
     /// report membership. Only a fully recorded successful check enables sends.
@@ -360,7 +406,16 @@ impl WebClient {
                 let body = match serde_json::from_slice::<Value>(&response.body) {
                     Ok(mut value) => {
                         redact(&mut value, token);
+                        if method == "apps.connections.open" {
+                            value
+                                .as_object_mut()
+                                .map(|v| v.insert("url".into(), json!("[socket credential]")));
+                        }
                         json!({"json":value})
+                    }
+                    Err(_) if method == "apps.connections.open" => {
+                        complete = false;
+                        json!({"omitted":"invalid connection response may contain credentials"})
                     }
                     Err(_) => {
                         let mut bytes = response.body.clone();

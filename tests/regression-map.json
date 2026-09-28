@@ -257,70 +257,70 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_a_fresh_store_reads_an_hour",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_the_window_is_capped_at_seven_days",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_a_live_message_before_the_first_pass_does_not_shrink_the_window",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_a_truncated_pass_is_repeated_once_then_the_watermark_moves_on",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_an_old_answer_to_a_waiting_thread_is_still_work",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_history_only_rows_do_not_look_recently_active",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_a_running_daemon_keeps_its_short_window",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_replies_are_refetched_for_threads_active_before_the_window",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_catchup.py::test_overlap_is_harmless_and_old_messages_are_history_not_work",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_cli.py::test_init_writes_template_and_contract_once",
@@ -1621,21 +1621,21 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_slack.py::test_metadata_round_trip_and_v1_compatibility",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_slack.py::test_dropped_mentions_are_described",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_slack.py::test_render_helpers",
@@ -1647,42 +1647,42 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/support/slack_web.rs",
-      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. WebSocket transport has separate local-server coverage in tests/support/slack_socket.rs; production daemon scheduling and CLI wiring remain unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response1-DeliveryAmbiguous]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/support/slack_web.rs",
-      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. WebSocket transport has separate local-server coverage in tests/support/slack_socket.rs; production daemon scheduling and CLI wiring remain unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response2-DeliveryAmbiguous]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/support/slack_web.rs",
-      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. WebSocket transport has separate local-server coverage in tests/support/slack_socket.rs; production daemon scheduling and CLI wiring remain unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response3-DeliveryRejected]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/support/slack_web.rs",
-      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. WebSocket transport has separate local-server coverage in tests/support/slack_socket.rs; production daemon scheduling and CLI wiring remain unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_posts_with_metadata",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/support/slack_web.rs",
-      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. WebSocket transport has separate local-server coverage in tests/support/slack_socket.rs; production daemon scheduling and CLI wiring remain unported."
     },
     {
       "python": "tests/test_slack.py::test_catch_up_stores_missed_messages_once",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_slack.py::test_fit_reply_never_splits_with_a_non_positive_limit",
@@ -1694,21 +1694,21 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_reports_truncated_history",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/slack.rs",
-      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP/WebSocket transport, authentication, scheduling and complete concurrent daemon replay remain unported."
+      "coverage_scope": "Frozen event normalization and catch-up page arguments/state projections, durable acknowledgement/intake failures, filenames and metadata, paginated thread replies, startup watermark selection, history-only intake, repeated truncation and durable gap health events. Stricter timestamp/URL and missing-cursor handling are explicit exceptions. HTTP and WebSocket transport have separate local-server coverage in tests/support/slack_web.rs and tests/support/slack_socket.rs; service scheduling and complete concurrent daemon replay remain unported."
     },
     {
       "python": "tests/test_slack.py::test_upload_needs_a_confirmed_file",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/support/slack_web.rs",
-      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. WebSocket transport has separate local-server coverage in tests/support/slack_socket.rs; production daemon scheduling and CLI wiring remain unported."
     },
     {
       "python": "tests/test_store.py::test_intake_creates_thread_and_inbox_in_one_step",
