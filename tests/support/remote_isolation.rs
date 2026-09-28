@@ -127,6 +127,10 @@ async fn complete(launch: process::Launch) -> (i32, String, String) {
 #[tokio::test]
 async fn remote_inventory_masks_shared_and_target_files_and_scrubs_target_environment() {
     let r = Remote::new();
+    std::fs::create_dir_all(r.home.join(".codex")).unwrap();
+    let remote_settings =
+        "[mcp_servers.target_alias]\ncommand='fridica'\nenv={TOKEN='remote-mcp-secret'}\n";
+    std::fs::write(r.home.join(".codex/config.toml"), remote_settings).unwrap();
     std::fs::write(&r.local.config.state.path, "shared database").unwrap();
     std::fs::write(r.home.join("private/state.db"), "remote database").unwrap();
     std::fs::write(r.home.join("private/state.db-wal"), "remote WAL").unwrap();
@@ -142,6 +146,8 @@ assert home == pathlib.Path({home})
 assert pathlib.Path.cwd() == pathlib.Path({workspace})
 assert os.environ['OMP_NUM_THREADS'] == '2'
 assert os.environ['ANTHROPIC_API_KEY'] == 'backend-auth'
+settings = (home/'.codex/config.toml').read_text()
+assert 'remote-mcp-secret' not in settings and '"enabled" = false' in settings
 for key in ['FRIDICA_MCP_KEY', 'fridica_control_token', 'OWNER_CONTROL_SECRET', 'SLACK_TOKEN', 'UNNAMED_TOKEN']:
     assert key not in os.environ
 for p in [home/'private/state.db', home/'private/state.db-wal', pathlib.Path({shared}), pathlib.Path({config})]:
@@ -187,6 +193,10 @@ sys.exit(42)
         "remote workspace writable"
     );
     assert!(r.home.join(".codex/session").exists());
+    assert_eq!(
+        std::fs::read_to_string(r.home.join(".codex/config.toml")).unwrap(),
+        remote_settings
+    );
     assert!(!r.home.join("INJECTED").exists());
     assert!(!r.local.home.join(".codex").exists());
     assert_eq!(

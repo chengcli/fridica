@@ -130,6 +130,12 @@ def main():
     default(home + "/.codex/config.toml", "")
     default(home + "/.claude/settings.json", "{}")
     default(home + "/.claude/settings.local.json", "{}")
+    # Snapshot on the execution target, before any backend/MCP initialization.
+    command = sys.argv[2:]
+    snapshots, aliases = settings_snapshots(home, workspace, selected, state, request, environment, command)
+    if os.path.basename(command[0]) == "codex" and command[1:2] == ["app-server"]:
+        for alias in aliases:
+            command += ["-c", "mcp_servers." + json.dumps(alias, ensure_ascii=False) + ".enabled=false"]
 
     fds = []
     words = ["/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
@@ -149,14 +155,22 @@ def main():
         except FileNotFoundError:
             continue
         mount(fd, value)
-    for suffix in [".codex/config.toml", ".claude/settings.json", ".claude/settings.local.json", ".claude/hooks"]:
-        value = home + "/" + suffix
-        mount(directory(value) if suffix.endswith("hooks") else regular(value), value, readonly=True)
+    mount(directory(home + "/.claude/hooks"), home + "/.claude/hooks", readonly=True)
+    for value, data in snapshots:
+        fd = os.memfd_create("worker-settings", os.MFD_CLOEXEC)
+        with os.fdopen(os.dup(fd), "wb") as output:
+            output.write(data)
+        os.lseek(fd, 0, os.SEEK_SET)
+        fds.append(fd)
+        # Claude mixes mutable client state and MCP configuration in this file.
+        # Its private copy stays writable without changing owner configuration.
+        mode = "--bind-data" if value == home + "/.claude.json" else "--ro-bind-data"
+        words += [mode, str(fd), value]
     # Make empty private parents read-only after child bind targets are created.
     # Remount is intentionally nonrecursive: approved workspaces stay writable.
     for mask in selected:
         words += ["--remount-ro", mask]
-    words += ["--chdir", workspace, "--"] + sys.argv[2:]
+    words += ["--chdir", workspace, "--"] + command
     for fd in fds:
         os.set_inheritable(fd, True)
     os.execve(words[0], words, environment)
@@ -164,6 +178,6 @@ def main():
 
 try:
     main()
-except (OSError, ValueError, KeyError, TypeError, Refused):
+except (OSError, ValueError, KeyError, TypeError, ImportError, RecursionError, Refused):
     sys.stderr.write("fridica worker isolation: setup refused\n")
     sys.exit(97)

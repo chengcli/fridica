@@ -15,11 +15,18 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub const HELPER: &str = include_str!("isolation_helper.py");
+pub const HELPER: &str = concat!(
+    include_str!("isolation_settings.py"),
+    "\n",
+    include_str!("isolation_helper.py")
+);
+const BOOTSTRAP: &str = include_str!("isolation_bootstrap.py");
 #[derive(Clone)]
 pub struct Isolation {
     private: Vec<PathBuf>,
     remote: BTreeMap<String, RemoteFiles>,
+    mcp_aliases: Vec<String>,
+    mcp_urls: Vec<String>,
 }
 #[derive(Clone)]
 struct RemoteFiles {
@@ -47,7 +54,29 @@ impl Isolation {
         Ok(Self {
             private,
             remote: BTreeMap::new(),
+            mcp_aliases: vec![],
+            mcp_urls: vec![],
         })
+    }
+    /// Owner-provisioned identities for wrappers and HTTP servers that cannot
+    /// be identified from a direct Fridica executable or environment reference.
+    /// Endpoints must not contain credentials: these identities travel in argv.
+    pub fn with_mcp_identities(mut self, aliases: &[String], urls: &[String]) -> Result<Self> {
+        if aliases
+            .iter()
+            .chain(urls)
+            .any(|s| s.is_empty() || s.len() > 1024 || s.chars().any(char::is_control))
+            || aliases.len() + urls.len() > 128
+            || urls.iter().any(|s| {
+                !s.starts_with("http://") && !s.starts_with("https://")
+                    || s.contains(['@', '?', '#'])
+            })
+        {
+            bail!("invalid worker MCP identities");
+        }
+        self.mcp_aliases = aliases.to_vec();
+        self.mcp_urls = urls.to_vec();
+        Ok(self)
     }
     /// Trusted construction must inventory ALL private files visible on this
     /// target, including shared daemon paths and remote control/capability files.
@@ -94,9 +123,11 @@ impl Isolation {
             "-I".into(),
             "-S".into(),
             "-c".into(),
+            BOOTSTRAP.into(),
             HELPER.into(),
             json!({"home":null,"workspace":cwd,"private":profile.private,
-                "create":create,"excluded_env":transport.excluded_env})
+                "create":create,"excluded_env":transport.excluded_env,
+                "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
             .to_string(),
         ];
         argv.extend(command);
@@ -137,9 +168,11 @@ impl Isolation {
             "-I".into(),
             "-S".into(),
             "-c".into(),
+            BOOTSTRAP.into(),
             HELPER.into(),
-            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create})
-                .to_string(),
+            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,
+                "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
+            .to_string(),
         ];
         argv.extend(command);
         // No repository cwd, PYTHONPATH, shell expansion or repository-controlled

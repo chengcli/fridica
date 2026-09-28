@@ -13,6 +13,10 @@ use std::{path::PathBuf, time::Duration};
 mod remote;
 
 #[cfg(target_os = "linux")]
+#[path = "support/isolation_settings.rs"]
+mod settings;
+
+#[cfg(target_os = "linux")]
 struct Fixture {
     _dir: tempfile::TempDir,
     config: Config,
@@ -286,7 +290,7 @@ async fn replacing_workspace_after_mount_source_open_cannot_expose_private_direc
     // Deterministically replace the pathname after the helper has opened every
     // mount source, immediately before the real bubblewrap exec. Production
     // exposes no hook or environment override for this interleaving.
-    launch.argv[4] = format!(
+    launch.argv[5] = format!(
         r#"
 import os
 original_exec = os.execve
