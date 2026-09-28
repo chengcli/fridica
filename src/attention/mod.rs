@@ -62,12 +62,13 @@ pub async fn intake(
         .map_err(anyhow::Error::msg)?;
     store.call(move |c| {
         let tx=c.transaction()?;
+        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('intake',?,?)",params![now,json!({"message":msg,"owner":owner,"grace":grace,"obligation_id":obligation_id}).to_string()])?;
         let session=msg.session_id();
         let root=msg.thread_ts.as_ref().unwrap_or(&msg.ts);
         let mentioned=msg.text.contains(&format!("<@{owner}>"));
         let inserted=tx.execute("INSERT OR IGNORE INTO messages(event_id,workspace,channel,ts,root_ts,thread_ts,sender,text,source,meta_json,received_at,attachments_json,mentions_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             params![msg.event_id,msg.workspace,msg.channel,msg.ts,root,msg.thread_ts,msg.sender,msg.text,msg.source,msg.meta.map(|m|m.to_string()),now,serde_json::to_string(&msg.attachments)?,mentioned])?;
-        if inserted==0 {return Ok(None);}
+        if inserted==0 {tx.commit()?;return Ok(None);}
         tx.execute("INSERT OR IGNORE INTO threads(id,workspace,channel,root_ts,created,updated,control_json) VALUES(?,?,?,?,?,?,'{\"kind\":\"active\"}')",
             params![session,msg.workspace,msg.channel,root,now,now])?;
         if msg.source=="self" {tx.commit()?;return Ok(None);}

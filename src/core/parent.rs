@@ -43,6 +43,8 @@ impl ReplyStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reply {
+    #[serde(default)]
+    pub details: String,
     pub text: String,
     pub status: ReplyStatus,
     #[serde(default)]
@@ -81,6 +83,8 @@ pub struct Ask {
 #[serde(deny_unknown_fields)]
 pub struct Decision {
     #[serde(default)]
+    pub delegations: Vec<Delegation>,
+    #[serde(default)]
     pub reply: Option<Reply>,
     #[serde(default)]
     pub summary: String,
@@ -90,4 +94,21 @@ pub struct Decision {
     pub asks: Vec<Ask>,
     #[serde(default)]
     pub reopen_blocked: bool,
+}
+
+/// A placement request contains configured names only, never execution paths.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Delegation {
+    pub brief: String,
+    pub worker_id: String,
+    pub machine: String,
+    pub workspace: String,
+    pub backend: String,
+    pub tags: Vec<String>,
+    pub role: String,
+    pub ephemeral: bool,
+    pub deliverable: String,
+    pub fetch_repo: String,
+    pub fetch_ref: String,
 }

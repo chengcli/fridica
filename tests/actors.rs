@@ -85,6 +85,7 @@ async fn intake(s: &Store, n: usize) -> i64 {
 }
 fn actor<P: Parent>(s: &Store, p: Arc<P>) -> Actor<P> {
     Actor {
+        config: None,
         store: s.clone(),
         parent: p,
         clock: Arc::new(ReplayClock::new(20.)),

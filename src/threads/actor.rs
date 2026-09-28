@@ -1,15 +1,15 @@
-//! A durable actor for message, owner-instruction and obligation-due turns.
+//! Durable message, owner-instruction, obligation-due and worker-result turns.
 //! Parent I/O never holds a database transaction. Version checks fence owner
 //! controls arriving during a call; all resulting state effects commit together.
 use crate::{
     attention::{self, Answer, Capacity},
-    config::Attention,
+    config::{Attention, Config},
     core::{
         parent::{Decision, Disposition, Parent, ParentRequest, ReplyStatus},
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
-    store::Store,
+    store::{work, Store},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::params;
@@ -29,6 +29,8 @@ pub enum Step {
 }
 
 pub struct Actor<P: Parent> {
+    /// None supports reply-only operation; delegation requires a validated config.
+    pub config: Option<Arc<Config>>,
     pub store: Store,
     pub parent: Arc<P>,
     pub clock: Arc<dyn Clock>,
@@ -67,23 +69,54 @@ impl<P: Parent> Actor<P> {
     }
 
     async fn handle(&self, id: i64, kind: &str, session: String) -> Result<Step> {
-        let request = load(&self.store, id, session.clone()).await?;
+        let mut request = load(&self.store, id, session.clone()).await?;
+        if let Some(config) = &self.config {
+            let busy = serde_json::from_value(request.session["work"]["busy"].clone())?;
+            request.session["machines"] = json!(config.machines.payload(&busy));
+        }
+        let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
         if self.observe_only || request.session["control"] != "active" {
             let reason = if self.observe_only {
                 "observe-only mode"
             } else {
                 "thread is paused or closed"
             };
+            if worker_result {
+                defer(&self.store, id, self.clock.now() + 60.).await?;
+            } else {
+                settle(
+                    &self.store,
+                    id,
+                    request.trigger.clone(),
+                    format!("observe: {reason}"),
+                )
+                .await?;
+            }
+            return Ok(Step::Observed);
+        }
+        if worker_result
+            && (request.trigger["pending"] == true
+                || request.trigger["results"]
+                    .as_array()
+                    .is_none_or(|r| r.is_empty()))
+        {
             settle(
                 &self.store,
                 id,
                 request.trigger.clone(),
-                format!("observe: {reason}"),
+                "observe: group still working or already reported".into(),
             )
             .await?;
             return Ok(Step::Observed);
         }
-        if !matches!(kind, "message" | "owner_instruction" | "obligation_due") {
+        if !matches!(
+            kind,
+            "message"
+                | "owner_instruction"
+                | "obligation_due"
+                | "worker_result"
+                | "worker_interrupted"
+        ) {
             let now = self.clock.now();
             self.store
                 .call(move |c| {
@@ -118,7 +151,12 @@ impl<P: Parent> Actor<P> {
             .unwrap_or(0)
             .saturating_add(1);
         let mut verdict = "respond: owner instruction or attention due".to_owned();
-        let trigger = if kind == "owner_instruction" {
+        let trigger = if worker_result {
+            turn = request.session["turns"].as_u64().unwrap_or(0);
+            request.trigger["origin"]["class"]
+                .as_str()
+                .unwrap_or("human")
+        } else if kind == "owner_instruction" {
             "owner"
         } else if kind == "obligation_due" {
             if request.trigger["source_peer"] == true {
@@ -191,10 +229,23 @@ impl<P: Parent> Actor<P> {
         {
             return Ok(Step::Deferred);
         }
-        let mut request = request;
         let mut calls = Vec::new();
-        let mut result = None;
+        let reply_limit = self.config.as_ref().map_or(7000, |c| c.limits.reply_chars);
+        let mut result = if worker_result {
+            super::results::direct(
+                &request,
+                self.config
+                    .as_ref()
+                    .is_some_and(|c| c.limits.report_fast_path),
+                reply_limit,
+            )?
+        } else {
+            None
+        };
         for round in 0..2 {
+            if result.is_some() {
+                break;
+            }
             request.call = if round == 0 { "decide" } else { "repair" }.into();
             let started = self.clock.now();
             let encoded = serde_json::to_string(&request)?;
@@ -220,7 +271,10 @@ impl<P: Parent> Actor<P> {
             }).await?;
             let raw = raw.ok_or_else(|| anyhow!("parent call failed"))?;
             calls.push(json!({"request":request,"response":raw,"created":now}));
-            match validate(&raw, &request, now) {
+            match validate(&raw, &request, now, reply_limit).and_then(|d| {
+                super::delegation::prepare(&d, &request, self.config.as_deref(), None)?;
+                Ok(d)
+            }) {
                 Ok(decision) => {
                     result = Some(decision);
                     break;
@@ -232,12 +286,19 @@ impl<P: Parent> Actor<P> {
             }
         }
         let decision = result.context("parent action remained invalid after repair")?;
+        let work = super::delegation::prepare(
+            &decision,
+            &request,
+            self.config.as_deref(),
+            Some(self.ids.as_ref()),
+        )?;
         commit(
             &self.store,
             id,
             session,
             request,
             decision,
+            work,
             calls,
             verdict,
             turn,
@@ -268,14 +329,25 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let obligations:Vec<String>=tx.prepare("SELECT json_object('id',id,'kind',kind,'summary',summary,'due',due,'state',state,'disposition',json(state_json),'source',json(source_json),'deliveries',json((SELECT COALESCE(json_group_array(json_object('id',p.outbox_id,'state',o.state,'error',o.error)), '[]') FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id))) FROM obligations WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery') ORDER BY created,id")?
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        let result=ParentRequest{inbox_id:id,call:"decide".into(),session:serde_json::from_str(&data)?,trigger,
+        let mut session_data:Value=serde_json::from_str(&data)?;
+        session_data["work"]=work::context_tx(&tx,&session)?;
+        if matches!(kind.as_str(),"worker_result"|"worker_interrupted") {
+            let snapshot=super::results::load(&tx,&session,&reference)?;
+            for (key,value) in snapshot.as_object().context("invalid result snapshot")? {trigger[key]=value.clone();}
+        }
+        let result=ParentRequest{inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
         tx.commit()?;Ok(result)
     }).await
 }
 
-fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> {
+fn validate(
+    raw: &Value,
+    request: &ParentRequest,
+    now: f64,
+    reply_limit: usize,
+) -> Result<Decision> {
     let decision: Decision =
         serde_json::from_value(raw.clone()).context("invalid parent response schema")?;
     let mut addressed = HashSet::new();
@@ -292,8 +364,11 @@ fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> 
         {
             bail!("reopening a blocked discussion requires an explicit decision");
         }
-        if reply.text.trim().is_empty() || reply.text.chars().count() > 7000 {
-            bail!("reply must contain 1 to 7000 characters");
+        if reply.text.trim().is_empty()
+            || reply.text.chars().count() > reply_limit
+            || reply.details.chars().count() > 40000
+        {
+            bail!("reply or details exceed configured bounds");
         }
         if (matches!(reply.status, ReplyStatus::Blocked)
             || (request.session["status"] == "blocked" && !decision.reopen_blocked))
@@ -348,6 +423,7 @@ async fn commit(
     session: String,
     request: ParentRequest,
     decision: Decision,
+    work: super::delegation::Work,
     calls: Vec<Value>,
     verdict: String,
     turn: u64,
@@ -360,7 +436,10 @@ async fn commit(
     store.call(move|c| {
         let tx=c.transaction()?;
         let version:i64=tx.query_row("SELECT version FROM threads WHERE id=?",[&session],|r|r.get(0))?;
-        if Some(version)!=request.session["version"].as_i64() {
+        let active:bool=tx.query_row("SELECT control='active' AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![id,session],|r|r.get(0))?;
+        let is_result=matches!(request.trigger["kind"].as_str(),Some("worker_result"|"worker_interrupted"));
+        let result_stale=if is_result {super::results::load(&tx,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
+        if Some(version)!=request.session["version"].as_i64() || !active || result_stale {
             tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
             tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
             tx.commit()?;return Ok(Step::Stale);
@@ -373,17 +452,32 @@ async fn commit(
         if let Some(reply)=&decision.reply {
             let candidate=format!("{:x}",Sha256::digest(reply.text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase().as_bytes()));
             let explicit=request.trigger["kind"]=="owner_instruction" || request.trigger["message"]["text"].as_str().is_some_and(|s|s.contains(&format!("<@{owner}>")));
-            let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty();
+            let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty() && reply.details.is_empty() && work.jobs.is_empty() && !is_result;
             if !duplicate {
                 let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
                     thread_ts:request.session["root_ts"].as_str().context("missing root timestamp")?.into(),text:reply.text.clone(),obligations:reply.answers.clone(),inbox:id};
                 let post=attention::queue_answer_tx(&tx,&answer,now)?;
-                let meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":"reply","worker":"","v":2});
-                tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().unwrap_or(""),post])?;
+                let meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":"","v":2});
+                tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).unwrap_or(""),post])?;
+                if is_result {tx.execute("UPDATE outbox SET kind='report' WHERE id=?",[post])?;}
+                super::results::attachments(&tx, &request, reply, &session, id, now)?;
                 quiet=if candidate==hash {quiet}else{0};hash=candidate;
                 waiting=if matches!(reply.status,ReplyStatus::Waiting) {waiting+1}else{0};
                 status=reply.status.as_str().into();
             }
+        }
+        for w in &work.workers {work::add_worker_tx(&tx,w,now)?;}
+        for j in &work.jobs {work::enqueue_tx(&tx,j,now)?;}
+        if is_result {
+            for r in request.trigger["results"].as_array().context("missing results")? {
+                tx.execute("UPDATE jobs SET reported=1 WHERE id=? AND session_id=?",params![r["id"].as_str(),session])?;
+            }
+        }
+        let working:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE session_id=? AND status IN ('queued','running'))",[&session],|r|r.get(0))?;
+        if working && status!="blocked" {status="working".into();}
+        if !work.jobs.is_empty() {quiet=0;waiting=0;}
+        if !work.context.is_null() {
+            tx.execute("UPDATE threads SET context_json=json_patch(context_json,?) WHERE id=?",params![work.context.to_string(),session])?;
         }
         for disposition in &decision.dispositions {
             let (state,due)=match disposition {Disposition::Declined{..}=>("declined",None),Disposition::Deferred{until,..}=>("deferred",Some(*until))};
@@ -410,6 +504,7 @@ async fn commit(
         if let Some(event)=request.trigger["message"]["event_id"].as_str() {tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,event])?;}
         tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
         tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
+        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('actor_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs}).to_string()])?;
         tx.commit()?;Ok(Step::Committed)
     }).await
 }
@@ -424,4 +519,11 @@ pub async fn recover(store: &Store) -> Result<usize> {
             )?)
         })
         .await
+}
+
+async fn defer(store: &Store, id: i64, until: f64) -> Result<()> {
+    store.call(move |c| {
+        c.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=? AND state='processing'",params![until,id])?;
+        Ok(())
+    }).await
 }

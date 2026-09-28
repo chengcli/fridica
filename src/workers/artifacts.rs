@@ -1,5 +1,5 @@
-//! Artifact validation and the local JobIo adapter. Remote reads and scoped
-//! fetches remain unavailable until their trusted transport adapters are ported.
+//! Artifact validation and the local JobIo adapter. Remote reads remain
+//! unavailable; compose with ScopedJobIo to enable trusted repository fetches.
 use super::protocol::{JobIo, NoJobIo, WorkerSpec};
 use crate::{
     core::{delivery::AdapterFuture, worker::*},

@@ -237,6 +237,26 @@ pub async fn run_once(
     timeout: Duration,
     limit: usize,
 ) -> Result<Completed> {
+    run_command(launch, input, timeout, limit, false).await
+}
+
+/// Target-host helpers watch channel EOF for crash/disconnect cleanup. Keep the
+/// pipe open while draining output; the owner closes it on cancellation or exit.
+pub async fn run_with_open_stdin(
+    launch: Launch,
+    timeout: Duration,
+    limit: usize,
+) -> Result<Completed> {
+    run_command(launch, vec![], timeout, limit, true).await
+}
+
+async fn run_command(
+    launch: Launch,
+    input: Vec<u8>,
+    timeout: Duration,
+    limit: usize,
+    keep_stdin: bool,
+) -> Result<Completed> {
     if timeout.is_zero() {
         bail!("process deadline must be positive");
     }
@@ -256,8 +276,7 @@ pub async fn run_once(
                             return Err(e.into());
                         }
                     }
-                    drop(stdin);
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, anyhow::Error>(keep_stdin.then_some(stdin))
                 };
                 let (_, stdout, stderr, status) = tokio::try_join!(
                     write,

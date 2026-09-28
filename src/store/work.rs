@@ -25,23 +25,45 @@ pub async fn get_job(store: &Store, id: String) -> Result<Job> {
 pub async fn get_worker(store: &Store, id: String) -> Result<WorkerRecord> {
     store.call(move |c| worker(c, &id)).await
 }
-pub async fn add_worker(store: &Store, w: WorkerRecord, now: f64) -> Result<()> {
+pub(crate) fn add_worker_tx(c: &Connection, w: &WorkerRecord, now: f64) -> Result<()> {
     if w.id.is_empty() || !now.is_finite() {
         bail!("invalid worker identity/time");
     }
-    store.call(move|c|{c.execute("INSERT INTO workers(id,session_id,machine,workspace,backend,role,ephemeral,backend_session_id,status,slot,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-        params![w.id,w.session_id,w.machine,w.workspace,w.backend,w.role,w.ephemeral,w.backend_session_id,w.status,i64::try_from(w.slot)?,now,now])?;Ok(())}).await
+    c.execute("INSERT INTO workers(id,session_id,machine,workspace,backend,role,ephemeral,backend_session_id,status,slot,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![w.id,w.session_id,w.machine,w.workspace,w.backend,w.role,w.ephemeral,w.backend_session_id,w.status,i64::try_from(w.slot)?,now,now])?;
+    Ok(())
 }
-pub async fn enqueue(store: &Store, j: Job, now: f64) -> Result<()> {
+pub async fn add_worker(store: &Store, w: WorkerRecord, now: f64) -> Result<()> {
+    store.call(move |c| add_worker_tx(c, &w, now)).await
+}
+pub(crate) fn enqueue_tx(c: &Connection, j: &Job, now: f64) -> Result<()> {
     if j.id.is_empty() || j.brief.trim().is_empty() || !now.is_finite() || j.clearance != "worker" {
         bail!("invalid job identity/brief/time");
     }
-    store.call(move|c|{
-        let w=worker(c,&j.worker_id)?;
-        if w.session_id!=j.session_id || w.status=="stopped"{bail!("worker unavailable in this thread");}
-        c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,j.work_item_id,j.target_sha,j.target_tree,now])?;Ok(())
-    }).await
+    let w = worker(c, &j.worker_id)?;
+    if w.session_id != j.session_id || w.status == "stopped" {
+        bail!("worker unavailable in this thread");
+    }
+    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,j.work_item_id,j.target_sha,j.target_tree,now])?;
+    Ok(())
+}
+pub async fn enqueue(store: &Store, j: Job, now: f64) -> Result<()> {
+    store.call(move |c| enqueue_tx(c, &j, now)).await
+}
+/// Context and placement load are read inside the actor's snapshot transaction.
+pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Value> {
+    let workers: Vec<String> = c
+        .prepare(&format!("{WORKER} WHERE session_id=? ORDER BY id"))?
+        .query_map([session], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let workers: Vec<WorkerRecord> = workers
+        .iter()
+        .map(|s| serde_json::from_str(s))
+        .collect::<std::result::Result<_, _>>()?;
+    let busy: BTreeMap<String,i64> = c.prepare("SELECT w.machine,count(*) FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.status IN ('queued','running') GROUP BY w.machine")?
+        .query_map([], |r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(json!({"workers":workers,"busy":busy}))
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
