@@ -20,6 +20,11 @@ pub struct ParentFailure {
 }
 
 pub trait Parent: Send + Sync {
+    /// Trusted adapters may reserve a separate bounded context-read allowance.
+    /// The actor caps this at 30 seconds; model output cannot choose the budget.
+    fn preparation_timeout(&self, _request: &ParentRequest) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
     fn decide(&self, request: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>>;
 }
 

@@ -78,11 +78,15 @@ pub fn prepare(history: &[Value], trigger: &Value, budget: usize) -> (Vec<Value>
         .map(|m| m["text"].as_str().map_or(0, |s| s.chars().count()) + 80)
         .sum();
     let mut remaining = budget.saturating_sub(used);
-    if let Some(attachments) = trigger["message"]["attachments"].as_array_mut() {
+    if let Some(attachments) = trigger
+        .get_mut("message")
+        .and_then(|message| message.get_mut("attachments"))
+        .and_then(Value::as_array_mut)
+    {
         remaining = fit_attachments(attachments, remaining);
     }
     for item in history.iter_mut().rev() {
-        if let Some(attachments) = item["attachments"].as_array_mut() {
+        if let Some(attachments) = item.get_mut("attachments").and_then(Value::as_array_mut) {
             remaining = fit_attachments(attachments, remaining);
         }
     }

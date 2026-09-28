@@ -336,8 +336,12 @@ impl<P: Parent> Actor<P> {
             c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_call',?,?,0)",params![started,encoded])?;
             Ok(c.last_insert_rowid())
         }).await?;
-        let response =
-            tokio::time::timeout(self.parent_timeout, self.parent.decide(request.clone())).await;
+        let timeout = self.parent_timeout.saturating_add(
+            self.parent
+                .preparation_timeout(request)
+                .min(Duration::from_secs(30)),
+        );
+        let response = tokio::time::timeout(timeout, self.parent.decide(request.clone())).await;
         let (raw, error, failure) = match response {
             Ok(Ok(value)) => (Some(value), None, None),
             Ok(Err(failure)) => (None, Some("parent_unavailable"), Some(failure)),
@@ -378,7 +382,7 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
             let peer:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM obligations o JOIN messages m ON m.event_id=json_extract(o.source_json,'$.event_id') WHERE o.id=? AND m.meta_json IS NOT NULL)",[&reference],|r|r.get(0))?;
             trigger["source_peer"]=json!(peer);
         }
-        let history:Vec<String>=tx.prepare(&format!("{message_sql} WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL) DESC LIMIT 50"))?
+        let history:Vec<String>=tx.prepare(&format!("{message_sql} WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL) DESC LIMIT 60"))?
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let obligations:Vec<String>=tx.prepare("SELECT json_object('id',id,'kind',kind,'summary',summary,'due',due,'state',state,'disposition',json(state_json),'source',json(source_json),'deliveries',json((SELECT COALESCE(json_group_array(json_object('id',p.outbox_id,'state',o.state,'error',o.error)), '[]') FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id))) FROM obligations WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery') ORDER BY created,id")?
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;

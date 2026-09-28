@@ -1,5 +1,6 @@
 //! Owner-authenticated Slack Web API. Fixed endpoints, no transport retries or
 //! redirects, and durable boundary records before I/O. Constructors do no I/O.
+mod download;
 use super::{
     catchup::{History, HistoryFailure, Method, PageRequest},
     ingress::{file_url, timestamp, ENVELOPE_LIMIT},
@@ -68,9 +69,13 @@ pub struct WebClient {
     store: Store,
     clock: Arc<dyn Clock>,
     validated: Arc<AtomicBool>,
+    file_scopes: Arc<std::sync::RwLock<Option<BTreeSet<String>>>>,
+    downloads: Arc<tokio::sync::Mutex<download::Cache>>,
     base: Url,
     #[cfg(test)]
     upload_origin: Option<Url>,
+    #[cfg(test)]
+    file_origin: Option<Url>,
 }
 #[derive(Clone, Copy)]
 enum Api {
@@ -139,9 +144,13 @@ impl WebClient {
             store,
             clock,
             validated: Arc::new(AtomicBool::new(false)),
+            file_scopes: Arc::new(std::sync::RwLock::new(None)),
+            downloads: Arc::new(tokio::sync::Mutex::new(download::Cache::default())),
             base: Url::parse("https://slack.com/api/").map_err(|_| Failure::Configuration)?,
             #[cfg(test)]
             upload_origin: None,
+            #[cfg(test)]
+            file_origin: None,
         })
     }
     pub(crate) fn is_validated(&self) -> bool {
@@ -234,6 +243,7 @@ impl WebClient {
             .map(|s| s.iter().cloned().collect::<Vec<_>>().join(","))
             .unwrap_or("unknown".into());
         self.store.call(move|c| {c.execute("INSERT INTO meta VALUES('slack_scopes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[stored])?;Ok(())}).await.map_err(|_|Failure::Recording)?;
+        *self.file_scopes.write().map_err(|_| Failure::Recording)? = identity.scopes.clone();
         self.validated.store(true, Ordering::Release);
         Ok(identity)
     }

@@ -1,5 +1,6 @@
 //! Parent adapter: rebuild owner rules and context for every stateless call.
 //! Complete prompts, schemas and bounded CLI output live only in the private DB.
+pub mod attachments;
 pub mod cli;
 pub mod context;
 pub mod prompts;
@@ -48,6 +49,13 @@ fn failure(code: &str) -> ParentFailure {
     ParentFailure { code: code.into() }
 }
 impl CliParent {
+    pub fn with_attachments<D: crate::slack::files::Downloader>(
+        self,
+        files: Arc<D>,
+    ) -> attachments::WithAttachments<Self, D> {
+        let (config, store, clock) = (self.config.clone(), self.store.clone(), self.clock.clone());
+        attachments::WithAttachments::new(Arc::new(self), files, config, store, clock)
+    }
     pub fn new(config: Arc<Config>, store: Store, clock: Arc<dyn Clock>, options: Options) -> Self {
         Self {
             config,

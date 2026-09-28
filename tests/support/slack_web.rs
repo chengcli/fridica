@@ -218,6 +218,7 @@ path="{}"
         .unwrap();
         web.base = server.base.clone();
         web.upload_origin = Some(server.base.clone());
+        web.file_origin = Some(server.base.clone());
         Self {
             _dir: dir,
             server,
@@ -781,5 +782,228 @@ async fn streaming_response_bounds_apply_without_content_length_and_reject_parti
             .await
             .unwrap();
         assert_eq!(incomplete, 2);
+    }
+}
+
+fn file_reply(data: Vec<u8>, mime: &str) -> Reply {
+    let mut reply = Reply::json(Value::Null);
+    reply.body = data;
+    reply.headers.push(("content-type".into(), mime.into()));
+    reply
+}
+#[tokio::test]
+async fn file_reads_require_validation_scope_and_a_trusted_origin() {
+    use crate::slack::files::{Downloader, Failure as FileFailure};
+    let h = Harness::new(Duration::from_secs(2)).await;
+    let url = h.server.base.join("file").unwrap().to_string();
+    assert_eq!(
+        h.web.download(url.clone(), false).await,
+        Err(FileFailure::NotValidated)
+    );
+    h.ready().await;
+    for bad in [
+        "http://files.slack.com/a",
+        "https://files.slack.com:443/a",
+        "https://user@files.slack.com/a",
+        "https://files.slack.com.evil/a",
+        "https://files.slack.com/a#frag",
+        "https://files.slack.com\\@evil/a",
+        "https://files.slack.com/\na",
+    ] {
+        assert_eq!(
+            h.web.download(bad.into(), false).await,
+            Err(FileFailure::Url),
+            "{bad}"
+        );
+    }
+    *h.web.file_scopes.write().unwrap() = Some(BTreeSet::new());
+    assert_eq!(
+        h.web.download(url, false).await,
+        Err(FileFailure::MissingScope)
+    );
+    assert_eq!(h.server.calls.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn file_reads_cap_streamed_bytes_and_record_cache_hits_without_exposing_tokens() {
+    use crate::slack::files::{Downloader, FILE_LIMIT};
+    let h = Harness::new(Duration::from_secs(2)).await;
+    h.ready().await;
+    for chunked in [false, true] {
+        let url = h
+            .server
+            .base
+            .join(if chunked { "chunked" } else { "length" })
+            .unwrap()
+            .to_string();
+        let mut reply = file_reply(vec![b'a'; FILE_LIMIT * 3], "text/plain");
+        reply.chunked = chunked;
+        h.server.add(reply);
+        let first = h.web.download(url.clone(), false).await.unwrap();
+        assert_eq!(first.data.len(), FILE_LIMIT + 1);
+        assert_eq!(
+            first.size,
+            if chunked { 0 } else { (FILE_LIMIT * 3) as u64 }
+        );
+        assert_eq!(h.web.download(url, false).await.unwrap(), first);
+    }
+    let url = h.server.base.join("secret").unwrap().to_string();
+    h.server.add(file_reply(
+        b"echo xoxp-private-test-secret".to_vec(),
+        "text/plain",
+    ));
+    assert_eq!(
+        h.web.download(url, false).await.unwrap().data,
+        b"echo [credential]"
+    );
+    let ledger = h.ledger().await;
+    assert!(!ledger.contains("xoxp-private-test-secret"));
+    assert!(ledger.contains("\"cache_hit\":true"));
+    let calls = h.server.calls.lock().unwrap();
+    assert_eq!(calls.len(), 5);
+    assert!(calls[2..].iter().all(|r| r
+        .headers
+        .to_lowercase()
+        .contains("authorization: bearer xoxp-private-test-secret")));
+}
+#[tokio::test]
+async fn file_html_eligibility_is_checked_even_after_a_cached_read_and_redirects_are_not_followed()
+{
+    use crate::slack::files::{Downloader, Failure as FileFailure};
+    let h = Harness::new(Duration::from_secs(2)).await;
+    h.ready().await;
+    let url = h.server.base.join("html").unwrap().to_string();
+    h.server.add(file_reply(
+        b"<p>report</p>".to_vec(),
+        "text/html; charset=utf-8",
+    ));
+    assert!(h.web.download(url.clone(), true).await.is_ok());
+    h.server
+        .add(file_reply(b"<p>report</p>".to_vec(), "text/html"));
+    assert_eq!(
+        h.web.download(url.clone(), false).await,
+        Err(FileFailure::Unavailable)
+    );
+    // Unknown scope must not use a successful HTML cache entry from a previous
+    // validation. The scope state is part of the cache key.
+    let unknown = url.clone();
+    *h.web.file_scopes.write().unwrap() = None;
+    h.server
+        .add(file_reply(b"<html>sign in</html>".to_vec(), "text/html"));
+    assert_eq!(
+        h.web.download(unknown, true).await,
+        Err(FileFailure::UnknownHtml)
+    );
+    let url = h.server.base.join("redirect").unwrap().to_string();
+    let mut redirect = file_reply(vec![], "text/plain");
+    redirect.status = 302;
+    redirect
+        .headers
+        .push(("location".into(), "https://evil.example/steal".into()));
+    h.server.add(redirect);
+    assert_eq!(
+        h.web.download(url, false).await,
+        Err(FileFailure::Unavailable)
+    );
+    assert_eq!(h.server.calls.lock().unwrap().len(), 6);
+}
+#[tokio::test]
+async fn file_failures_expire_and_rate_limits_are_not_retried_early() {
+    use crate::slack::files::{Downloader, Failure as FileFailure};
+    let h = Harness::new(Duration::from_secs(2)).await;
+    h.ready().await;
+    let url = h.server.base.join("file").unwrap().to_string();
+    let mut rejected = file_reply(vec![], "text/plain");
+    rejected.status = 403;
+    h.server.add(rejected);
+    assert_eq!(
+        h.web.download(url.clone(), false).await,
+        Err(FileFailure::Unavailable)
+    );
+    assert_eq!(
+        h.web.download(url.clone(), false).await,
+        Err(FileFailure::Unavailable)
+    );
+    h.clock.set(1301.);
+    let mut limited = file_reply(vec![], "text/plain");
+    limited.status = 429;
+    limited.headers.push(("retry-after".into(), "7200".into()));
+    h.server.add(limited);
+    assert_eq!(
+        h.web.download(url.clone(), false).await,
+        Err(FileFailure::RateLimited { retry_after: 7200. })
+    );
+    h.clock.set(2000.);
+    assert_eq!(
+        h.web.download(url.clone(), false).await,
+        Err(FileFailure::RateLimited { retry_after: 7200. })
+    );
+    assert_eq!(h.server.calls.lock().unwrap().len(), 4);
+    h.clock.set(8502.);
+    h.server.add(file_reply(b"ok".to_vec(), "text/plain"));
+    assert_eq!(h.web.download(url, false).await.unwrap().data, b"ok");
+}
+#[tokio::test]
+async fn file_recording_faults_prevent_io_or_keep_the_snapshot_unfinished() {
+    use crate::slack::files::{Downloader, Failure as FileFailure};
+    for after in [false, true] {
+        let h = Harness::new(Duration::from_secs(2)).await;
+        h.ready().await;
+        let kind = if after {
+            "slack_file_result"
+        } else {
+            "slack_file_call"
+        };
+        h.store.call(move|c|{c.execute_batch(&format!("CREATE TRIGGER fail_file BEFORE INSERT ON replay_events WHEN NEW.kind='{kind}' BEGIN SELECT RAISE(ABORT,'private SQL error'); END;"))?;Ok(())}).await.unwrap();
+        if after {
+            h.server.add(file_reply(b"body".to_vec(), "text/plain"));
+        }
+        let url = h.server.base.join("file").unwrap().to_string();
+        assert_eq!(
+            h.web.download(url, false).await,
+            Err(FileFailure::Recording)
+        );
+        assert_eq!(
+            h.server.calls.lock().unwrap().len(),
+            if after { 3 } else { 2 }
+        );
+        if after {
+            assert_eq!(h.store.call(|c|Ok(c.query_row("SELECT count(*) FROM replay_events WHERE kind='slack_file_call' AND complete=0",[],|r|r.get::<_,i64>(0))?)).await.unwrap(),1);
+        }
+    }
+}
+#[tokio::test]
+async fn file_timeouts_partial_bodies_and_cancellation_never_claim_complete_bytes() {
+    use crate::slack::files::{Downloader, Failure as FileFailure};
+    for mode in ["timeout", "partial", "cancel"] {
+        let h = Harness::new(Duration::from_millis(200)).await;
+        h.ready().await;
+        let mut reply = file_reply(b"partial".to_vec(), "text/plain");
+        reply.hang = mode != "partial";
+        reply.truncated = mode == "partial";
+        h.server.add(reply);
+        let url = h.server.base.join("file").unwrap().to_string();
+        let web = h.web.clone();
+        let task = tokio::spawn(async move { web.download(url, false).await });
+        if mode == "cancel" {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while h.server.calls.lock().unwrap().len() < 3 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        } else {
+            assert_eq!(
+                task.await.unwrap(),
+                Err(if mode == "timeout" {
+                    FileFailure::Timeout
+                } else {
+                    FileFailure::Connection
+                })
+            );
+        }
+        assert_eq!(h.store.call(|c|Ok(c.query_row("SELECT count(*) FROM replay_events WHERE kind='slack_file_call' AND complete=0",[],|r|r.get::<_,i64>(0))?)).await.unwrap(),1);
     }
 }

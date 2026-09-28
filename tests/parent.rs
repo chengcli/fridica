@@ -715,3 +715,378 @@ async fn quiet_triage_after_recovery_releases_an_unposted_reply_reservation() {
     );
     h.clean();
 }
+
+#[derive(Default)]
+struct AttachmentDownloads {
+    calls: std::sync::Mutex<Vec<String>>,
+    block: std::sync::atomic::AtomicBool,
+    recording_failure: std::sync::atomic::AtomicBool,
+}
+impl fridica::slack::files::Downloader for AttachmentDownloads {
+    fn download(
+        &self,
+        url: String,
+        _: bool,
+    ) -> fridica::core::delivery::AdapterFuture<
+        '_,
+        Result<fridica::slack::files::Download, fridica::slack::files::Failure>,
+    > {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(url);
+            if self.block.load(std::sync::atomic::Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            if self
+                .recording_failure
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(fridica::slack::files::Failure::Recording);
+            }
+            Ok(fridica::slack::files::Download {
+                data: b"- old\n+ new\n".to_vec(),
+                size: 12,
+            })
+        })
+    }
+}
+fn attachment_message(event: &str, id: &str, name: &str, sender: &str) -> Value {
+    json!({"event_id":event,"text":"Please review","ts":"100.1","sender":sender,"attachments":[{"id":id,"name":name,"mimetype":"text/plain","size":12,"url":format!("https://files.slack.com/files-pri/{id}/a")} ]})
+}
+fn attachment_request() -> ParentRequest {
+    let mut r = request("decide");
+    r.session["workspace"] = json!("TTEAM");
+    r.session["root_ts"] = json!("100.1");
+    r.session["version"] = json!(1);
+    r.trigger["message"] = attachment_message("e1", "F1", "a.diff", "UALICE");
+    r.history = vec![r.trigger["message"].clone()];
+    r
+}
+fn attachment_parent(
+    h: &Harness,
+    d: Arc<AttachmentDownloads>,
+) -> parent::attachments::WithAttachments<CliParent, AttachmentDownloads> {
+    parent::attachments::WithAttachments::new(
+        h.parent.clone(),
+        d,
+        h.config.clone(),
+        h.store.clone(),
+        h.clock.clone(),
+    )
+}
+fn last_prompt(h: &Harness) -> Value {
+    let line = std::fs::read_to_string(h.dir.path().join("log"))
+        .unwrap()
+        .lines()
+        .last()
+        .unwrap()
+        .to_owned();
+    let record: Value = serde_json::from_str(&line).unwrap();
+    serde_json::from_str(
+        record["prompt"]
+            .as_str()
+            .unwrap()
+            .split("\n\nData:\n")
+            .nth(1)
+            .unwrap(),
+    )
+    .unwrap()
+}
+#[tokio::test]
+async fn attached_text_reaches_real_parent_once_and_repair_reuses_the_durable_snapshot() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let downloads = Arc::new(AttachmentDownloads::default());
+    let parent = attachment_parent(&h, downloads.clone());
+    let mut r = attachment_request();
+    parent.decide(r.clone()).await.unwrap();
+    let prompt = last_prompt(&h);
+    assert_eq!(
+        prompt["trigger"]["message"]["attachments"][0]["text"],
+        "- old\n+ new\n"
+    );
+    assert!(prompt["history"][0].get("attachments").is_none());
+    assert!(!prompt.to_string().contains("files.slack.com"));
+    downloads
+        .recording_failure
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    r.call = "repair".into();
+    r.previous = Some(json!({"bad":"answer"}));
+    r.errors = vec!["repair".into()];
+    parent.decide(r.clone()).await.unwrap();
+    assert_eq!(last_prompt(&h)["trigger"], prompt["trigger"]);
+    assert_eq!(downloads.calls.lock().unwrap().len(), 1);
+    r.session["version"] = json!(2);
+    assert_eq!(
+        parent.decide(r).await.unwrap_err().code,
+        "parent_context_snapshot_missing"
+    );
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_attachment_result'").await,"1");
+}
+#[tokio::test]
+async fn attachment_intent_and_result_faults_never_start_the_parent() {
+    for after in [false, true] {
+        let h = Harness::new("claude", FAKE, "ok", 5.).await;
+        let downloads = Arc::new(AttachmentDownloads::default());
+        let parent = attachment_parent(&h, downloads.clone());
+        let kind = if after {
+            "parent_attachment_result"
+        } else {
+            "parent_attachment_call"
+        };
+        h.store.call(move|c|{c.execute_batch(&format!("CREATE TRIGGER context_fault BEFORE INSERT ON replay_events WHEN NEW.kind='{kind}' BEGIN SELECT RAISE(ABORT,'private detail'); END;"))?;Ok(())}).await.unwrap();
+        assert_eq!(
+            parent.decide(attachment_request()).await.unwrap_err().code,
+            "parent_context_recording_failed"
+        );
+        assert_eq!(downloads.calls.lock().unwrap().len(), usize::from(after));
+        assert!(!h.dir.path().join("log").exists());
+    }
+}
+#[tokio::test]
+async fn cancelling_attachment_reads_keeps_an_unfinished_context_intent() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let downloads = Arc::new(AttachmentDownloads::default());
+    downloads
+        .block
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let parent = attachment_parent(&h, downloads.clone());
+    let task = tokio::spawn(async move { parent.decide(attachment_request()).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while downloads.calls.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_attachment_call' AND complete=0").await,"1");
+    assert!(!h.dir.path().join("log").exists());
+}
+#[tokio::test]
+async fn own_uploads_and_duplicate_shares_do_not_occupy_attachment_download_slots() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    h.intake(1, "hi").await;
+    h.store.call(|c|{c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,filename,sent_ts,state,created) VALUES('confirmed',?,'upload','CROOM','100.1','details.md','FOWN','sent',1)",[SESSION])?;
+        c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,filename,state,created) VALUES('uncertain',?,'upload','CROOM','100.1','uncertain.md','ambiguous',1)",[SESSION])?;Ok(())}).await.unwrap();
+    let downloads = Arc::new(AttachmentDownloads::default());
+    let parent = attachment_parent(&h, downloads.clone());
+    let mut r = attachment_request();
+    r.history = vec![
+        attachment_message("old", "F1", "a.diff", "UALICE"),
+        attachment_message("own", "FOWN", "details.md", "UOWNER"),
+        attachment_message("uncertain", "FECHO", "uncertain.md", "UOWNER"),
+        attachment_message("manual", "FMANUAL", "details.md", "UOWNER"),
+    ];
+    parent.decide(r).await.unwrap();
+    let prompt = last_prompt(&h);
+    assert_eq!(downloads.calls.lock().unwrap().len(), 2);
+    let history = prompt["history"].as_array().unwrap();
+    let view = |id| history.iter().find(|m| m["event_id"] == id).unwrap()["attachments"][0].clone();
+    assert_eq!(
+        view("old")["note"],
+        "not read again: the same file is read from a newer message"
+    );
+    for id in ["own", "uncertain"] {
+        assert_eq!(
+            view(id)["note"],
+            "not read: a file this Fridica posted itself"
+        );
+    }
+    assert_eq!(view("manual")["text"], "- old\n+ new\n");
+}
+#[tokio::test]
+async fn attachment_reads_are_skipped_for_triage_observe_and_owner_pause() {
+    for mode in ["ignore", "observe", "pause", "repair"] {
+        let h = Harness::new(
+            "claude",
+            FAKE,
+            if mode == "ignore" { "ignore" } else { "repair" },
+            5.,
+        )
+        .await;
+        let downloads = Arc::new(AttachmentDownloads::default());
+        let base = h.actor();
+        let actor = Actor {
+            config: base.config,
+            store: base.store,
+            parent: Arc::new(attachment_parent(&h, downloads.clone())),
+            clock: base.clock,
+            ids: base.ids,
+            owner: base.owner,
+            limits: base.limits,
+            observe_only: mode == "observe",
+            parent_timeout: base.parent_timeout,
+        };
+        let session = h
+            .intake(
+                1,
+                if mode == "ignore" {
+                    "For your information"
+                } else {
+                    "<@UOWNER> review"
+                },
+            )
+            .await;
+        let attached =
+            attachment_message("e1", "F1", "a.diff", "UALICE")["attachments"].to_string();
+        h.store
+            .call(move |c| {
+                c.execute(
+                    "UPDATE messages SET attachments_json=? WHERE event_id='e1'",
+                    [attached],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        if mode == "pause" {
+            controls::apply(
+                &h.store,
+                session.clone(),
+                Control::Pause {
+                    reason: "owner hold".into(),
+                },
+                Authority::Owner,
+                20.,
+            )
+            .await
+            .unwrap();
+        }
+        let outcome = actor.step(session).await.unwrap();
+        assert_eq!(
+            outcome,
+            if mode == "repair" {
+                Step::Committed
+            } else {
+                Step::Observed
+            },
+            "{mode}"
+        );
+        assert_eq!(
+            downloads.calls.lock().unwrap().len(),
+            usize::from(mode == "repair"),
+            "{mode}"
+        );
+        if mode == "ignore" {
+            assert!(last_prompt(&h)["trigger"]["message"]
+                .get("attachments")
+                .is_none());
+        }
+        if mode == "repair" {
+            assert_eq!(
+                h.scalar("SELECT CAST(count(*) AS TEXT) FROM parent_turns")
+                    .await,
+                "2"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn attachment_history_uses_the_full_sixty_message_python_window() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let session = h.intake(1, "<@UOWNER> review the earlier attachment").await;
+    let attached =
+        attachment_message("old1", "FOLD", "old.diff", "UALICE")["attachments"].to_string();
+    h.store.call(move|c|{
+        let tx=c.transaction()?;
+        tx.execute("UPDATE messages SET ts='100.9' WHERE event_id='e1'",[])?;
+        for n in 1..=55 {
+            tx.execute("INSERT INTO messages(event_id,workspace,channel,ts,root_ts,sender,text,attachments_json,received_at,source) VALUES(?,'TTEAM','CROOM',?,'100.1','UALICE','history',?,10,'socket')",rusqlite::params![format!("old{n}"),format!("100.1{n:05}"),if n==1{attached.as_str()}else{"[]"}])?;
+        }
+        tx.commit()?;Ok(())
+    }).await.unwrap();
+    let downloads = Arc::new(AttachmentDownloads::default());
+    let base = h.actor();
+    let actor = Actor {
+        config: base.config,
+        store: base.store,
+        parent: Arc::new(attachment_parent(&h, downloads.clone())),
+        clock: base.clock,
+        ids: base.ids,
+        owner: base.owner,
+        limits: base.limits,
+        observe_only: false,
+        parent_timeout: base.parent_timeout,
+    };
+    assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
+    assert_eq!(downloads.calls.lock().unwrap().len(), 1);
+    let data = last_prompt(&h);
+    assert!(data["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["event_id"] == "old1" && m["attachments"][0]["text"] == "- old\n+ new\n"));
+}
+
+#[tokio::test]
+async fn slow_optional_files_do_not_consume_the_models_response_deadline() {
+    struct SlowFile;
+    impl fridica::slack::files::Downloader for SlowFile {
+        fn download(
+            &self,
+            _: String,
+            _: bool,
+        ) -> fridica::core::delivery::AdapterFuture<
+            '_,
+            Result<fridica::slack::files::Download, fridica::slack::files::Failure>,
+        > {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                Err(fridica::slack::files::Failure::Timeout)
+            })
+        }
+    }
+    struct QuickParent;
+    impl Parent for QuickParent {
+        fn decide(
+            &self,
+            r: ParentRequest,
+        ) -> fridica::core::delivery::AdapterFuture<
+            '_,
+            Result<Value, fridica::core::parent::ParentFailure>,
+        > {
+            Box::pin(async move {
+                assert_eq!(
+                    r.trigger["message"]["attachments"][0]["note"],
+                    "not read: download timed out"
+                );
+                Ok(json!({"reply":{"text":"Please paste the file contents.","status":"waiting"}}))
+            })
+        }
+    }
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let session = h.intake(1, "<@UOWNER> review").await;
+    let attached = attachment_message("e1", "F1", "a.diff", "UALICE")["attachments"].to_string();
+    h.store
+        .call(move |c| {
+            c.execute(
+                "UPDATE messages SET attachments_json=? WHERE event_id='e1'",
+                [attached],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let base = h.actor();
+    let parent = Arc::new(parent::attachments::WithAttachments::new(
+        Arc::new(QuickParent),
+        Arc::new(SlowFile),
+        h.config.clone(),
+        h.store.clone(),
+        h.clock.clone(),
+    ));
+    let actor = Actor {
+        config: base.config,
+        store: base.store,
+        parent,
+        clock: base.clock,
+        ids: base.ids,
+        owner: base.owner,
+        limits: base.limits,
+        observe_only: false,
+        parent_timeout: Duration::from_millis(100),
+    };
+    assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
+    assert_eq!(h.scalar("SELECT state FROM outbox").await, "pending");
+}
