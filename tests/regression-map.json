@@ -1645,27 +1645,37 @@
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response0-RateLimited]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/support/slack_web.rs",
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response1-DeliveryAmbiguous]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/support/slack_web.rs",
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response2-DeliveryAmbiguous]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/support/slack_web.rs",
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response3-DeliveryRejected]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/support/slack_web.rs",
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
     },
     {
       "python": "tests/test_slack.py::test_egress_posts_with_metadata",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/support/slack_web.rs",
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
     },
     {
       "python": "tests/test_slack.py::test_catch_up_stores_missed_messages_once",
@@ -1697,8 +1707,8 @@
       "python": "tests/test_slack.py::test_upload_needs_a_confirmed_file",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
-      "related_rust_coverage": "tests/outbox.rs",
-      "coverage_scope": "Scoped Rust coverage only; full Python regression retained pending daemon parity."
+      "related_rust_coverage": "tests/support/slack_web.rs",
+      "coverage_scope": "Frozen Python message argument and delivery-outcome comparisons plus local HTTP server tests of identity/membership, metadata, external upload flow, matching file confirmation, bounded errors, redirects, deadlines, cancellation and durable outbox recovery. Rust adds explicit success-envelope checks and fixed public error codes. Production daemon/WebSocket wiring remains unported."
     },
     {
       "python": "tests/test_store.py::test_intake_creates_thread_and_inbox_in_one_step",

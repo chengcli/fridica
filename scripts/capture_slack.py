@@ -11,7 +11,9 @@ from pathlib import Path
 import tempfile
 from fridica.config import load_config
 from fridica.core.bus import Bus
-from fridica.core.models import Message
+from fridica.core.models import Message, FridicaMeta
+from fridica.core.errors import DeliveryAmbiguous, DeliveryRejected, RateLimited
+from slack_sdk.errors import SlackApiError
 from fridica.slack import catchup
 from fridica.slack.egress import SlackClient, IncompleteHistory
 from fridica.slack.ingress import normalize
@@ -88,6 +90,46 @@ path="{root/'db'}"
     return case
 
 
+async def capture_web():
+    class Response(dict):
+        def __init__(self,status,body,headers):
+            super().__init__(body)
+            self.status_code=status
+            self.headers=headers
+    cases=[]
+    meta=FridicaMeta("UOWNER",session="TTEAM:CROOM:100.1",turn=3,status="waiting",kind="report",worker="w1")
+    inputs=[(200,{"ok":True,"ts":"200.1"},{}),
+            (200,{"ok":True},{}),
+            (200,{"ok":True,"ts":"invalid"},{}),
+            (200,{"ok":False,"error":"channel_not_found"},{}),
+            (500,{"ok":False,"error":"internal_error"},{}),
+            (200,{"ok":False,"error":"fatal_error"},{}),
+            (200,{"ok":False,"error":"request_timeout"},{}),
+            (200,{"ok":False,"error":"service_unavailable"},{}),
+            (429,{"ok":False,"error":"ratelimited"},{"Retry-After":"7"}),
+            (429,{"ok":False},{"Retry-After":"NaN"}),
+            (429,{"ok":False},{"Retry-After":"invalid"})]
+    for status,body,headers in inputs:
+        calls=[]
+        class Web:
+            async def chat_postMessage(self,**arguments):
+                calls.append(arguments)
+                if status!=200 or body.get('ok') is not True:
+                    raise SlackApiError('fixture',Response(status,body,headers))
+                return body
+        try:
+            reference=await SlackClient(None,Web()).post("CROOM","hello",thread_ts="100.1",meta=meta)
+            expected={"outcome":"sent","reference":reference}
+        except RateLimited as error:
+            expected={"outcome":"rate_limited","retry_after":error.retry_after}
+        except DeliveryAmbiguous:
+            expected={"outcome":"ambiguous"}
+        except DeliveryRejected:
+            expected={"outcome":"rejected"}
+        cases.append({"status":status,"body":body,"headers":headers,"expected":expected,"request":calls[0]})
+    return cases
+
+
 async def main():
     normalization=[]
     inputs=[payload(),payload(thread_ts='100.000001'),payload(ts='100.000002',thread_ts='100.000001'),
@@ -138,7 +180,7 @@ async def main():
     _,python_complete=await SlackClient._pages(incomplete_page)
     paging_exception={"response":bad_page,"python_complete":python_complete,"rust_complete":False,
                       "reason":"has_more without a cursor cannot certify a complete pass"}
-    (ROOT/'tests/corpus/slack.json').write_text(json.dumps({'normalization':normalization,'catchup':captured,'paging_exception':paging_exception},sort_keys=True,separators=(',',':'))+'\n')
+    (ROOT/'tests/corpus/slack.json').write_text(json.dumps({'normalization':normalization,'catchup':captured,'paging_exception':paging_exception,'web':await capture_web()},sort_keys=True,separators=(',',':'))+'\n')
     print(f'Captured {len(normalization)} normalization cases and {len(captured)} catch-up scenarios.')
 
 if __name__=='__main__': asyncio.run(main())
