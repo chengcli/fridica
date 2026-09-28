@@ -1120,3 +1120,96 @@ async fn linked_recording_faults_fail_closed_before_or_after_http() {
         assert_eq!(h.store.call(|c| Ok(c.query_row("SELECT count(*) FROM replay_events WHERE kind='slack_http_call' AND complete=0", [], |r| r.get::<_, i64>(0))?)).await.unwrap(), i64::from(after));
     }
 }
+
+#[tokio::test]
+async fn onboarding_discovery_uses_only_fixed_read_endpoints_without_a_database() {
+    use crate::slack::discovery::{self, Web};
+    let server = Server::new().await;
+    server.json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}));
+    server.json(json!({"ok":true,"channels":[{"id":"CROOM","name":"general","is_member":true}],"response_metadata":{"next_cursor":"next +/?&="}}));
+    server.json(json!({"ok":true,"channels":[]}));
+    server.json(json!({"ok":false,"error":"missing_scope"}));
+    let mut web = Web::new("xoxp-onboarding-secret").unwrap();
+    web.test_endpoint(server.base.clone());
+    let found = discovery::discover(&web).await.unwrap();
+    assert_eq!(found.owner, "UOWNER");
+    assert_eq!(found.channels[0].id, "CROOM");
+    assert!(found.warnings[0].contains("groups:read"));
+    let calls = server.calls.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].path, "/api/auth.test");
+    assert!(calls[0].headers.starts_with("POST "));
+    for (index, private, cursor) in [(1, false, ""), (2, false, "next +/?&="), (3, true, "")] {
+        let url = Url::parse(&format!("http://fixture{}", calls[index].path)).unwrap();
+        assert_eq!(url.path(), "/api/conversations.list");
+        assert!(calls[index].headers.starts_with("GET "));
+        assert!(calls[index].body.is_empty());
+        let args: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(
+            serde_json::to_value(args).unwrap(),
+            json!({"types":if private {"private_channel"} else {"public_channel"},"exclude_archived":"true","limit":"200","cursor":cursor})
+        );
+        assert!(calls[index]
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer xoxp-onboarding-secret"));
+        assert!(!String::from_utf8_lossy(&calls[index].body).contains("secret"));
+    }
+}
+
+#[tokio::test]
+async fn onboarding_discovery_redacts_echoes_and_never_follows_redirects_or_retries() {
+    use crate::slack::discovery::{Api, Request, Web};
+    let server = Server::new().await;
+    let mut web = Web::new("xoxp-onboarding-secret").unwrap();
+    web.test_endpoint(server.base.clone());
+    server.json(
+        json!({"ok":true,"token":"xoxp-onboarding-secret","text":"echo xoxp-onboarding-secret"}),
+    );
+    let value = web.get(Request::Identity).await.unwrap();
+    assert!(!value.to_string().contains("xoxp-onboarding-secret"));
+    let mut redirect = Reply::json(json!({"private":"xoxp-onboarding-secret"}));
+    redirect.status = 302;
+    redirect.headers.push((
+        "location".into(),
+        "https://example.invalid/xoxp-onboarding-secret".into(),
+    ));
+    server.add(redirect);
+    assert_eq!(
+        web.get(Request::Identity).await.unwrap_err(),
+        Failure::InvalidResponse
+    );
+    server.json(json!({"ok":false,"error":"xoxp-onboarding-secret"}));
+    let error = web.get(Request::Identity).await.unwrap_err();
+    assert_eq!(
+        error,
+        Failure::Rejected {
+            code: "slack_api_error".into()
+        }
+    );
+    let mut rate = Reply::json(json!({"ok":false,"error":"ratelimited"}));
+    rate.status = 429;
+    rate.headers.push(("retry-after".into(), "2".into()));
+    server.add(rate);
+    assert_eq!(
+        web.get(Request::Identity).await.unwrap_err(),
+        Failure::RateLimited { retry_after: 2. }
+    );
+    let mut large = Reply::json(json!({}));
+    large.body = vec![b'x'; ENVELOPE_LIMIT + 1];
+    server.add(large);
+    assert_eq!(
+        web.get(Request::Identity).await.unwrap_err(),
+        Failure::ResponseLimit
+    );
+    assert_eq!(server.calls.lock().unwrap().len(), 5);
+    for bad in [
+        "xoxb-private",
+        "xapp-private",
+        "xoxp-",
+        "xoxp-private\nsecret",
+    ] {
+        let error = Web::new(bad).err().unwrap().to_string();
+        assert!(!error.contains(bad));
+    }
+}

@@ -102,7 +102,7 @@ impl Api {
         }
     }
 }
-struct Response {
+pub(super) struct Response {
     status: u16,
     retry_after: Option<String>,
     scopes: Option<String>,
@@ -477,7 +477,7 @@ fn scrub_bytes(value: &mut Vec<u8>, token: &[u8]) {
     }
     *value = clean;
 }
-fn redact(value: &mut Value, token: &str) {
+pub(super) fn redact(value: &mut Value, token: &str) {
     match value {
         Value::Object(map) => {
             for (key, value) in map {
@@ -500,7 +500,7 @@ fn redact(value: &mut Value, token: &str) {
         _ => (),
     }
 }
-async fn read(request: reqwest::RequestBuilder) -> Result<Response> {
+pub(super) async fn read(request: reqwest::RequestBuilder) -> Result<Response> {
     let failure = |e: reqwest::Error| {
         if e.is_timeout() {
             Failure::Timeout
@@ -600,7 +600,7 @@ fn http_failure(response: &Response) -> Failure {
         Failure::InvalidResponse
     }
 }
-fn decode(response: &Response) -> Result<Value> {
+pub(super) fn decode(response: &Response) -> Result<Value> {
     if response.status != 200 {
         return Err(http_failure(response));
     }

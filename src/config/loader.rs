@@ -563,7 +563,7 @@ pub fn resolve_path(path: &Path, base: &Path, home: &Path) -> Result<PathBuf> {
     }
     Ok(resolved)
 }
-fn slack_id(s: &str, prefixes: &str) -> bool {
+pub(crate) fn slack_id(s: &str, prefixes: &str) -> bool {
     s.len() > 1
         && s.is_ascii()
         && prefixes.as_bytes().contains(&s.as_bytes()[0])
@@ -574,7 +574,7 @@ fn slack_id(s: &str, prefixes: &str) -> bool {
 fn channel_ids(ids: &[String]) -> bool {
     ids.iter().all(|s| slack_id(s, "CG")) && ids.iter().collect::<HashSet<_>>().len() == ids.len()
 }
-fn env_name(s: &str) -> bool {
+pub(crate) fn env_name(s: &str) -> bool {
     !s.is_empty()
         && (s.as_bytes()[0].is_ascii_alphabetic() || s.starts_with('_'))
         && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')

@@ -2,6 +2,7 @@
 //! and owns serialization; this module never opens the database.
 use super::{loader, Config, LoadContext};
 use anyhow::{bail, Context, Result};
+use fs2::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{fs, io::Write, path::Path};
@@ -41,7 +42,7 @@ pub struct Prepared {
     pub before: String,
     source: String,
 }
-fn fingerprint(source: &str) -> String {
+pub(crate) fn fingerprint(source: &str) -> String {
     format!("{:x}", Sha256::digest(source.as_bytes()))
 }
 pub fn read(path: &Path) -> Result<String> {
@@ -119,27 +120,67 @@ impl Prepared {
     /// Atomic replacement plus file/directory durability. Recheck immediately
     /// before rename so an edit made since preparation is refused, not clobbered.
     pub fn commit(&self) -> Result<()> {
-        let path = &self.config.path;
-        let parent = path.parent().context("configuration has no directory")?;
-        let mut file = tempfile::Builder::new()
-            .prefix(".fridica-config-")
-            .tempfile_in(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file.as_file()
-                .set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
-        file.write_all(self.source.as_bytes())?;
-        file.as_file().sync_all()?;
-        if fingerprint(&read(path)?) != self.before {
-            bail!("configuration changed before replacement");
-        }
-        file.persist(path)?;
-        sync_directory(path)?;
-        Ok(())
+        replace(&self.config.path, &self.before, &self.source)
     }
 }
+/// Shared atomic replacement for live edits and offline setup snapshots.
+pub(crate) fn replace(path: &Path, before: &str, source: &str) -> Result<()> {
+    if source.len() > 1024 * 1024 {
+        bail!("edited configuration exceeds 1 MiB");
+    }
+    // Serialize Fridica writers across offline CLI and live runtime processes.
+    // Keep the lock file: unlinking it would let another writer lock a new inode.
+    let name = path
+        .file_name()
+        .context("configuration has no filename")?
+        .to_string_lossy();
+    let lock_path = path.with_file_name(format!(".{name}.edit.lock"));
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    let guard = options
+        .open(lock_path)
+        .context("configuration edit lock unavailable")?;
+    let metadata = guard.metadata()?;
+    if !metadata.is_file() {
+        bail!("configuration edit lock must be a private regular file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != users::get_current_uid() || metadata.mode() & 0o077 != 0 {
+            bail!("configuration edit lock must be private and owned by this user");
+        }
+    }
+    guard
+        .try_lock_exclusive()
+        .context("another Fridica configuration edit is in progress")?;
+    let parent = path.parent().context("configuration has no directory")?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".fridica-config-")
+        .tempfile_in(parent)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(source.as_bytes())?;
+    file.as_file().sync_all()?;
+    if fingerprint(&read(path)?) != before {
+        bail!("configuration changed before replacement");
+    }
+    file.persist(path)?;
+    sync_directory(path)?;
+    Ok(())
+}
+
 pub fn disk_fingerprint(path: &Path) -> Result<String> {
     Ok(fingerprint(&read(path)?))
 }

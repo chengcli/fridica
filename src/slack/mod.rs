@@ -1,4 +1,5 @@
 pub mod catchup;
+pub mod discovery;
 pub mod files;
 pub mod ingress;
 pub mod links;

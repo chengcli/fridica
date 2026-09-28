@@ -367,12 +367,16 @@
     {
       "python": "tests/test_cli.py::test_init_writes_template_and_contract_once",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_cli.py::test_configure_sets_ids_before_the_rest_is_complete",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_cli.py::test_doctor_checks_every_machine",
@@ -790,42 +794,58 @@
     {
       "python": "tests/test_discovery.py::test_discover_identity_pagination_and_missing_private_scope",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_private_channels",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_api_error_sanitization",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_bot_identity_rejected",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_channel_selection",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_discovery_reads_custom_token_without_valid_full_config",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_detect_cli_saves_ids_only_after_selection",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_discovery.py::test_detect_conflicting_options",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/setup.rs",
+      "coverage_scope": "Rust CLI init/manual configure, incomplete-config comment preservation, private atomic files, existing-owner assets, ID validation/deduplication, default paths, custom token-variable lookup, discovery pagination/membership/scopes, explicit selection, cancellation and changed-file refusal. tests/support/slack_web.rs verifies fixed auth/list HTTP methods, encoded cursors, credential redaction, response bounds and no redirects/retries. v0.4 uses its own attention/isolation template, bounded discovery and ASCII numeric selection; Python cases remain retained pending full parity. General doctor remains open."
     },
     {
       "python": "tests/test_doc_stats.py::test_collect_new_counts_a_small_database",

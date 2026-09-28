@@ -1,5 +1,6 @@
 pub mod approvals;
 pub mod attention;
+pub mod cli;
 pub mod config;
 pub mod control;
 pub mod core;

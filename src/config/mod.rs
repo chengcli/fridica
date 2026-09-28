@@ -6,6 +6,7 @@ pub mod loader;
 pub mod registry;
 pub mod repos;
 pub mod schema;
+pub mod setup;
 pub use loader::{load, LoadContext};
 pub use schema::Config;
 

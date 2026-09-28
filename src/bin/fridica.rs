@@ -18,6 +18,13 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Create an experimental starter configuration, contract and Slack manifest.
+    Init {
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Fill Slack identity and channel settings before the configuration is complete.
+    Configure(fridica::cli::setup::Configure),
     #[command(flatten)]
     Control(fridica::control::cli::Commands),
     /// Experimental Slack observer with owner-authenticated local controls.
@@ -73,7 +80,7 @@ enum Command {
         #[arg(long)]
         directory: PathBuf,
     },
-    /// Show the exact baseline assets used by this development build.
+    /// Show the embedded assets used by this development build.
     Assets {
         #[arg(long)]
         list: bool,
@@ -82,6 +89,23 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Init { config } => {
+            let context = fridica::config::LoadContext::current()?;
+            let path = fridica::config::setup::path(config.as_deref(), &context)?;
+            fridica::config::setup::init(&path)?;
+            println!(
+                "Created {}. Agent rules are in {}.",
+                path.display(),
+                path.parent().unwrap().join("contract.md").display()
+            );
+            println!("Next: fridica configure --detect, then complete workspaces and inventories, run fridica check-config and fridica start --check-ready. Active CLI startup remains gated.");
+        }
+        Command::Configure(options) => {
+            if let Err(error) = options.run(&fridica::config::LoadContext::current()?).await {
+                eprintln!("fridica: {error}");
+                std::process::exit(2);
+            }
+        }
         Command::Start {
             config,
             observe_only,
@@ -192,10 +216,7 @@ async fn main() -> Result<()> {
                     include_bytes!("../fridica/parent/contract.md"),
                 ),
                 ("repos.toml", include_bytes!("../fridica/parent/repos.toml")),
-                (
-                    "template.toml",
-                    include_bytes!("../fridica/config/template.toml"),
-                ),
+                ("template.toml", include_bytes!("../config/template.toml")),
                 ("manifest.yaml", include_bytes!("../../slack/manifest.yaml")),
                 (
                     "dashboard/index.html",
