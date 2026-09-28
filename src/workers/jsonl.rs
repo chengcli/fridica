@@ -179,6 +179,27 @@ impl Launcher for SystemLauncher {
                         self.environment.clone(),
                         spec.create_cwd(),
                     )
+                } else if command.first().is_some_and(|s| s == "codex")
+                    && command.get(1).is_some_and(|s| s == "app-server")
+                {
+                    self.isolation
+                        .mcp_startup(
+                            command,
+                            Some(&self.home),
+                            &spec.workspace.path,
+                            &spec.excluded_env,
+                            spec.create_cwd(),
+                        )
+                        .and_then(|command| {
+                            transport.launch(
+                                command,
+                                std::path::Path::new("/"),
+                                self.environment.clone(),
+                                &BTreeMap::new(),
+                                None,
+                                false,
+                            )
+                        })
                 } else {
                     transport.launch(
                         command,
@@ -204,6 +225,26 @@ impl Launcher for SystemLauncher {
                         self.environment.clone(),
                         spec.create_cwd(),
                     )
+                } else if command.first().is_some_and(|s| s == "codex")
+                    && command.get(1).is_some_and(|s| s == "app-server")
+                {
+                    self.isolation
+                        .mcp_startup(
+                            command,
+                            None,
+                            &spec.workspace.path,
+                            &spec.excluded_env,
+                            spec.create_cwd(),
+                        )
+                        .and_then(|command| {
+                            transport.launch(
+                                command,
+                                "/",
+                                self.environment.clone(),
+                                &BTreeMap::new(),
+                                LaunchOptions::default(),
+                            )
+                        })
                 } else {
                     transport.launch(
                         command,
@@ -966,6 +1007,11 @@ impl Session {
                     let stderr = self.stderr.lock().unwrap().clone();
                     self.recorder.record(self.call.context.clone(),json!({"direction":"eof","status":status.map(process::returncode),"stderr_tail":stderr,"incomplete":stderr.len()>=64*1024})).await?;
                     let detail = String::from_utf8_lossy(&stderr);
+                    if status.is_some_and(|s| process::returncode(s) == 97)
+                        && stderr == b"fridica worker MCP: setup refused\n"
+                    {
+                        return Err(WireError::refusal("worker_mcp_settings_refused"));
+                    }
                     if detail.contains("No conversation found with session ID")
                         || detail.contains("no rollout found for thread id")
                     {

@@ -22,9 +22,18 @@ use std::{
 };
 
 pub const HELPER: &str = concat!(
+    include_str!("settings_paths.py"),
+    "\n",
     include_str!("isolation_settings.py"),
     "\n",
     include_str!("isolation_helper.py")
+);
+const MCP_STARTUP: &str = concat!(
+    include_str!("settings_paths.py"),
+    "\n",
+    include_str!("isolation_settings.py"),
+    "\n",
+    include_str!("mcp_startup.py")
 );
 const BOOTSTRAP: &str = include_str!("isolation_bootstrap.py");
 #[derive(Clone, PartialEq, Eq)]
@@ -106,6 +115,40 @@ impl Isolation {
         );
         Ok(self)
     }
+    /// Target-side discovery for unrestricted Codex. No private-file inventory,
+    /// mount namespace, copied state, or credentialed discovery command is used.
+    pub fn mcp_startup(
+        &self,
+        command: Vec<String>,
+        home: Option<&Path>,
+        cwd: &Path,
+        excluded_env: &[String],
+        create: bool,
+    ) -> Result<Vec<String>> {
+        shell::validate(&command)?;
+        if command.first().map(String::as_str) != Some("codex")
+            || command.get(1).map(String::as_str) != Some("app-server")
+            || !cwd.to_str().is_some_and(remote_path)
+            || home.is_some_and(|p| !safe_path(p))
+        {
+            bail!("invalid Codex startup settings request");
+        }
+        let mut argv = vec![
+            "/usr/bin/python3".into(),
+            "-I".into(),
+            "-S".into(),
+            "-c".into(),
+            BOOTSTRAP.into(),
+            MCP_STARTUP.into(),
+            json!({"home":home,"workspace":cwd,"create":create,
+                   "excluded_env":excluded_env,"mcp_aliases":self.mcp_aliases,
+                   "mcp_urls":self.mcp_urls})
+            .to_string(),
+        ];
+        argv.extend(command);
+        Ok(argv)
+    }
+
     pub fn launch_remote(
         &self,
         transport: &SshTransport,

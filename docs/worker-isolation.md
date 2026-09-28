@@ -135,5 +135,41 @@ host bindings, control/config/rule paths, and MCP identities before publishing
 new configuration or changing approval policy. Rebuild the runtime adapters to
 apply those changes. This is a fail-closed restriction, not live isolation reload.
 
-Active CLI startup, unrestricted-worker MCP discovery and real backend conformance
-remain unfinished; see the [implementation status](v0.4-implementation-status.md).
+Unrestricted Codex workers now run a target-side settings helper before each
+backend process starts, locally and over SSH. It discovers Fridica aliases using
+the same bounded, no-follow parser as confinement, then appends
+`-c 'mcp_servers."alias".enabled=false'` overrides before executing `codex
+app-server`. It scans user/system/managed files, user profile files, and workspace
+ancestor `.codex/config.toml` files, using the execution target's home. An absolute
+custom `CODEX_HOME` is supported for unrestricted workers and retains its existing
+authentication and state. Claude keeps its existing `--strict-mcp-config` plus
+explicit empty `--mcp-config` and disabled settings sources.
+
+No discovery command or MCP executable runs during this scan. Registered aliases
+and URL identities also apply to unrestricted Codex; other MCP servers, model
+settings, backend authentication, session storage and ordinary filesystem/network
+policies stay in place. Owner configuration files are neither rewritten nor copied.
+Malformed, oversized or linked source files refuse startup with a fixed diagnostic;
+when the helper exits 97 with its exact refusal marker, the runtime records
+`worker_mcp_settings_refused` as a refusal, without execution retry. This scan
+happens at backend launch, after any scoped fetch; it is not a namespace admission
+probe. Warm processes retain their original startup configuration, and each new
+process scans again.
+
+The Codex helper requires system Python with TOML support (3.11+). It starts at
+`/usr/bin/python3`, with fixed versioned `/usr/bin/python3.14` through `python3.11`
+fallbacks. On macOS it also checks versioned Python installations under
+`/opt/homebrew/bin` and `/usr/local/bin`; it never searches worker `PATH` for the
+helper interpreter. Linux behavior is fixture-tested here; macOS and actual
+backend versions still need deployment conformance checks.
+
+Unrestricted workers remain in the trusted-owner model: they can still read
+owner files and deliberately invoke tools themselves. This startup scan is not
+credential isolation or a guarantee against concurrent settings changes. External
+and cloud-delivered sources not represented by the scanned files still require
+explicit identity provisioning and target validation. Active CLI startup, complete
+configuration-source coverage and real backend conformance remain unfinished;
+see the [implementation status](v0.4-implementation-status.md).
+
+The override behavior follows the official [configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic)
+and [MCP settings](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) documentation.

@@ -33,8 +33,9 @@ with pathlib.Path(os.environ['PARENT_LOG']).open('a') as log:
     log.write(json.dumps({'prompt':prompt,'argv':sys.argv})+'\n')
 schema=json.loads(sys.argv[sys.argv.index('--json-schema')+1])
 action={'decision':'respond'} if 'decision' in schema['properties'] else json.loads(os.environ['PARENT_ACTION'])
-if 'worker_isolation_settings_refused' in prompt:
-    action={'reply':{'text':'Worker refused: worker_isolation_settings_refused','status':'complete'}}
+for code in ['worker_isolation_settings_refused', 'worker_mcp_settings_refused']:
+    if code in prompt:
+        action={'reply':{'text':'Worker refused: '+code,'status':'complete'}}
 print(json.dumps({'is_error':False,'structured_output':action}))
 "#;
 const GH: &str = r#"#!/usr/bin/python3
@@ -588,4 +589,42 @@ async fn composition_rejects_stale_mcp_options_before_recovery_mutates_state() {
     );
     assert!(!f.dir.path().join("parent.log").exists());
     assert!(!f.dir.path().join("worker.log").exists());
+}
+
+#[tokio::test]
+async fn unrestricted_mcp_settings_refusal_is_durable_without_backend_start_or_retry() {
+    let f = Fixture::new().await;
+    std::fs::create_dir(f.dir.path().join("home/.codex")).unwrap();
+    std::fs::write(
+        f.dir.path().join("home/.codex/config.toml"),
+        "malformed private-source",
+    )
+    .unwrap();
+    let runtime = f
+        .start(Mode::Active(Box::new(
+            f.execution("Run checks".into(), false),
+        )))
+        .await;
+    f.receive(&runtime).await;
+    assert_eq!(runtime.pass().await.unwrap().started, 1);
+    f.wait_for(
+        "SELECT count(*) FROM jobs WHERE status='failed' AND error='worker_mcp_settings_refused'",
+        1,
+    )
+    .await;
+    assert_eq!(f.scalar("SELECT count(*) FROM jobs").await, 1);
+    assert_eq!(f.scalar("SELECT attempt FROM jobs").await, 1);
+    assert!(!f.dir.path().join("worker.log").exists());
+    runtime.pass().await.unwrap();
+    assert!(f
+        .slack
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|p| p.post.text.contains("worker_mcp_settings_refused")));
+    assert!(!serde_json::to_string(&*f.slack.sent.lock().unwrap())
+        .unwrap()
+        .contains("private-source"));
+    runtime.close().await.unwrap();
 }

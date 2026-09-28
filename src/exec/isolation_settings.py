@@ -6,26 +6,32 @@ an inventory of arbitrary credential copies, external includes or opaque wrapper
 """
 
 
-def settings_snapshots(home, workspace, masks, state, request, environment, command):
+def settings_snapshots(home, workspace, masks, state, request, environment, command, *, codex_only=False):
     import datetime
     import math
     import tomllib
     from urllib.parse import urlsplit, urlunsplit
 
-    # Custom state roots need their own private-file and writable-mount inventory.
-    for key, expected in [("CODEX_HOME", home + "/.codex"),
-                          ("CLAUDE_CONFIG_DIR", home + "/.claude")]:
-        if key in environment and path(environment[key]) != expected:
-            raise Refused()
+    codex_home = home + "/.codex"
+    if codex_only:
+        # Unrestricted workers retain custom backend state/authentication roots.
+        # Discovery still validates the path and reads only supported layers.
+        codex_home = path(environment.get("CODEX_HOME", codex_home))
+    else:
+        # Confined custom state roots require a writable-mount inventory.
+        for key, expected in [("CODEX_HOME", codex_home),
+                              ("CLAUDE_CONFIG_DIR", home + "/.claude")]:
+            if key in environment and path(environment[key]) != expected:
+                raise Refused()
 
     limit = 1024 * 1024
-    candidates = {
-        home + "/.codex/config.toml", home + "/.claude.json",
-        home + "/.claude/settings.json", home + "/.claude/settings.local.json",
-        "/etc/codex/config.toml", "/etc/codex/managed_config.toml",
-    }
+    candidates = {codex_home + "/config.toml", "/etc/codex/config.toml",
+                  "/etc/codex/managed_config.toml"}
+    if not codex_only:
+        candidates.update({home + "/.claude.json", home + "/.claude/settings.json",
+                           home + "/.claude/settings.local.json"})
     try:
-        fd = directory(home + "/.codex")
+        fd = directory(codex_home)
     except FileNotFoundError:
         fd = None
     try:
@@ -36,15 +42,16 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
                     if count >= 4096:
                         raise Refused()
                     if entry.name.endswith(".config.toml"):
-                        candidates.add(home + "/.codex/" + entry.name)
+                        candidates.add(codex_home + "/" + entry.name)
     finally:
         if fd is not None:
             os.close(fd)
+    suffixes = ["/.codex/config.toml"]
+    if not codex_only:
+        suffixes += ["/.mcp.json", "/.claude/settings.json", "/.claude/settings.local.json"]
     ancestor = workspace
     while True:
-        candidates.update(ancestor.rstrip("/") + suffix for suffix in (
-            "/.codex/config.toml", "/.mcp.json", "/.claude/settings.json",
-            "/.claude/settings.local.json"))
+        candidates.update(ancestor.rstrip("/") + suffix for suffix in suffixes)
         if ancestor == "/":
             break
         ancestor = os.path.dirname(ancestor)
@@ -161,6 +168,9 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         visit(document)
     if len(aliases) > 128:
         raise Refused()
+
+    if codex_only:
+        return [], sorted(aliases)
 
     def toml(value, depth=0):
         if depth > 64:
