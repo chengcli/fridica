@@ -5,6 +5,7 @@ pub mod core;
 pub mod exec;
 pub mod machines;
 pub mod overseer;
+pub mod parent;
 pub mod report;
 pub mod slack;
 pub mod store;

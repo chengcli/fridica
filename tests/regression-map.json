@@ -996,27 +996,37 @@
     {
       "python": "tests/test_parent_llm.py::test_claude_call_is_tool_less_and_stateless",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Frozen stateless CLI commands, output envelopes and bounded context; real fake-CLI subprocesses through the actor cover triage, cooldowns, repair, tool-attempt rejection, private files, deadlines/cancellation, recording failures and owner-pause races. Stricter malformed/error stream rejections are declared per fixture. Live model calls, complete parent action/prompt compatibility and full daemon parity remain unverified; Python tests are retained."
     },
     {
       "python": "tests/test_parent_llm.py::test_claude_failures[exit-status 2]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Frozen stateless CLI commands, output envelopes and bounded context; real fake-CLI subprocesses through the actor cover triage, cooldowns, repair, tool-attempt rejection, private files, deadlines/cancellation, recording failures and owner-pause races. Stricter malformed/error stream rejections are declared per fixture. Live model calls, complete parent action/prompt compatibility and full daemon parity remain unverified; Python tests are retained."
     },
     {
       "python": "tests/test_parent_llm.py::test_claude_failures[error-reported an error]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Frozen stateless CLI commands, output envelopes and bounded context; real fake-CLI subprocesses through the actor cover triage, cooldowns, repair, tool-attempt rejection, private files, deadlines/cancellation, recording failures and owner-pause races. Stricter malformed/error stream rejections are declared per fixture. Live model calls, complete parent action/prompt compatibility and full daemon parity remain unverified; Python tests are retained."
     },
     {
       "python": "tests/test_parent_llm.py::test_claude_failures[tools-tools]",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Frozen stateless CLI commands, output envelopes and bounded context; real fake-CLI subprocesses through the actor cover triage, cooldowns, repair, tool-attempt rejection, private files, deadlines/cancellation, recording failures and owner-pause races. Stricter malformed/error stream rejections are declared per fixture. Live model calls, complete parent action/prompt compatibility and full daemon parity remain unverified; Python tests are retained."
     },
     {
       "python": "tests/test_parent_llm.py::test_codex_call_and_tool_detection",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Frozen stateless CLI commands, output envelopes and bounded context; real fake-CLI subprocesses through the actor cover triage, cooldowns, repair, tool-attempt rejection, private files, deadlines/cancellation, recording failures and owner-pause races. Stricter malformed/error stream rejections are declared per fixture. Live model calls, complete parent action/prompt compatibility and full daemon parity remain unverified; Python tests are retained."
     },
     {
       "python": "tests/test_policy.py::test_gate[msg0-session0-options0-expected0]",
@@ -1401,7 +1411,9 @@
     {
       "python": "tests/test_scenarios.py::test_unaddressed_messages_are_triaged_with_a_channel_cooldown",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Frozen stateless CLI commands, output envelopes and bounded context; real fake-CLI subprocesses through the actor cover triage, cooldowns, repair, tool-attempt rejection, private files, deadlines/cancellation, recording failures and owner-pause races. Stricter malformed/error stream rejections are declared per fixture. Live model calls, complete parent action/prompt compatibility and full daemon parity remain unverified; Python tests are retained."
     },
     {
       "python": "tests/test_scenarios.py::test_clarification_loop_pauses_after_three_questions",

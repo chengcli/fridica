@@ -151,6 +151,8 @@ impl<P: Parent> Actor<P> {
             .unwrap_or(0)
             .saturating_add(1);
         let mut verdict = "respond: owner instruction or attention due".to_owned();
+        let mut calls = Vec::new();
+        let mut unsolicited = false;
         let trigger = if worker_result {
             turn = request.session["turns"].as_u64().unwrap_or(0);
             request.trigger["origin"]["class"]
@@ -179,8 +181,17 @@ impl<P: Parent> Actor<P> {
                 turns: request.session["turns"].as_u64().unwrap_or(0),
                 reset_at: request.session["reset_at"].as_f64().unwrap_or(0.),
                 ts: m["ts"].as_str().unwrap_or("0").parse()?,
-                general_messages: false,
-                cooling: false,
+                general_messages: self
+                    .config
+                    .as_ref()
+                    .is_some_and(|c| c.slack.general_messages),
+                cooling: request.session["last_unsolicited"]
+                    .as_f64()
+                    .is_some_and(|last| {
+                        self.config
+                            .as_ref()
+                            .is_some_and(|c| self.clock.now() - last < c.slack.cooldown)
+                    }),
                 observe_only: false,
                 resumed: request.trigger["payload"]["resumed"] == true,
             };
@@ -194,19 +205,45 @@ impl<P: Parent> Actor<P> {
                 return Ok(Step::Observed);
             }
             if outcome.kind == "triage" {
-                // General-message triage is not ported yet. Retain this item for
-                // the next runtime stage rather than silently changing its verdict.
-                let now = self.clock.now();
-                self.store
-                    .call(move |c| {
-                        c.execute(
-                            "UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",
-                            params![now + 60., id],
-                        )?;
-                        Ok(())
-                    })
-                    .await?;
-                return Ok(Step::Unsupported);
+                request.call = "triage".into();
+                let (raw, call) = self.call(&request).await?;
+                calls.push(call);
+                let choice = raw
+                    .as_ref()
+                    .and_then(|r| r.as_object())
+                    .filter(|r| r.len() == 1)
+                    .and_then(|r| r.get("decision"))
+                    .and_then(Value::as_str)
+                    .filter(|s| matches!(*s, "respond" | "observe" | "ignore"))
+                    .unwrap_or("observe");
+                if choice != "respond" {
+                    return settle_triage(
+                        &self.store,
+                        id,
+                        session,
+                        request,
+                        format!("{choice}: triage"),
+                        calls,
+                        self.clock.now(),
+                    )
+                    .await;
+                }
+                // Avoid another external call after a pause/resume changed the
+                // decision context while triage was in flight.
+                if !current(&self.store, id, &session, &request).await? {
+                    return settle_triage(
+                        &self.store,
+                        id,
+                        session,
+                        request,
+                        "observe: stale triage".into(),
+                        calls,
+                        self.clock.now(),
+                    )
+                    .await;
+                }
+                verdict = format!("respond: {}", outcome.reason);
+                unsolicited = gate.turns == 0;
             }
             if request.trigger["payload"]["owner_trigger"] == true {
                 "owner"
@@ -229,7 +266,6 @@ impl<P: Parent> Actor<P> {
         {
             return Ok(Step::Deferred);
         }
-        let mut calls = Vec::new();
         let reply_limit = self.config.as_ref().map_or(7000, |c| c.limits.reply_chars);
         let mut result = if worker_result {
             super::results::direct(
@@ -247,30 +283,10 @@ impl<P: Parent> Actor<P> {
                 break;
             }
             request.call = if round == 0 { "decide" } else { "repair" }.into();
-            let started = self.clock.now();
-            let encoded = serde_json::to_string(&request)?;
-            let call_id=self.store.call(move|c| {
-                c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_call',?,?,0)",params![started,encoded])?;
-                Ok(c.last_insert_rowid())
-            }).await?;
-            let response =
-                tokio::time::timeout(self.parent_timeout, self.parent.decide(request.clone()))
-                    .await;
-            let (raw, error, failure) = match response {
-                Ok(Ok(value)) => (Some(value), None, None),
-                Ok(Err(failure)) => (None, Some("parent_unavailable"), Some(failure)),
-                Err(_) => (None, Some("parent_timeout"), None),
-            };
+            let (raw, call) = self.call(&request).await?;
             let now = self.clock.now();
-            let outcome = json!({"call_id":call_id,"response":raw,"error":error,"failure":failure});
-            self.store.call(move|c| {
-                let tx=c.transaction()?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?",[call_id])?;
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('parent_result',?,?)",params![now,outcome.to_string()])?;
-                tx.commit()?;Ok(())
-            }).await?;
             let raw = raw.ok_or_else(|| anyhow!("parent call failed"))?;
-            calls.push(json!({"request":request,"response":raw,"created":now}));
+            calls.push(call);
             match validate(&raw, &request, now, reply_limit).and_then(|d| {
                 super::delegation::prepare(&d, &request, self.config.as_deref(), None)?;
                 Ok(d)
@@ -305,8 +321,45 @@ impl<P: Parent> Actor<P> {
             &self.owner,
             self.clock.now(),
             self.limits.streak_signal,
+            if unsolicited {
+                self.config.as_ref().map(|c| c.slack.cooldown)
+            } else {
+                None
+            },
         )
         .await
+    }
+    async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
+        let started = self.clock.now();
+        let encoded = serde_json::to_string(request)?;
+        let call_id=self.store.call(move|c| {
+            c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_call',?,?,0)",params![started,encoded])?;
+            Ok(c.last_insert_rowid())
+        }).await?;
+        let response =
+            tokio::time::timeout(self.parent_timeout, self.parent.decide(request.clone())).await;
+        let (raw, error, failure) = match response {
+            Ok(Ok(value)) => (Some(value), None, None),
+            Ok(Err(failure)) => (None, Some("parent_unavailable"), Some(failure)),
+            Err(_) => (None, Some("parent_timeout"), None),
+        };
+        let now = self.clock.now();
+        let outcome = json!({"call_id":call_id,"response":raw,"error":error,"failure":failure});
+        self.store
+            .call(move |c| {
+                let tx = c.transaction()?;
+                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [call_id])?;
+                tx.execute(
+                    "INSERT INTO replay_events(kind,time,payload_json) VALUES('parent_result',?,?)",
+                    params![now, outcome.to_string()],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+        let call =
+            json!({"request":request,"response":raw,"error":error,"failure":failure,"created":now});
+        Ok((raw, call))
     }
 }
 
@@ -331,6 +384,8 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let mut session_data:Value=serde_json::from_str(&data)?;
         session_data["work"]=work::context_tx(&tx,&session)?;
+        let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![session_data["workspace"].as_str(),session_data["channel"].as_str()],|r|r.get(0))?;
+        session_data["last_unsolicited"]=json!(last);
         if matches!(kind.as_str(),"worker_result"|"worker_interrupted") {
             let snapshot=super::results::load(&tx,&session,&reference)?;
             for (key,value) in snapshot.as_object().context("invalid result snapshot")? {trigger[key]=value.clone();}
@@ -430,6 +485,7 @@ async fn commit(
     owner: &str,
     now: f64,
     signal: usize,
+    cooldown: Option<f64>,
 ) -> Result<Step> {
     let owner = owner.to_owned();
     let sql_turn = i64::try_from(turn).context("turn counter exceeds supported range")?;
@@ -443,6 +499,14 @@ async fn commit(
             tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
             tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
             tx.commit()?;return Ok(Step::Stale);
+        }
+        if let Some(cooldown)=cooldown.filter(|_|decision.reply.is_some()) {
+            let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![request.session["workspace"].as_str(),request.session["channel"].as_str()],|r|r.get(0))?;
+            if let Some(last)=last.filter(|last|now-last<cooldown) {
+                tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![last+cooldown,id])?;
+                tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
+                tx.commit()?;return Ok(Step::Deferred);
+            }
         }
         let mut waiting=request.session["wait_streak"].as_i64().unwrap_or(0);
         let mut quiet=request.session["no_progress"].as_i64().unwrap_or(0)+1;
@@ -461,6 +525,9 @@ async fn commit(
                 tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).unwrap_or(""),post])?;
                 if is_result {tx.execute("UPDATE outbox SET kind='report' WHERE id=?",[post])?;}
                 super::results::attachments(&tx, &request, reply, &session, id, now)?;
+                if cooldown.is_some() {
+                    tx.execute("INSERT OR REPLACE INTO cooldowns(workspace,channel,last_unsolicited) VALUES(?,?,?)",params![request.session["workspace"].as_str(),request.session["channel"].as_str(),now])?;
+                }
                 quiet=if candidate==hash {quiet}else{0};hash=candidate;
                 waiting=if matches!(reply.status,ReplyStatus::Waiting) {waiting+1}else{0};
                 status=reply.status.as_str().into();
@@ -525,5 +592,39 @@ async fn defer(store: &Store, id: i64, until: f64) -> Result<()> {
     store.call(move |c| {
         c.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=? AND state='processing'",params![until,id])?;
         Ok(())
+    }).await
+}
+
+async fn current(store: &Store, id: i64, session: &str, request: &ParentRequest) -> Result<bool> {
+    let session = session.to_owned();
+    let version = request.session["version"].as_i64();
+    store.call(move|c|Ok(c.query_row("SELECT control='active' AND version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![version,id,session],|r|r.get(0))?)).await
+}
+async fn settle_triage(
+    store: &Store,
+    id: i64,
+    session: String,
+    request: ParentRequest,
+    verdict: String,
+    calls: Vec<Value>,
+    now: f64,
+) -> Result<Step> {
+    store.call(move|c|{
+        let tx=c.transaction()?;
+        let current:bool=tx.query_row("SELECT control='active' AND version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![request.session["version"].as_i64(),id,session],|r|r.get(0))?;
+        if !current {
+            tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
+            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
+            tx.commit()?;return Ok(Step::Stale);
+        }
+        for call in calls {
+            tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,created) VALUES(?,?,'adapter','triage','{}',?,?,?)",params![session,id,call["response"].to_string(),call["request"].to_string(),call["created"].as_f64()])?;
+        }
+        tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,request.trigger["message"]["event_id"].as_str()])?;
+        tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
+        tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
+        tx.execute("UPDATE threads SET version=version+1,updated=? WHERE id=?",params![now,session])?;
+        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('triage_commit',?,?)",params![now,json!({"inbox_id":id,"verdict":verdict}).to_string()])?;
+        tx.commit()?;Ok(Step::Observed)
     }).await
 }
