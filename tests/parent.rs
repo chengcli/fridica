@@ -81,6 +81,7 @@ fn frozen_commands_envelopes_and_context_budgets_match_with_declared_rejections(
 }
 fn request(call: &str) -> ParentRequest {
     ParentRequest {
+        linked: vec![],
         inbox_id: 1,
         call: call.into(),
         session: json!({"id":SESSION,"channel":"CROOM","work":{"workers":[],"busy":{}},"machines":[],"status":"new"}),
@@ -895,7 +896,7 @@ async fn own_uploads_and_duplicate_shares_do_not_occupy_attachment_download_slot
     assert_eq!(view("manual")["text"], "- old\n+ new\n");
 }
 #[tokio::test]
-async fn attachment_reads_are_skipped_for_triage_observe_and_owner_pause() {
+async fn context_reads_are_skipped_for_triage_observe_and_owner_pause() {
     for mode in ["ignore", "observe", "pause", "repair"] {
         let h = Harness::new(
             "claude",
@@ -905,11 +906,12 @@ async fn attachment_reads_are_skipped_for_triage_observe_and_owner_pause() {
         )
         .await;
         let downloads = Arc::new(AttachmentDownloads::default());
+        let reader = Arc::new(LinkedReads::default());
         let base = h.actor();
         let actor = Actor {
             config: base.config,
             store: base.store,
-            parent: Arc::new(attachment_parent(&h, downloads.clone())),
+            parent: Arc::new(attachment_parent(&h, downloads.clone()).with_links(reader.clone())),
             clock: base.clock,
             ids: base.ids,
             owner: base.owner,
@@ -921,9 +923,9 @@ async fn attachment_reads_are_skipped_for_triage_observe_and_owner_pause() {
             .intake(
                 1,
                 if mode == "ignore" {
-                    "For your information"
+                    "For your information https://t.slack.com/archives/CROOM/p200000001"
                 } else {
-                    "<@UOWNER> review"
+                    "<@UOWNER> review https://t.slack.com/archives/CROOM/p200000001"
                 },
             )
             .await;
@@ -967,7 +969,9 @@ async fn attachment_reads_are_skipped_for_triage_observe_and_owner_pause() {
             usize::from(mode == "repair"),
             "{mode}"
         );
+        assert_eq!(*reader.calls.lock().unwrap(), usize::from(mode == "repair"));
         if mode == "ignore" {
+            assert_eq!(last_prompt(&h)["linked"], json!([]));
             assert!(last_prompt(&h)["trigger"]["message"]
                 .get("attachments")
                 .is_none());
@@ -1089,4 +1093,135 @@ async fn slow_optional_files_do_not_consume_the_models_response_deadline() {
     };
     assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
     assert_eq!(h.scalar("SELECT state FROM outbox").await, "pending");
+}
+
+#[derive(Default)]
+struct LinkedReads {
+    calls: std::sync::Mutex<usize>,
+    fail: std::sync::atomic::AtomicBool,
+}
+impl fridica::slack::links::Reader for LinkedReads {
+    fn fetch(
+        &self,
+        link: fridica::slack::links::Link,
+    ) -> fridica::core::delivery::AdapterFuture<
+        '_,
+        Result<Vec<fridica::slack::links::Entry>, fridica::slack::links::Failure>,
+    > {
+        Box::pin(async move {
+            *self.calls.lock().unwrap() += 1;
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(fridica::slack::links::Failure::Recording);
+            }
+            Ok(vec![fridica::slack::links::Entry {
+                sender: "UBOB".into(),
+                text: "the linked spec".into(),
+                ts: link.ts,
+            }])
+        })
+    }
+}
+fn linked_request() -> ParentRequest {
+    let mut r = attachment_request();
+    r.trigger["message"]["text"] = json!("https://t.slack.com/archives/CROOM/p200000001");
+    r
+}
+#[tokio::test]
+async fn linked_context_and_attachments_share_snapshot_reused_after_adapter_restart() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let downloads = Arc::new(AttachmentDownloads::default());
+    let reader = Arc::new(LinkedReads::default());
+    let parent = attachment_parent(&h, downloads.clone()).with_links(reader.clone());
+    let mut r = linked_request();
+    parent.decide(r.clone()).await.unwrap();
+    let prompt = last_prompt(&h);
+    assert_eq!(
+        prompt["linked"],
+        json!([{"link":"https://t.slack.com/archives/CROOM/p200000001","sender":"UBOB","text":"the linked spec"}])
+    );
+    assert_eq!(
+        prompt["trigger"]["message"]["attachments"][0]["text"],
+        "- old\n+ new\n"
+    );
+    drop(parent);
+    reader.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    downloads
+        .recording_failure
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let parent = attachment_parent(&h, downloads.clone()).with_links(reader.clone());
+    r.call = "repair".into();
+    parent.decide(r.clone()).await.unwrap();
+    assert_eq!(last_prompt(&h)["linked"], prompt["linked"]);
+    assert_eq!(*reader.calls.lock().unwrap(), 1);
+    assert_eq!(downloads.calls.lock().unwrap().len(), 1);
+    let mut changed_config = (*h.config).clone();
+    changed_config.slack.channels.push("COTHER".into());
+    let changed = parent::attachments::WithAttachments::new(
+        h.parent.clone(),
+        downloads,
+        Arc::new(changed_config),
+        h.store.clone(),
+        h.clock.clone(),
+    )
+    .with_links(reader);
+    assert_eq!(
+        changed.decide(r.clone()).await.unwrap_err().code,
+        "parent_context_snapshot_missing"
+    );
+    r.trigger["message"]["text"] = json!("changed");
+    assert_eq!(
+        parent.decide(r).await.unwrap_err().code,
+        "parent_context_snapshot_missing"
+    );
+}
+#[tokio::test]
+async fn linked_recording_failure_prevents_parent_and_leaves_context_unfinished() {
+    for kind in [
+        "parent_attachment_call",
+        "parent_attachment_result",
+        "reader",
+    ] {
+        let h = Harness::new("claude", FAKE, "ok", 5.).await;
+        let downloads = Arc::new(AttachmentDownloads::default());
+        let reader = Arc::new(LinkedReads::default());
+        if kind == "reader" {
+            reader.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        } else {
+            h.store.call(move |c| { c.execute_batch(&format!("CREATE TRIGGER fail_context BEFORE INSERT ON replay_events WHEN NEW.kind='{kind}' BEGIN SELECT RAISE(ABORT,'private detail'); END;"))?; Ok(()) }).await.unwrap();
+        }
+        let parent = attachment_parent(&h, downloads).with_links(reader.clone());
+        assert_eq!(
+            parent.decide(linked_request()).await.unwrap_err().code,
+            "parent_context_recording_failed"
+        );
+        assert!(!h.dir.path().join("log").exists());
+        assert_eq!(
+            *reader.calls.lock().unwrap(),
+            usize::from(kind != "parent_attachment_call")
+        );
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_attachment_result'").await, "0");
+    }
+}
+#[tokio::test]
+async fn linked_context_rejects_wrong_scope_and_skips_non_message_reads() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let reader = Arc::new(LinkedReads::default());
+    let parent =
+        attachment_parent(&h, Arc::new(AttachmentDownloads::default())).with_links(reader.clone());
+    for field in ["workspace", "channel"] {
+        let mut r = linked_request();
+        r.session[field] = json!("OTHER");
+        assert_eq!(
+            parent.decide(r).await.unwrap_err().code,
+            "parent_context_scope"
+        );
+    }
+    for kind in ["worker_result", "control"] {
+        let mut r = linked_request();
+        r.trigger["kind"] = json!(kind);
+        r.linked = vec![json!({"text":"stale context"})];
+        parent.decide(r).await.unwrap();
+        assert_eq!(last_prompt(&h)["linked"], json!([]));
+    }
+    assert_eq!(*reader.calls.lock().unwrap(), 0);
 }

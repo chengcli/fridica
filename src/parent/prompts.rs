@@ -39,7 +39,7 @@ pub fn build(
         history.drain(..history.len() - 15);
     }
     let data = json!({"now":request.session["now"],"owner_id":config.owner.slack_user,"profile":config.owner.profile,"repositories":repositories,
-        "session":request.session,"trigger":trigger,"history":history,"obligations":request.obligations,
+        "session":request.session,"trigger":trigger,"history":history,"obligations":request.obligations,"linked":request.linked,
         "machines":request.session["machines"],"workers":request.session["work"]["workers"],
         "delegation_allowed":request.session["channel"].as_str().is_some_and(|c|config.slack.may_delegate(c)),
         "limits":{"reply_chars":config.limits.reply_chars,"max_delegations":config.limits.max_delegations_per_turn,"max_workers":config.limits.max_workers_per_thread},

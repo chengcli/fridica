@@ -56,6 +56,14 @@ impl CliParent {
         let (config, store, clock) = (self.config.clone(), self.store.clone(), self.clock.clone());
         attachments::WithAttachments::new(Arc::new(self), files, config, store, clock)
     }
+    pub fn with_slack_context<
+        D: crate::slack::files::Downloader + crate::slack::links::Reader + 'static,
+    >(
+        self,
+        slack: Arc<D>,
+    ) -> attachments::WithAttachments<Self, D> {
+        self.with_attachments(slack.clone()).with_links(slack)
+    }
     pub fn new(config: Arc<Config>, store: Store, clock: Arc<dyn Clock>, options: Options) -> Self {
         Self {
             config,

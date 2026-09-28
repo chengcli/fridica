@@ -686,6 +686,46 @@ impl History for WebClient {
         })
     }
 }
+impl super::links::Reader for WebClient {
+    fn fetch(
+        &self,
+        link: super::links::Link,
+    ) -> AdapterFuture<'_, std::result::Result<Vec<super::links::Entry>, super::links::Failure>>
+    {
+        Box::pin(async move {
+            let operation = async {
+                self.scope(&link.channel)?;
+                if !super::links::timestamp(&link.ts)
+                    || link
+                        .root
+                        .as_deref()
+                        .is_some_and(|s| !super::links::timestamp(s))
+                {
+                    return Err(Failure::Configuration);
+                }
+                let body = json!({
+                    "channel":link.channel,
+                    "ts":link.root.as_deref().unwrap_or(&link.ts),
+                    "limit":super::links::REPLY_LIMIT,
+                });
+                let context = json!({"operation":"linked_message","target":link.ts});
+                let response = decode(&self.api(Api::Replies, body, Some(context)).await?)?;
+                let messages = response["messages"]
+                    .as_array()
+                    .ok_or(Failure::InvalidResponse)?;
+                Ok(super::links::select(messages, &link.ts))
+            }
+            .await;
+            operation.map_err(|error| {
+                if matches!(error, Failure::Recording) {
+                    super::links::Failure::Recording
+                } else {
+                    super::links::Failure::Unavailable
+                }
+            })
+        })
+    }
+}
 #[cfg(test)]
 #[path = "../../tests/support/slack_web.rs"]
 mod tests;

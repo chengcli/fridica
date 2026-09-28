@@ -1571,7 +1571,9 @@
     {
       "python": "tests/test_scenarios.py::test_linked_messages_reach_the_parent",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/links.rs",
+      "coverage_scope": "Frozen permalink, fetch selection and linked-context projections with explicit ASCII/length/page-limit hardening exceptions. Parent fake-CLI and HTTP fault coverage in tests/parent.rs and tests/support/slack_web.rs verifies scoped fixed routes, durable repair snapshots, shared preparation deadlines and owner-pause/observe-only gates. Other render helpers and full daemon/CLI parity remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_scenarios.py::test_closing_or_cleaning_a_thread_stops_its_workers[close]",
@@ -1682,7 +1684,9 @@
     {
       "python": "tests/test_slack.py::test_render_helpers",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/links.rs",
+      "coverage_scope": "Frozen permalink, fetch selection and linked-context projections with explicit ASCII/length/page-limit hardening exceptions. Parent fake-CLI and HTTP fault coverage in tests/parent.rs and tests/support/slack_web.rs verifies scoped fixed routes, durable repair snapshots, shared preparation deadlines and owner-pause/observe-only gates. Other render helpers and full daemon/CLI parity remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response0-RateLimited]",

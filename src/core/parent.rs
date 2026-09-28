@@ -10,6 +10,8 @@ pub struct ParentRequest {
     pub trigger: Value,
     pub history: Vec<Value>,
     pub obligations: Vec<Value>,
+    #[serde(default)]
+    pub linked: Vec<Value>,
     pub previous: Option<Value>,
     pub errors: Vec<String>,
 }

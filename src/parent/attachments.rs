@@ -1,4 +1,4 @@
-//! Read attachment context after triage, with durable snapshots reused for repair.
+//! Read attachment and optional linked context after triage; reuse snapshots for repair.
 //! This decorator holds the Slack adapter; the model/worker adapters never do.
 use crate::{
     config::Config,
@@ -7,7 +7,10 @@ use crate::{
         parent::{Parent, ParentFailure, ParentRequest},
         time::Clock,
     },
-    slack::files::{self, Downloader},
+    slack::{
+        files::{self, Downloader},
+        links,
+    },
     store::Store,
 };
 use rusqlite::{params, OptionalExtension};
@@ -22,6 +25,7 @@ pub struct WithAttachments<P: Parent, D: Downloader> {
     store: Store,
     clock: Arc<dyn Clock>,
     timeout: Duration,
+    links: Option<Arc<dyn links::Reader>>,
 }
 fn failure(code: &str) -> ParentFailure {
     ParentFailure { code: code.into() }
@@ -46,10 +50,17 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             store,
             clock,
             timeout: Duration::from_secs(30),
+            links: None,
         }
     }
+    /// Add linked messages to the same preparation budget and durable snapshot.
+    pub fn with_links(mut self, reader: Arc<dyn links::Reader>) -> Self {
+        self.links = Some(reader);
+        self
+    }
     async fn prepare(&self, mut request: ParentRequest) -> Result<ParentRequest, ParentFailure> {
-        // No file I/O for triage, worker-result summaries or owner control calls.
+        request.linked.clear();
+        // No external context I/O for triage, worker results or owner controls.
         if !matches!(request.call.as_str(), "decide" | "repair")
             || request.trigger["kind"] != "message"
         {
@@ -70,7 +81,7 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
         }
         let mut messages = vec![request.trigger["message"].clone()];
         messages.extend(request.history.iter().rev().cloned());
-        let input = json!({"session":request.session["id"],"version":request.session["version"],"inbox":request.inbox_id,"messages":messages});
+        let input = json!({"session":request.session["id"],"version":request.session["version"],"inbox":request.inbox_id,"messages":messages,"links":self.links.is_some(),"context_version":2,"scope":{"workspace":self.config.slack.workspace,"channels":self.config.slack.channels,"owner":self.config.owner.slack_user}});
         let key = format!("{:x}", Sha256::digest(input.to_string().as_bytes()));
         let context = if request.call == "repair" {
             let raw=self.store.call(move|c|Ok(c.query_row("SELECT json_extract(payload_json,'$.context') FROM replay_events WHERE kind='parent_attachment_result' AND complete=1 AND json_extract(payload_json,'$.key')=? ORDER BY seq DESC LIMIT 1",[key],|r|r.get::<_,String>(0)).optional()?)).await.map_err(|_|failure("parent_context_recording_failed"))?;
@@ -105,9 +116,30 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
                 tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_attachment_call',?,?,0)",params![now,json!({"key":call_key,"source":input,"own":own}).to_string()])?;
                 let call=tx.last_insert_rowid();tx.commit()?;Ok((call,own))
             }).await.map_err(|_|failure("parent_context_recording_failed"))?;
-            let mut views = files::read(self.files.as_ref(), &messages, &own, self.timeout)
-                .await
-                .map_err(|_| failure("parent_context_recording_failed"))?;
+            // Independent reads share the actor's 30-second allowance, so neither
+            // consumes the model deadline nor doubles the preparation budget.
+            let linked = async {
+                match &self.links {
+                    Some(reader) => {
+                        links::read(
+                            reader.as_ref(),
+                            &self.config.slack.channels,
+                            request.session["channel"].as_str().unwrap(),
+                            request.session["root_ts"].as_str().unwrap_or(""),
+                            &messages,
+                            self.timeout,
+                        )
+                        .await
+                    }
+                    None => Ok(vec![]),
+                }
+            };
+            let (views, linked) = tokio::join!(
+                files::read(self.files.as_ref(), &messages, &own, self.timeout),
+                linked
+            );
+            let mut views = views.map_err(|_| failure("parent_context_recording_failed"))?;
+            let linked = linked.map_err(|_| failure("parent_context_recording_failed"))?;
             let mut trigger = request.trigger.clone();
             let mut history = request.history.clone();
             let trigger_id = trigger["message"]["event_id"]
@@ -126,10 +158,10 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
                     }
                 }
             }
-            // Persist exactly the rendered attachment snapshot. The parent's
-            // existing context budget applies after this step and is recorded
-            // with its transport prompt. Never replace the raw stored messages.
-            let context = json!({"trigger":trigger,"history":history});
+            // Persist the rendered attachment and linked-message snapshot.
+            // Attachment budgets also apply when building the transport prompt;
+            // linked text has its own budget. Never replace raw stored messages.
+            let context = json!({"trigger":trigger,"history":history,"linked":linked});
             let record = json!({"call":call,"key":key,"context":context});
             let now = self.clock.now();
             self.store.call(move|c|{let tx=c.transaction()?;
@@ -140,6 +172,8 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
         };
         request.trigger = context["trigger"].clone();
         request.history = serde_json::from_value(context["history"].clone())
+            .map_err(|_| failure("parent_context_snapshot_invalid"))?;
+        request.linked = serde_json::from_value(context["linked"].clone())
             .map_err(|_| failure("parent_context_snapshot_invalid"))?;
         Ok(request)
     }

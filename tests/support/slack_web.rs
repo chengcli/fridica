@@ -8,6 +8,7 @@ use crate::{
     slack::{catchup::Catchup, outbox::Dispatcher, receiver::Receiver},
     store::outbox,
 };
+use sha2::Digest;
 use std::{collections::VecDeque, sync::Mutex};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -1005,5 +1006,117 @@ async fn file_timeouts_partial_bodies_and_cancellation_never_claim_complete_byte
             );
         }
         assert_eq!(h.store.call(|c|Ok(c.query_row("SELECT count(*) FROM replay_events WHERE kind='slack_file_call' AND complete=0",[],|r|r.get::<_,i64>(0))?)).await.unwrap(),1);
+    }
+}
+
+fn linked_target() -> crate::slack::links::Link {
+    crate::slack::links::Link {
+        // Deliberately hostile: this label must never become an HTTP destination.
+        link: "https://evil.invalid/steal".into(),
+        channel: "CROOM".into(),
+        ts: "201.000001".into(),
+        root: Some("200.000001".into()),
+    }
+}
+#[tokio::test]
+async fn linked_fetch_uses_fixed_routes_scope_and_bounded_selection() {
+    use crate::slack::links::{Failure as LinkFailure, Reader};
+    let h = Harness::new(Duration::from_secs(2)).await;
+    assert_eq!(
+        h.web.fetch(linked_target()).await,
+        Err(LinkFailure::Unavailable)
+    );
+    assert!(h.server.calls.lock().unwrap().is_empty());
+    h.ready().await;
+    let mut forbidden = linked_target();
+    forbidden.channel = "COTHER".into();
+    assert_eq!(h.web.fetch(forbidden).await, Err(LinkFailure::Unavailable));
+    let mut invalid = linked_target();
+    invalid.root = Some("200.1&channel=COTHER".into());
+    assert_eq!(h.web.fetch(invalid).await, Err(LinkFailure::Unavailable));
+    assert_eq!(h.server.calls.lock().unwrap().len(), 2);
+    let corpus: Value = serde_json::from_str(include_str!("../corpus/links.json")).unwrap();
+    for case in corpus["fetch"].as_array().unwrap() {
+        let mut link = linked_target();
+        link.ts = case["ts"].as_str().unwrap().into();
+        link.root = case["root"].as_str().map(str::to_owned);
+        h.server.json(json!({"ok":true,"messages":case["messages"],"response_metadata":{"next_cursor":"do-not-follow"}}));
+        let output = json!(h.web.fetch(link).await.unwrap());
+        let hash = format!(
+            "{:x}",
+            sha2::Sha256::digest(serde_json::to_vec(&output).unwrap())
+        );
+        assert_eq!(
+            hash,
+            case.get("rust_sha256")
+                .unwrap_or(&case["sha256"])
+                .as_str()
+                .unwrap()
+        );
+        let calls = h.server.calls.lock().unwrap();
+        let request = calls.last().unwrap();
+        let url = h.server.base.join(&request.path).unwrap();
+        assert_eq!(url.path(), "/api/conversations.replies");
+        let params: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(params.len(), 3);
+        assert_eq!(params["channel"], "CROOM");
+        assert_eq!(params["limit"], "51");
+        assert_eq!(params["ts"], case["calls"][0]["ts"].as_str().unwrap());
+        assert!(request.body.is_empty());
+    }
+    let ledger = h.ledger().await;
+    assert!(ledger.contains("linked_message"));
+    assert!(!ledger.contains("xoxp-private-test-secret"));
+    assert!(!ledger.contains("evil.invalid"));
+}
+#[tokio::test]
+async fn linked_fetch_failures_are_bounded_visible_and_never_retried() {
+    use crate::slack::links::{Failure as LinkFailure, Reader};
+    let h = Harness::new(Duration::from_millis(50)).await;
+    h.ready().await;
+    let mut rate = Reply::json(json!({"ok":false,"error":"ratelimited"}));
+    rate.status = 429;
+    rate.headers.push(("retry-after".into(), "60".into()));
+    let mut hanging = Reply::json(json!({}));
+    hanging.hang = true;
+    let mut partial = Reply::json(json!({"ok":true,"messages":[]}));
+    partial.truncated = true;
+    for reply in [
+        Reply::json(json!({"ok":false,"error":"channel_not_found"})),
+        Reply::json(json!({"ok":true,"messages":3})),
+        rate,
+        partial,
+        hanging,
+    ] {
+        let before = h.server.calls.lock().unwrap().len();
+        h.server.add(reply);
+        assert_eq!(
+            h.web.fetch(linked_target()).await,
+            Err(LinkFailure::Unavailable)
+        );
+        assert_eq!(h.server.calls.lock().unwrap().len(), before + 1);
+    }
+}
+#[tokio::test]
+async fn linked_recording_faults_fail_closed_before_or_after_http() {
+    use crate::slack::links::{Failure as LinkFailure, Reader};
+    for after in [false, true] {
+        let h = Harness::new(Duration::from_secs(2)).await;
+        h.ready().await;
+        let kind = if after {
+            "slack_http_result"
+        } else {
+            "slack_http_call"
+        };
+        h.store.call(move |c| { c.execute_batch(&format!("CREATE TRIGGER fail_links BEFORE INSERT ON replay_events WHEN NEW.kind='{kind}' BEGIN SELECT RAISE(ABORT,'private SQL error'); END;"))?; Ok(()) }).await.unwrap();
+        if after {
+            h.server.json(json!({"ok":true,"messages":[]}));
+        }
+        assert_eq!(
+            h.web.fetch(linked_target()).await,
+            Err(LinkFailure::Recording)
+        );
+        assert_eq!(h.server.calls.lock().unwrap().len(), 2 + usize::from(after));
+        assert_eq!(h.store.call(|c| Ok(c.query_row("SELECT count(*) FROM replay_events WHERE kind='slack_http_call' AND complete=0", [], |r| r.get::<_, i64>(0))?)).await.unwrap(), i64::from(after));
     }
 }
