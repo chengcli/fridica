@@ -1993,3 +1993,188 @@ async fn historical_backfill_and_closure_require_owner_authority_and_preserve_ow
     assert!(h.sink.calls.lock().unwrap().is_empty());
     h.runtime.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn parent_memory_is_validated_merged_bounded_and_available_on_next_turn() {
+    let mut action = delegate();
+    action["context"] = json!({"machine":"not-configured","workspace":"project"});
+    action["note"] = json!({"repo":"new-repo","blocker":"new blocker"});
+    action["decisions"] = json!(["new decision"]);
+    let mut valid = action.clone();
+    valid["context"] =
+        json!({"machine":"local","workspace":"project","repo":"owner/repo","branch":"feature"});
+    // Legacy delegate spelling remains accepted; placement cannot discard repo/branch.
+    valid["delegate"] = valid
+        .as_object_mut()
+        .unwrap()
+        .remove("delegations")
+        .unwrap();
+    let h=Harness::new(vec![action,valid,json!({"reply":{"send":false,"text":"","status":"complete"},"note":{"next_step":"Review"}})],false).await;
+    h.intake(false).await;
+    let old: Vec<_> = (0..20).map(|n| format!("decision {n}")).collect();
+    h.store.call(move|c| {c.execute("UPDATE threads SET decisions_json=?",[json!(old).to_string()])?;
+        c.execute("INSERT INTO notes(session_id,revision,actor,data_json,created) VALUES(?,1,'owner',?,10)",rusqlite::params![SESSION,json!({"repo":"old","assignee":"Alice","custom":"retain"}).to_string()])?;Ok(())}).await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(h.parent.calls.lock().unwrap()[1].call, "repair");
+    assert_eq!(h.scalar("SELECT json_extract(context_json,'$.repo')||'/'||json_extract(context_json,'$.branch') FROM threads").await,"owner/repo/feature");
+    assert_eq!(h.scalar("SELECT json_array_length(decisions_json)||':'||json_extract(decisions_json,'$[0]')||':'||json_extract(decisions_json,'$[19]') FROM threads").await,"20:decision 1:new decision");
+    assert_eq!(
+        h.scalar("SELECT data_json FROM notes ORDER BY revision DESC LIMIT 1")
+            .await,
+        json!({"repo":"new-repo","assignee":"Alice","custom":"retain","blocker":"new blocker"})
+            .to_string()
+    );
+    h.runtime
+        .instruct(
+            SESSION.into(),
+            "Update the next step".into(),
+            "memory-update-1".into(),
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    {
+        let calls = h.parent.calls.lock().unwrap();
+        assert_eq!(calls[2].session["notes"]["revision"], 2);
+        assert_eq!(calls[2].session["notes"]["data"]["assignee"], "Alice");
+        assert_eq!(calls[2].session["decisions"][19], "new decision");
+    }
+    assert_eq!(h.sink.calls.lock().unwrap().len(), 1);
+    assert_eq!(h.scalar("SELECT json_extract(data_json,'$.next_step') FROM notes ORDER BY revision DESC LIMIT 1").await,"Review");
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn blocked_note_replaces_stale_assignments_and_unsent_answers_require_repair() {
+    let h=Harness::new(vec![json!({"reply":{"text":"Blocked.","status":"blocked"},"note":{"blocker":"Need access"}})],false).await;
+    h.intake(false).await;
+    h.store.call(|c| {c.execute("INSERT INTO notes(session_id,revision,actor,data_json,created) VALUES(?,1,'owner',?,10)",rusqlite::params![SESSION,json!({"repo":"keep","assignee":"Alice","next_step":"Old","blocker":"Old"}).to_string()])?;Ok(())}).await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT data_json FROM notes ORDER BY revision DESC LIMIT 1")
+            .await,
+        json!({"repo":"keep","assignee":"","next_step":"","blocker":"Need access"}).to_string()
+    );
+    let obligation = h.scalar("SELECT id FROM obligations").await;
+    h.parent.responses.lock().unwrap().extend([json!({"reply":{"send":false,"text":"","status":"complete","answers":[obligation]},"note":{"repo":"must not commit"}}),json!({"note":{"next_step":"Ask owner"}})]);
+    h.runtime
+        .instruct(
+            SESSION.into(),
+            "Record next step".into(),
+            "blocked-memory".into(),
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap()[2].call, "repair");
+    assert_eq!(h.scalar("SELECT state FROM obligations").await, "open");
+    assert_eq!(
+        h.scalar(
+            "SELECT json_extract(data_json,'$.repo') FROM notes ORDER BY revision DESC LIMIT 1"
+        )
+        .await,
+        "keep"
+    );
+    assert_eq!(h.sink.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn owner_note_edit_fences_all_late_parent_effects() {
+    let h=Harness::new(vec![json!({"reply":{"text":"Done","status":"complete"},"note":{"assignee":"Model"},"summary":"late","decisions":["late"]})],false).await;
+    h.intake(false).await;
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    let runtime = h.runtime.clone();
+    let pass = tokio::spawn(async move { runtime.pass().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.parent.calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/notes"),
+            json!({"expected":0,"data":{"assignee":"Owner choice"}}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    gate.add_permits(1);
+    pass.await.unwrap().unwrap();
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    assert_eq!(h.scalar("SELECT state FROM thread_inbox").await, "pending");
+    assert_eq!(
+        h.scalar("SELECT decisions_json||summary FROM threads")
+            .await,
+        "[]"
+    );
+    assert_eq!(
+        h.scalar(
+            "SELECT json_extract(data_json,'$.assignee') FROM notes ORDER BY revision DESC LIMIT 1"
+        )
+        .await,
+        "Owner choice"
+    );
+}
+
+#[tokio::test]
+async fn debrief_in_flight_is_fenced_by_owner_pause_or_clean() {
+    for clean in [false, true] {
+        let h = Harness::new(
+            vec![
+                json!({"reply":{"text":"Finished","status":"complete","discussion":"finished"}}),
+                json!({"debrief":"Late closing text"}),
+            ],
+            false,
+        )
+        .await;
+        h.intake(false).await;
+        let gate = Arc::new(Semaphore::new(1));
+        *h.parent.gate.lock().unwrap() = Some(gate.clone());
+        let runtime = h.runtime.clone();
+        let pass = tokio::spawn(async move { runtime.pass().await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while h.parent.calls.lock().unwrap().len() < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        h.runtime
+            .control(
+                SESSION.into(),
+                if clean {
+                    Control::Clean
+                } else {
+                    Control::Pause {
+                        reason: "Hold".into(),
+                    }
+                },
+                Authority::Owner,
+            )
+            .await
+            .unwrap();
+        gate.add_permits(1);
+        pass.await.unwrap().unwrap();
+        assert_eq!(
+            h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE kind='debrief_root'")
+                .await,
+            "0"
+        );
+        assert_eq!(
+            h.scalar("SELECT CAST(debriefed_turn AS TEXT) FROM threads")
+                .await,
+            "0"
+        );
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM reply_reservations WHERE state='reserved' AND outbox_id IS NULL").await,"0");
+    }
+}

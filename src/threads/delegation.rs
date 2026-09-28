@@ -27,7 +27,10 @@ pub(super) fn prepare(
     config: Option<&Config>,
     ids: Option<&dyn Identifiers>,
 ) -> Result<Work> {
-    let mut work = Work::default();
+    let mut work = Work {
+        context: super::effects::context(decision, request, config)?,
+        ..Work::default()
+    };
     if decision.delegations.is_empty() {
         return Ok(work);
     }
@@ -132,7 +135,8 @@ pub(super) fn prepare(
                 worker.id = ids.next("worker");
                 work.workers.push(worker.clone());
                 if !worker.ephemeral {
-                    work.context = json!({"machine":worker.machine,"workspace":worker.workspace});
+                    work.context["machine"] = json!(worker.machine);
+                    work.context["workspace"] = json!(worker.workspace);
                 }
             }
             work.jobs.push(serde_json::from_value(json!({"id":ids.next("job"),"worker_id":worker.id,

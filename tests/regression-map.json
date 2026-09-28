@@ -1093,7 +1093,9 @@
     {
       "python": "tests/test_parent_agent.py::test_context_and_controls_are_validated",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/runtime_flow.rs",
+      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Legacy parent worker controls and complete differential action parity remain open; Python regression is retained."
     },
     {
       "python": "tests/test_parent_agent.py::test_decide_repairs_once_then_drops",
@@ -1108,7 +1110,9 @@
     {
       "python": "tests/test_parent_agent.py::test_debrief_and_worker_instructions",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Separate durable debrief turns preserve the closing header, root route, reply dependency and duplicate prevention. Fixtures cover ambiguous prerequisites, durable throttling/recovery, newer-turn fencing, observe-only, pause and unavailable/invalid parent results; tests/runtime_flow.rs covers in-flight pause/clean and tests/parent.rs exercises both fake CLI adapters with a strict debrief schema. New attention reservations and stale-turn guards are intentional differences; full differential/live parity remains open. Python regression is retained."
     },
     {
       "python": "tests/test_parent_agent.py::test_decide_prompt_carries_data_not_instructions",
@@ -1268,7 +1272,8 @@
       "python": "tests/test_policy.py::test_advance_counts_turns_and_merges_context",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
-      "related_rust_coverage": "tests/replay.rs"
+      "related_rust_coverage": "tests/runtime_flow.rs",
+      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Legacy parent worker controls and complete differential action parity remain open; Python regression is retained."
     },
     {
       "python": "tests/test_policy.py::test_advance_pauses_loops_and_stalls",
@@ -1460,7 +1465,9 @@
     {
       "python": "tests/test_replies.py::test_two_identical_decisions_leave_one_outbox_row",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Duplicate replies are suppressed; correction notes permit repeats and acknowledgements advance no-progress streaks without automatic pauses. All legacy repost wording and Unicode hash equivalence remain unverified; Python regression is retained."
     },
     {
       "python": "tests/test_replies.py::test_an_at_mention_or_repost_request_still_gets_the_same_text",
@@ -1470,7 +1477,9 @@
     {
       "python": "tests/test_replies.py::test_a_correction_and_different_text_are_never_suppressed",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Duplicate replies are suppressed; correction notes permit repeats and acknowledgements advance no-progress streaks without automatic pauses. All legacy repost wording and Unicode hash equivalence remain unverified; Python regression is retained."
     },
     {
       "python": "tests/test_replies.py::test_identical_questions_pause_the_thread_instead_of_repeating",
@@ -1559,7 +1568,9 @@
     {
       "python": "tests/test_scenarios.py::test_finished_discussion_gets_a_channel_debrief",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Separate durable debrief turns preserve the closing header, root route, reply dependency and duplicate prevention. Fixtures cover ambiguous prerequisites, durable throttling/recovery, newer-turn fencing, observe-only, pause and unavailable/invalid parent results; tests/runtime_flow.rs covers in-flight pause/clean and tests/parent.rs exercises both fake CLI adapters with a strict debrief schema. New attention reservations and stale-turn guards are intentional differences; full differential/live parity remains open. Python regression is retained."
     },
     {
       "python": "tests/test_scenarios.py::test_long_reply_and_details_are_uploaded_after_the_reply",
@@ -1657,7 +1668,9 @@
     {
       "python": "tests/test_scenarios.py::test_debrief_is_its_own_step_and_follows_the_reply",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Separate durable debrief turns preserve the closing header, root route, reply dependency and duplicate prevention. Fixtures cover ambiguous prerequisites, durable throttling/recovery, newer-turn fencing, observe-only, pause and unavailable/invalid parent results; tests/runtime_flow.rs covers in-flight pause/clean and tests/parent.rs exercises both fake CLI adapters with a strict debrief schema. New attention reservations and stale-turn guards are intentional differences; full differential/live parity remains open. Python regression is retained."
     },
     {
       "python": "tests/test_scenarios.py::test_observe_only_never_posts_leftovers_or_reports_results",
@@ -1868,7 +1881,9 @@
     {
       "python": "tests/test_store.py::test_notes_are_revisioned",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/runtime_flow.rs",
+      "coverage_scope": "Parent context/note/decision edits validate before a single repair, merge atomically with replies/jobs, retain the latest 20 decisions, reset stale blocked assignments, expose notes to the next turn and fence concurrent owner note changes. tests/actors.rs covers note-write rollback and field bounds. Legacy parent worker controls and complete differential action parity remain open; Python regression is retained."
     },
     {
       "python": "tests/test_store.py::test_failed_prerequisites_block_dependents_visibly_and_retry_unblocks",

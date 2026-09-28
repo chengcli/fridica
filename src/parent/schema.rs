@@ -13,9 +13,12 @@ fn strings() -> Value {
 pub fn triage() -> Value {
     object(json!({"decision":{"type":"string","enum":["ignore","observe","respond"]}}))
 }
+pub fn debrief() -> Value {
+    object(json!({"debrief":string()}))
+}
 pub fn decision() -> Value {
     let reply = object(
-        json!({"text":string(),"details":string(),"status":{"type":"string","enum":["complete","waiting","blocked"]},"answers":strings()}),
+        json!({"send":{"type":"boolean"},"discussion":{"type":"string","enum":["ongoing","finished"]},"text":string(),"details":string(),"status":{"type":"string","enum":["complete","waiting","blocked"]},"answers":strings()}),
     );
     let delegation = object(
         json!({"brief":string(),"worker_id":string(),"machine":string(),"workspace":string(),"backend":string(),"tags":strings(),"role":{"type":"string","enum":["general","implementer","reviewer","tester"]},"ephemeral":{"type":"boolean"},"deliverable":{"type":"string","enum":["report","markdown","figures_pdf"]},"fetch_repo":string(),"fetch_ref":string()}),
@@ -28,6 +31,8 @@ pub fn decision() -> Value {
     );
     object(
         json!({"reply":{"anyOf":[reply,{"type":"null"}]},"delegations":{"type":"array","items":delegation},"summary":string(),
+        "context":object(json!({"machine":string(),"workspace":string(),"repo":string(),"branch":string()})),
+        "note":object(json!({"kind":{"type":"string","enum":["result","question","status","ack","correction"]},"repo":string(),"assignee":string(),"next_step":string(),"blocker":string()})),"decisions":strings(),
         "dispositions":{"type":"array","items":{"anyOf":[declined,deferred]}},"asks":{"type":"array","items":object(json!({"summary":string(),"due":{"type":"number"}}))},"reopen_blocked":{"type":"boolean"}}),
     )
 }

@@ -639,3 +639,330 @@ async fn owner_resume_reuses_pending_message_and_resets_only_the_intended_histor
         "1"
     );
 }
+
+#[tokio::test]
+async fn debrief_is_separate_ordered_and_never_answers_an_obligation() {
+    use fridica::store::outbox;
+    for failed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path().join("db")).await.unwrap();
+        intake(&s, 1).await;
+        let p = Arc::new(Script::new(vec![
+            json!({"reply":{"text":"Finished.","status":"complete","discussion":"finished"}}),
+            json!({"debrief":"The requested review is complete."}),
+        ]));
+        let a = actor(&s, p.clone());
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+        let reply = outbox::claim(&s, 20.).await.unwrap().unwrap();
+        if failed {
+            outbox::complete(
+                &s,
+                reply,
+                DeliveryOutcome::Ambiguous {
+                    code: "timeout".into(),
+                },
+                "UOWNER".into(),
+                20.,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Idle);
+        assert_eq!(p.requests.lock().unwrap()[1].call, "debrief");
+        assert_eq!(scalar(&s, "SELECT state FROM obligations").await, "open");
+        assert_eq!(
+            scalar(&s, "SELECT CAST(debriefed_turn AS TEXT) FROM threads").await,
+            "1"
+        );
+        assert!(outbox::claim(&s, 21.).await.unwrap().is_none());
+        if failed {
+            assert_eq!(
+                scalar(&s, "SELECT state FROM outbox WHERE kind='debrief_root'").await,
+                "blocked"
+            );
+        } else {
+            let reply = s
+                .call(|c| {
+                    Ok(
+                        c.query_row("SELECT id FROM outbox WHERE kind='reply'", [], |r| {
+                            r.get::<_, i64>(0)
+                        })?,
+                    )
+                })
+                .await
+                .unwrap();
+            // Delivery confirmation is the only operation which unblocks the debrief.
+            attention::delivered(&s, reply, "200.1".into(), 21.)
+                .await
+                .unwrap();
+            let debrief = outbox::claim(&s, 21.).await.unwrap().unwrap();
+            assert_eq!(debrief.post.kind, "debrief_root");
+            assert_eq!(debrief.post.thread_ts, None);
+            assert_eq!(
+                debrief.post.text,
+                "Debrief: this discussion is finished.\n\nThe requested review is complete."
+            );
+            outbox::complete(
+                &s,
+                debrief,
+                DeliveryOutcome::Sent {
+                    reference: "200.2".into(),
+                },
+                "UOWNER".into(),
+                21.,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                scalar(
+                    &s,
+                    "SELECT CAST(count(*) AS TEXT) FROM reply_reservations WHERE state='sent'"
+                )
+                .await,
+                "2"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn debrief_deferral_survives_restart_and_respects_newer_work() {
+    for superseded in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path().join("db")).await.unwrap();
+        intake(&s, 1).await;
+        let p = Arc::new(Script::new(vec![
+            json!({"reply":{"text":"Finished.","status":"complete","discussion":"finished"}}),
+            json!({"debrief":"Done."}),
+        ]));
+        let mut a = actor(&s, p.clone());
+        a.limits.max_replies_per_hour = 1;
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+        let reply = fridica::store::outbox::claim(&s, 20.)
+            .await
+            .unwrap()
+            .unwrap();
+        fridica::store::outbox::complete(
+            &s,
+            reply,
+            DeliveryOutcome::Sent {
+                reference: "200.1".into(),
+            },
+            "UOWNER".into(),
+            20.,
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Deferred);
+        assert_eq!(p.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            scalar(
+                &s,
+                "SELECT printf('%.0f',not_before) FROM thread_inbox WHERE kind='debrief'"
+            )
+            .await,
+            "3620"
+        );
+        // Reconstruct the actor after crash recovery; the due time stays durable.
+        fridica::threads::actor::recover(&s).await.unwrap();
+        let ids = a.ids.clone();
+        a = actor(&s, p.clone());
+        a.ids = ids;
+        a.limits.max_replies_per_hour = 1;
+        a.clock = Arc::new(ReplayClock::new(3621.));
+        if superseded {
+            s.call(|c| {
+                c.execute("UPDATE threads SET turns=2,version=version+1", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            a.step(SESSION.into()).await.unwrap(),
+            if superseded {
+                Step::Observed
+            } else {
+                Step::Committed
+            }
+        );
+        assert_eq!(
+            p.requests.lock().unwrap().len(),
+            if superseded { 1 } else { 2 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn debrief_observe_pause_and_invalid_response_produce_no_post_or_retry() {
+    for mode in ["observe", "pause", "invalid", "unavailable"] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path().join("db")).await.unwrap();
+        intake(&s, 1).await;
+        let mut responses =
+            vec![json!({"reply":{"text":"Finished.","status":"complete","discussion":"finished"}})];
+        if mode == "invalid" {
+            responses.push(json!({"debrief":"","reply":"not allowed"}));
+        }
+        let p = Arc::new(Script::new(responses));
+        let mut a = actor(&s, p.clone());
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+        if mode == "observe" {
+            a.observe_only = true;
+        }
+        if mode == "pause" {
+            controls::apply(
+                &s,
+                SESSION.into(),
+                Control::Pause {
+                    reason: "Hold".into(),
+                },
+                Authority::Owner,
+                21.,
+            )
+            .await
+            .unwrap();
+        }
+        a.step(SESSION.into()).await.unwrap();
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Idle);
+        assert_eq!(
+            scalar(
+                &s,
+                "SELECT CAST(count(*) AS TEXT) FROM outbox WHERE kind='debrief_root'"
+            )
+            .await,
+            "0"
+        );
+        assert_eq!(scalar(&s,"SELECT CAST(count(*) AS TEXT) FROM reply_reservations WHERE outbox_id IS NULL AND state='reserved'").await,"0");
+        assert_eq!(
+            p.requests.lock().unwrap().len(),
+            if matches!(mode, "invalid" | "unavailable") {
+                2
+            } else {
+                1
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn corrections_bypass_duplicate_suppression_and_acknowledgements_count_as_stalls() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    let reply = json!({"reply":{"text":"Waiting.","status":"waiting"}});
+    let mut correction = reply.clone();
+    correction["note"] = json!({"kind":"correction"});
+    let p = Arc::new(Script::new(vec![
+        reply.clone(),
+        reply,
+        correction,
+        json!({"reply":{"text":"Understood.","status":"complete"},"note":{"kind":"ack"}}),
+    ]));
+    let a = actor(&s, p);
+    for n in 1..=4 {
+        intake(&s, n).await;
+        s.call(|c| {
+            c.execute("UPDATE messages SET text='Follow-up'", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        if n == 1 {
+            s.call(|c| {
+                c.execute("UPDATE messages SET text='<@UOWNER> help'", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    }
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "3"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT CAST(no_progress AS TEXT) FROM threads").await,
+        "3"
+    );
+    assert_eq!(scalar(&s, "SELECT control FROM threads").await, "active");
+    assert_eq!(
+        scalar(
+            &s,
+            "SELECT CAST(count(*) AS TEXT) FROM obligations WHERE kind='signal'"
+        )
+        .await,
+        "1"
+    );
+}
+
+#[tokio::test]
+async fn invalid_memory_is_repaired_and_note_fault_rolls_back_the_whole_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    intake(&s, 1).await;
+    let p = Arc::new(Script::new(vec![
+        json!({"note":{"next_step":"x".repeat(1001)}}),
+        json!({"reply":{"text":"Done","status":"complete"},"note":{"next_step":"Review"},"context":{"repo":"owner/repo"},"decisions":["Use this"],"summary":"Finished"}),
+    ]));
+    s.call(|c| {c.execute_batch("CREATE TRIGGER fail_parent_note BEFORE INSERT ON notes BEGIN SELECT RAISE(ABORT,'note fault'); END;")?;Ok(())}).await.unwrap();
+    assert_eq!(
+        actor(&s, p.clone()).step(SESSION.into()).await.unwrap(),
+        Step::Failed
+    );
+    {
+        let requests = p.requests.lock().unwrap();
+        assert_eq!(requests[1].call, "repair");
+        assert!(requests[1].errors[0].contains("1000"));
+    }
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
+    assert_eq!(
+        scalar(
+            &s,
+            "SELECT decisions_json||summary||context_json FROM threads"
+        )
+        .await,
+        "[]{}"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM notes").await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn suppressing_a_duplicate_blocked_notice_keeps_the_existing_assignment() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    intake(&s, 1).await;
+    let p = Arc::new(Script::new(vec![
+        json!({"reply":{"text":"Blocked.","status":"blocked"},"note":{"blocker":"Need access","assignee":"Alice","next_step":"Grant access"}}),
+        json!({"reply":{"text":"Blocked.","status":"blocked"}}),
+    ]));
+    let a = actor(&s, p);
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    s.call(|c| {
+        c.execute("UPDATE obligations SET due=20", [])?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    attention::sweep(&s, 20.).await.unwrap();
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "1"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM notes").await,
+        "1"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT json_extract(data_json,'$.assignee') FROM notes").await,
+        "Alice"
+    );
+}

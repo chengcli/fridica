@@ -5,7 +5,7 @@ use crate::{
     attention::{self, Answer, Capacity},
     config::{Attention, Config},
     core::{
-        parent::{Decision, Disposition, Parent, ParentRequest, ReplyStatus},
+        parent::{Decision, Disposition, NoteKind, Parent, ParentRequest, ReplyStatus},
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
@@ -92,6 +92,9 @@ impl<P: Parent> Actor<P> {
                 worker_result.then(|| self.clock.now() + 60.),
             )
             .await;
+        }
+        if kind == "debrief" {
+            return super::debrief::handle(self, request).await;
         }
         if worker_result
             && (request.trigger["pending"] == true
@@ -329,7 +332,7 @@ impl<P: Parent> Actor<P> {
         )
         .await
     }
-    async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
+    pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
         let started = self.clock.now();
         let encoded = serde_json::to_string(request)?;
         let call_id=self.store.call(move|c| {
@@ -387,6 +390,11 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
         let obligations:Vec<String>=tx.prepare("SELECT json_object('id',id,'kind',kind,'summary',summary,'due',due,'state',state,'disposition',json(state_json),'source',json(source_json),'deliveries',json((SELECT COALESCE(json_group_array(json_object('id',p.outbox_id,'state',o.state,'error',o.error)), '[]') FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id))) FROM obligations WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery') ORDER BY created,id")?
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let mut session_data:Value=serde_json::from_str(&data)?;
+        let (revision, notes)=super::effects::notes(&tx,&session)?;
+        session_data["notes"]=json!({"revision":revision,"data":notes});
+        let (decisions,debriefed):(String,i64)=tx.query_row("SELECT decisions_json,debriefed_turn FROM threads WHERE id=?",[&session],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        session_data["decisions"]=serde_json::from_str(&decisions)?;
+        session_data["debriefed_turn"]=json!(debriefed);
         session_data["work"]=work::context_tx(&tx,&session)?;
         let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![session_data["workspace"].as_str(),session_data["channel"].as_str()],|r|r.get(0))?;
         session_data["last_unsolicited"]=json!(last);
@@ -407,8 +415,19 @@ fn validate(
     now: f64,
     reply_limit: usize,
 ) -> Result<Decision> {
-    let decision: Decision =
+    let mut decision: Decision =
         serde_json::from_value(raw.clone()).context("invalid parent response schema")?;
+    super::effects::validate(&mut decision)?;
+    if decision.reply.as_ref().is_some_and(|r| !r.send) {
+        if decision
+            .reply
+            .as_ref()
+            .is_some_and(|r| !r.answers.is_empty())
+        {
+            bail!("an unsent reply cannot answer obligations");
+        }
+        decision.reply = None;
+    }
     let mut addressed = HashSet::new();
     let known: HashSet<&str> = request
         .obligations
@@ -468,7 +487,7 @@ fn validate(
 /// Quiet/paused decisions need the same version fence as model decisions.
 /// Otherwise a late observation can consume an owner-resumed inbox item, or
 /// resurrect an item which a concurrent clean deliberately dropped.
-async fn settle(
+pub(super) async fn settle(
     store: &Store,
     id: i64,
     request: &ParentRequest,
@@ -534,7 +553,8 @@ async fn commit(
         let active:bool=tx.query_row("SELECT control='active' AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![id,session],|r|r.get(0))?;
         let is_result=matches!(request.trigger["kind"].as_str(),Some("worker_result"|"worker_interrupted"));
         let result_stale=if is_result {super::results::load(&tx,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
-        if Some(version)!=request.session["version"].as_i64() || !active || result_stale {
+        let notes_changed=super::effects::notes(&tx,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
+        if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed {
             tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
             tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
             tx.commit()?;return Ok(Step::Stale);
@@ -555,7 +575,7 @@ async fn commit(
         if let Some(reply)=&decision.reply {
             let candidate=format!("{:x}",Sha256::digest(reply.text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase().as_bytes()));
             let explicit=request.trigger["kind"]=="owner_instruction" || request.trigger["message"]["text"].as_str().is_some_and(|s|s.contains(&format!("<@{owner}>")));
-            let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty() && reply.details.is_empty() && work.jobs.is_empty() && !is_result;
+            let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty() && reply.details.is_empty() && work.jobs.is_empty() && !is_result && decision.note.kind!=NoteKind::Correction;
             if !duplicate {
                 let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
                     thread_ts:request.session["root_ts"].as_str().context("missing root timestamp")?.into(),text:reply.text.clone(),obligations:reply.answers.clone(),inbox:id};
@@ -567,7 +587,7 @@ async fn commit(
                 if cooldown.is_some() {
                     tx.execute("INSERT OR REPLACE INTO cooldowns(workspace,channel,last_unsolicited) VALUES(?,?,?)",params![request.session["workspace"].as_str(),request.session["channel"].as_str(),now])?;
                 }
-                quiet=if candidate==hash {quiet}else{0};hash=candidate;
+                quiet=if candidate==hash || decision.note.kind==NoteKind::Ack {quiet}else{0};hash=candidate;
                 waiting=if matches!(reply.status,ReplyStatus::Waiting) {waiting+1}else{0};
                 status=reply.status.as_str().into();
             }
@@ -581,10 +601,11 @@ async fn commit(
         }
         let working:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE session_id=? AND status IN ('queued','running'))",[&session],|r|r.get(0))?;
         if working && status!="blocked" {status="working".into();}
-        if !work.jobs.is_empty() {quiet=0;waiting=0;}
+        if !work.jobs.is_empty() {if decision.note.kind!=NoteKind::Ack {quiet=0;}waiting=0;}
         if !work.context.is_null() {
             tx.execute("UPDATE threads SET context_json=json_patch(context_json,?) WHERE id=?",params![work.context.to_string(),session])?;
         }
+        super::effects::commit(&tx,&decision,&session,id,now)?;
         for disposition in &decision.dispositions {
             let (state,due)=match disposition {Disposition::Declined{..}=>("declined",None),Disposition::Deferred{until,..}=>("deferred",Some(*until))};
             if tx.execute("UPDATE obligations SET state=?,state_json=?,due=COALESCE(?,due),updated=? WHERE id=? AND session_id=? AND state IN ('open','deferred')",
@@ -607,6 +628,7 @@ async fn commit(
         tx.execute("UPDATE threads SET status=?,turns=CASE WHEN EXISTS(SELECT 1 FROM outbox WHERE idem_key=?) THEN MAX(turns,?) ELSE turns END,
             wait_streak=?,no_progress=?,last_reply_hash=?,summary=CASE WHEN ?='' THEN summary ELSE ? END,updated=?,version=version+1 WHERE id=?",
             params![status,format!("{id}:reply"),sql_turn,waiting,quiet,hash,decision.summary,decision.summary,now,session])?;
+        super::debrief::enqueue(&tx,&decision,&session,id,now)?;
         if let Some(event)=request.trigger["message"]["event_id"].as_str() {tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,event])?;}
         tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
         tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;

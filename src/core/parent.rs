@@ -52,12 +52,63 @@ impl ReplyStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reply {
+    #[serde(default = "send_by_default")]
+    pub send: bool,
+    #[serde(default)]
+    pub discussion: Discussion,
     #[serde(default)]
     pub details: String,
     pub text: String,
     pub status: ReplyStatus,
     #[serde(default)]
     pub answers: Vec<String>,
+}
+fn send_by_default() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Discussion {
+    #[default]
+    Ongoing,
+    Finished,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThreadContext {
+    pub machine: String,
+    pub workspace: String,
+    pub repo: String,
+    pub branch: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteKind {
+    #[default]
+    Result,
+    Question,
+    Status,
+    Ack,
+    Correction,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskNote {
+    pub kind: NoteKind,
+    pub repo: String,
+    pub assignee: String,
+    pub next_step: String,
+    pub blocker: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Debrief {
+    pub debrief: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,8 +142,14 @@ pub struct Ask {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Decision {
-    #[serde(default)]
+    #[serde(default, alias = "delegate")]
     pub delegations: Vec<Delegation>,
+    #[serde(default)]
+    pub context: ThreadContext,
+    #[serde(default)]
+    pub note: TaskNote,
+    #[serde(default)]
+    pub decisions: Vec<String>,
     #[serde(default)]
     pub reply: Option<Reply>,
     #[serde(default)]
