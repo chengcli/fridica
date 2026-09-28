@@ -1,6 +1,7 @@
 pub mod approvals;
 pub mod attention;
 pub mod config;
+pub mod control;
 pub mod core;
 pub mod exec;
 pub mod github;

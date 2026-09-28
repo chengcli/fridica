@@ -395,6 +395,22 @@ impl Supervisor {
         }
         Ok(started)
     }
+    pub async fn processes(&self) -> BTreeMap<String, String> {
+        let state = self.state.lock().await;
+        state
+            .live
+            .iter()
+            .filter(|l| l.worker.alive())
+            .map(|l| {
+                let status = if state.running.values().any(|r| r.worker_id == l.worker_id) {
+                    "busy"
+                } else {
+                    "alive"
+                };
+                (l.worker_id.clone(), status.into())
+            })
+            .collect()
+    }
     pub async fn interrupt(&self, worker_id: &str) -> Result<bool> {
         let mut s = self.state.lock().await;
         self.reap(&mut s).await?;

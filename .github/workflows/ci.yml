@@ -53,6 +53,7 @@ jobs:
           PYTHONPATH=spec python scripts/capture_attachments.py
           PYTHONPATH=spec python scripts/capture_links.py
           PYTHONPATH=spec python scripts/capture_github.py
+          PYTHONPATH=spec python scripts/capture_control.py
           PYTHONPATH=spec python scripts/capture_slack.py
           git diff --exit-code -- tests/corpus/
 

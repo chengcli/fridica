@@ -7,105 +7,105 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[pytest-once]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[pytestx-None]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[pytest; rm -rf ~-None]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[pytest $(curl evil)-None]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[git status-once]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[rm -rf build-deny]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[rm -rf build && ls-deny]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules[make-None]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_rules_only_apply_to_commands",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_owner_decision_wakes_the_worker",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_timeout_denies",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_policy_rules_skip_the_owner",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_notify_hook_and_bad_decisions",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_approvals.py::test_a_cancelled_wait_expires_the_request",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/approvals.rs",
-      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Network approval routes remain unported."
+      "coverage_scope": "Frozen command-rule parity and durable owner decisions, cancellation, timeouts, attempt fencing and policy reload faults. Rust requires active jobs and authenticated owner authority; cancellation uses cancelled instead of the Python expired label, and stopped workers stay stopped. Authenticated Unix approval routes now have runtime integration coverage in tests/runtime_flow.rs; production daemon wiring remains open."
     },
     {
       "python": "tests/test_attachments.py::test_an_attached_diff_reaches_the_parents_context",
@@ -705,52 +705,72 @@
     {
       "python": "tests/test_control_api.py::test_socket_is_owner_only_and_status_works",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_threads_workers_and_actions",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_approvals_round_trip",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_outbox_retry_and_machines",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_limits_patch_validates_and_rewrites_the_file",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_dashboard_config_exposes_safe_settings_and_edits_parent_model",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_dashboard_jobs_lists_active_work_with_thread_links",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_attention_threads_include_paused_and_blocked_outside_recent_page",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_owner_instruction_validates_text_and_is_visible_in_thread_detail",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_control_api.py::test_client_reports_a_missing_daemon",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/control_transport.rs",
+      "coverage_scope": "Nine frozen Python control-view projections compare legacy fields, ordering and attention selection. Unix socket tests cover authenticated roles, private paths, disconnect ownership, request limits and CLI access. tests/runtime_flow.rs covers durable effects, owner-pause protection, instruction deduplication/restart, notes CAS, approvals, outbox retries, closed-worker cleanup and parent/control concurrency. Restore, clean, live configuration editing and production daemon wiring remain open; the Python regression stays retained."
     },
     {
       "python": "tests/test_dashboard.py::test_static_files_and_security_headers",

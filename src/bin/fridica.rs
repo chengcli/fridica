@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Experimental v0.4 configuration, migration and offline report tools. The Python launcher remains the production daemon."
+    about = "Experimental v0.4 configuration, migration, controls and offline report tools. The Python launcher remains the production daemon."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -18,6 +18,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(flatten)]
+    Control(fridica::control::cli::Commands),
     /// Validate configuration and resolved placement policies without starting adapters.
     CheckConfig {
         #[arg(long)]
@@ -56,6 +58,9 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Control(command) => {
+            println!("{}", serde_json::to_string_pretty(&command.run().await?)?)
+        }
         Command::CheckConfig { config } => {
             let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)?;
             println!(

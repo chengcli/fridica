@@ -114,6 +114,72 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             pass: Mutex::new(()),
         })
     }
+    pub fn store(&self) -> Store {
+        self.store.clone()
+    }
+    pub fn config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
+    pub fn now(&self) -> f64 {
+        self.clock.now()
+    }
+    pub async fn worker_control(&self, id: &str, stop: bool, authority: Authority) -> Result<bool> {
+        if authority != Authority::Owner {
+            bail!("worker controls require owner authentication");
+        }
+        if stop {
+            self.supervisor.stop(id).await?;
+            Ok(true)
+        } else {
+            self.supervisor.interrupt(id).await
+        }
+    }
+    pub async fn processes(&self) -> std::collections::BTreeMap<String, String> {
+        self.supervisor.processes().await
+    }
+    pub async fn instruct(
+        &self,
+        session: String,
+        text: String,
+        client_id: String,
+        authority: Authority,
+    ) -> Result<i64> {
+        if self.observe_only() {
+            bail!("instructions are unavailable in observe-only mode");
+        }
+        let lookup = session.clone();
+        let (workspace, channel): (String, String) = self
+            .store
+            .call(move |c| {
+                Ok(c.query_row(
+                    "SELECT workspace,channel FROM threads WHERE id=?",
+                    [lookup],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await?;
+        if workspace != self.config.slack.workspace
+            || !self.config.slack.channels.contains(&channel)
+        {
+            bail!("instruction outside configured scope");
+        }
+        controls::instruct(
+            &self.store,
+            session,
+            text,
+            client_id,
+            authority,
+            self.clock.now(),
+        )
+        .await
+    }
+    async fn stop_closed_workers(&self) -> Result<()> {
+        let ids:Vec<String>=self.store.call(|c|Ok(c.prepare("SELECT w.id FROM workers w JOIN threads t ON t.id=w.session_id WHERE t.control IN ('closed','archived','cleaned') AND w.status!='stopped'")?.query_map([],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?)).await?;
+        for id in ids {
+            self.supervisor.stop(&id).await?;
+        }
+        Ok(())
+    }
     /// Bind authenticated Slack envelopes to the same durable store and clock.
     pub fn slack_receiver(&self) -> crate::slack::receiver::Receiver {
         crate::slack::receiver::Receiver::new(
@@ -151,6 +217,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     pub async fn pass(&self) -> Result<Progress> {
         let _pass = self.pass.lock().await;
         self.supervisor.settle().await?;
+        self.stop_closed_workers().await?;
         attention::sweep(&self.store, self.clock.now()).await?;
         let turns = self.manager.sweep().await?;
         let delivered = self.dispatcher.drain(100).await?;

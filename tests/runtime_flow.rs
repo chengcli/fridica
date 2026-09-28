@@ -30,11 +30,16 @@ const SESSION: &str = "TTEAM:CROOM:100.1";
 struct ParentScript {
     calls: Mutex<Vec<ParentRequest>>,
     responses: Mutex<VecDeque<Value>>,
+    gate: Mutex<Option<Arc<Semaphore>>>,
 }
 impl Parent for ParentScript {
     fn decide(&self, r: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>> {
         Box::pin(async move {
             self.calls.lock().unwrap().push(r);
+            let gate = self.gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.acquire().await.unwrap().forget();
+            }
             self.responses
                 .lock()
                 .unwrap()
@@ -131,7 +136,7 @@ struct Harness {
     parent: Arc<ParentScript>,
     worker: Arc<WorkerScript>,
     sink: Arc<Sink>,
-    runtime: Runtime<ParentScript, Sink>,
+    runtime: Arc<Runtime<ParentScript, Sink>>,
 }
 impl Harness {
     async fn new(responses: Vec<Value>, observe: bool) -> Self {
@@ -199,7 +204,7 @@ path="{}"
             parent,
             worker,
             sink,
-            runtime,
+            runtime: Arc::new(runtime),
         }
     }
     async fn intake(&self, peer: bool) {
@@ -928,4 +933,500 @@ async fn ready_worker_artifacts_are_ordered_after_report_and_linked_to_answer_de
         "2"
     );
     h.runtime.close().await.unwrap();
+}
+
+async fn control_call(
+    h: &Harness,
+    method: &str,
+    target: &str,
+    body: Value,
+    authority: Authority,
+) -> fridica::control::Response {
+    use fridica::control::{api::Api, Backend, Request};
+    Api::new(h.runtime.clone())
+        .request(
+            Request {
+                method: method.into(),
+                target: target.into(),
+                body,
+            },
+            authority,
+        )
+        .await
+}
+#[tokio::test]
+async fn authenticated_controls_protect_owner_pause_and_deduplicate_instructions() {
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    let route = format!("/threads/{SESSION}/instruct");
+    let body = json!({"text":"  Run the checks  ","client_id":"retry-1234","actor":"arbitrary"});
+    let (first, second) = tokio::join!(
+        control_call(&h, "POST", &route, body.clone(), Authority::Owner),
+        control_call(&h, "POST", &route, body.clone(), Authority::Owner)
+    );
+    assert_eq!(first.status, 200);
+    assert_eq!(first.body, second.body);
+    let pause = format!("/threads/{SESSION}/pause");
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &pause,
+            json!({"actor":"overseer"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    for action in ["resume", "pause"] {
+        assert_eq!(
+            control_call(
+                &h,
+                "POST",
+                &format!("/threads/{SESSION}/{action}"),
+                json!({"actor":"UOWNER"}),
+                Authority::Overseer
+            )
+            .await
+            .status,
+            403
+        );
+    }
+    let retry = control_call(&h, "POST", &route, body.clone(), Authority::Owner).await;
+    assert_eq!(retry.body, first.body);
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "paused");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction'")
+            .await,
+        "1"
+    );
+    assert_eq!(h.scalar("SELECT json_extract(payload_json,'$.text') FROM thread_inbox WHERE kind='owner_instruction'").await,"Run the checks");
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &route,
+            json!({"text":"different","client_id":"retry-1234"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    assert_eq!(
+        control_call(&h, "POST", &route, body, Authority::DesktopReadOnly)
+            .await
+            .status,
+        403
+    );
+    assert_eq!(
+        control_call(&h, "POST", &pause, json!({"reason":42}), Authority::Owner)
+            .await
+            .status,
+        400
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/resume"),
+            json!({}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "active");
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='control_request' AND complete=0").await,"0");
+}
+#[tokio::test]
+async fn control_views_notes_approvals_and_retry_use_durable_state() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.store.call(|c|{c.execute("INSERT INTO approvals(id,worker_id,job_id,session_id,kind,summary,created,expires_at) SELECT 'approve',worker_id,id,session_id,'exec','Run check',20,300 FROM jobs LIMIT 1",[])?;
+        c.execute("INSERT INTO audit(time,actor,action,target,details_json) SELECT 20,'system','approval.requested','approve',json_object('attempt',attempt) FROM jobs LIMIT 1",[])?;
+        c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,text,blob,state,created) VALUES('failed',?,'file','CROOM','100.1','Report',X'010203','ambiguous',20)",[SESSION])?;Ok(())}).await.unwrap();
+    for path in [
+        "/status",
+        "/threads",
+        "/attention/threads",
+        "/workers",
+        "/jobs",
+        "/approvals",
+        "/outbox",
+        "/activity",
+        "/obligations",
+        "/config",
+        "/machines",
+    ] {
+        let response = control_call(&h, "GET", path, json!({}), Authority::DesktopReadOnly).await;
+        assert_eq!(response.status, 200, "{path}: {}", response.body);
+    }
+    let status = control_call(&h, "GET", "/status", json!({}), Authority::Owner)
+        .await
+        .body;
+    assert_eq!(status["pending_approvals"], 1);
+    assert_eq!(status["running_jobs"], 1);
+    assert_eq!(status["problem_posts"], 1);
+    let detail = control_call(
+        &h,
+        "GET",
+        &format!("/threads/{SESSION}"),
+        json!({}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(detail.status, 200, "{}", detail.body);
+    assert_eq!(detail.body["workers"][0]["process"], "busy");
+    assert_eq!(detail.body["session"]["control"], "active");
+    assert_eq!(detail.body["session"]["key"]["channel"], "CROOM");
+    assert!(detail.body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|v| v.get("files").is_none() && v.get("attachments").is_none()));
+    let post = detail.body["outbox"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["state"] == "ambiguous")
+        .unwrap();
+    assert_eq!(post["has_file"], true);
+    assert!(post.get("blob").is_none());
+    assert_eq!(post["created"], 20.);
+    let retry = format!("/outbox/{}/retry", post["id"]);
+    assert_eq!(
+        control_call(&h, "POST", &retry, json!({}), Authority::Overseer)
+            .await
+            .status,
+        403
+    );
+    assert_eq!(
+        control_call(&h, "POST", &retry, json!({}), Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        control_call(&h, "POST", &retry, json!({}), Authority::Owner)
+            .await
+            .status,
+        409
+    );
+    let notes = format!("/threads/{SESSION}/notes");
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &notes,
+            json!({"data":{"summary":"Use this"},"expected":0,"actor":"spoof"}),
+            Authority::Owner
+        )
+        .await
+        .body,
+        json!({"revision":1})
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &notes,
+            json!({"data":{},"expected":0}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    assert_eq!(h.scalar("SELECT actor FROM notes").await, "UOWNER");
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            "/approvals/approve",
+            json!({"decision":"once","actor":"spoof"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            "/approvals/approve",
+            json!({"decision":"deny"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    assert_eq!(h.scalar("SELECT decided_by FROM approvals").await, "UOWNER");
+    h.runtime.close().await.unwrap();
+}
+#[tokio::test]
+async fn control_recording_faults_prevent_effects_or_report_uncertain_commits() {
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    let route = format!("/threads/{SESSION}/instruct");
+    let body = json!({"text":"Proceed","client_id":"fault-1234"});
+    h.store.call(|c|{c.execute_batch("CREATE TRIGGER fail_control BEFORE INSERT ON replay_events WHEN NEW.kind='control_request' BEGIN SELECT RAISE(ABORT,'sensitive storage diagnostic'); END;")?;Ok(())}).await.unwrap();
+    let failed = control_call(&h, "POST", &route, body.clone(), Authority::Owner).await;
+    assert_eq!(failed.status, 500);
+    assert_eq!(failed.body, json!({"error":"control_recording_failed"}));
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction'")
+            .await,
+        "0"
+    );
+    h.store.call(|c|{c.execute_batch("DROP TRIGGER fail_control; CREATE TRIGGER fail_control BEFORE INSERT ON replay_events WHEN NEW.kind='control_response' BEGIN SELECT RAISE(ABORT,'secret response diagnostic'); END;")?;Ok(())}).await.unwrap();
+    let failed = control_call(&h, "POST", &route, body.clone(), Authority::Owner).await;
+    assert_eq!(failed.status, 500);
+    assert_eq!(failed.body, json!({"error":"control_outcome_unrecorded"}));
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction'")
+            .await,
+        "1"
+    );
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='control_request' AND complete=0").await,"1");
+    h.store
+        .call(|c| {
+            c.execute_batch("DROP TRIGGER fail_control;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        control_call(&h, "POST", &route, body, Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction'")
+            .await,
+        "1"
+    );
+}
+#[tokio::test]
+async fn closing_thread_stops_active_workers_and_cancels_pending_approvals() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.store.call(|c|{c.execute("INSERT INTO approvals(id,worker_id,job_id,session_id,kind,summary,created) SELECT 'pending-close',worker_id,id,session_id,'exec','Check',20 FROM jobs LIMIT 1",[])?;Ok(())}).await.unwrap();
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/close"),
+            json!({}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "closed");
+    for authority in [Authority::Owner, Authority::Overseer] {
+        assert_eq!(
+            control_call(
+                &h,
+                "POST",
+                &format!("/threads/{SESSION}/pause"),
+                json!({}),
+                authority
+            )
+            .await
+            .status,
+            409
+        );
+    }
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.scalar("SELECT status FROM workers").await, "stopped");
+    assert_ne!(h.scalar("SELECT status FROM jobs").await, "running");
+    assert_ne!(
+        h.scalar("SELECT status FROM approvals WHERE id='pending-close'")
+            .await,
+        "pending"
+    );
+    assert!(h.runtime.processes().await.is_empty());
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+    h.runtime.close().await.unwrap();
+}
+#[tokio::test]
+async fn instructions_reject_observe_only_and_out_of_scope_threads() {
+    let h = Harness::new(vec![], true).await;
+    h.intake(false).await;
+    let route = format!("/threads/{SESSION}/instruct");
+    let body = json!({"text":"Proceed","client_id":"scope-1234"});
+    assert_eq!(
+        control_call(&h, "POST", &route, body.clone(), Authority::Owner)
+            .await
+            .status,
+        409
+    );
+    assert_eq!(h.runtime.pass().await.unwrap().started, 0);
+    assert!(h.parent.calls.lock().unwrap().is_empty());
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    h.store
+        .call(|c| {
+            c.execute("UPDATE threads SET channel='COTHER'", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        control_call(&h, "POST", &route, body, Authority::Owner)
+            .await
+            .status,
+        409
+    );
+}
+
+#[tokio::test]
+async fn socket_owner_pause_remains_responsive_during_parent_and_fences_late_effects() {
+    use fridica::control::{
+        api::Api,
+        client::Client,
+        server::{Access, Options, Server},
+    };
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(h.dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let server = Server::bind(
+        &h.config,
+        Arc::new(Api::new(h.runtime.clone())),
+        Access::OwnerPeer,
+        Options::default(),
+    )
+    .await
+    .unwrap();
+    let runtime = h.runtime.clone();
+    let pass = tokio::spawn(async move { runtime.pass().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.parent.calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let client = Client::new(&h.config.state.control_socket, None).unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        client.request(
+            "POST",
+            &format!("/threads/{SESSION}/pause"),
+            Some(json!({})),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "paused");
+    gate.add_permits(1);
+    pass.await.unwrap().unwrap();
+    assert!(h.worker.calls.lock().unwrap().is_empty());
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "0"
+    );
+    server.close().await.unwrap();
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn instruction_transaction_rolls_back_and_idempotency_survives_reopen() {
+    use fridica::threads::controls;
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    h.runtime
+        .control(
+            SESSION.into(),
+            Control::Pause {
+                reason: "Owner pause".into(),
+            },
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    h.store.call(|c|{c.execute_batch("CREATE TRIGGER fail_instruction BEFORE INSERT ON thread_inbox WHEN NEW.kind='owner_instruction' BEGIN SELECT RAISE(ABORT,'disk fault'); END;")?;Ok(())}).await.unwrap();
+    let route = format!("/threads/{SESSION}/instruct");
+    let body = json!({"text":"Continue","client_id":"persist-1234"});
+    assert_eq!(
+        control_call(&h, "POST", &route, body.clone(), Authority::Owner)
+            .await
+            .status,
+        500
+    );
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "paused");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='thread.instruct'")
+            .await,
+        "0"
+    );
+    h.store
+        .call(|c| {
+            c.execute_batch("DROP TRIGGER fail_instruction;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let first = control_call(&h, "POST", &route, body, Authority::Owner).await;
+    assert_eq!(first.status, 200);
+    h.runtime
+        .control(
+            SESSION.into(),
+            Control::Pause {
+                reason: "Later pause".into(),
+            },
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    h.runtime.close().await.unwrap();
+    let Harness {
+        dir,
+        runtime,
+        store,
+        ..
+    } = h;
+    drop(runtime);
+    drop(store);
+    let store = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(s) = Store::open(dir.path().join("db")).await {
+                break s;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let id = controls::instruct(
+        &store,
+        SESSION.into(),
+        "Continue".into(),
+        "persist-1234".into(),
+        Authority::Owner,
+        21.,
+    )
+    .await
+    .unwrap();
+    assert_eq!(json!(id), first.body["instruction_id"]);
+    let control: String = store
+        .call(|c| Ok(c.query_row("SELECT control FROM threads", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(control, "paused");
 }
