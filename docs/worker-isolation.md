@@ -111,7 +111,29 @@ false`. It does not establish inventory completeness, backend version/protocol
 conformance, writable state provisioning, unrestricted-worker MCP isolation, or
 full runtime parity. Launch-time checks still run again to catch later changes.
 
-Trusted daemon composition can use `SystemLauncher::from_config` to construct
-the existing local/SSH launch adapters with these settings. Active CLI composition,
-automatic admission preflight and real backend conformance remain unfinished; see
-the [implementation status](v0.4-implementation-status.md).
+The shared active library runtime now calls automatic admission for every job,
+after its durable claim and before scoped fetch or backend execution. Confined
+local/SSH jobs run the same probe, including when reusing a warm worker. There is
+no cached successful probe. Admission checks the configured base workspace so
+an absent slot directory does not require provisioning; the launch helper checks
+the actual slot and its settings again before starting a backend. Missing base
+workspaces refuse admission. Probe success does not replace launch-time checks.
+
+Each system launcher permits one probe at a time, with a 30-second process
+deadline inside the job deadline. This capacity is separate from backend process
+permits and remains held until cancellation cleanup terminates and reaps the
+probe. Owner controls do not wait on a supervisor lock held by admission.
+Failures use fixed `worker_isolation_*` codes in durable job completions and
+worker-result notifications; refusals do not trigger execution retries.
+Observe-only never invokes admission, and ordinary unrestricted jobs skip the
+namespace probe while retaining their existing policies.
+
+The launcher and backend MCP startup options are bound to their construction
+configuration. Runtime startup validates those bindings before recovery writes;
+supervisor reconfiguration rejects incompatible private-file inventories, remote
+host bindings, control/config/rule paths, and MCP identities before publishing
+new configuration or changing approval policy. Rebuild the runtime adapters to
+apply those changes. This is a fail-closed restriction, not live isolation reload.
+
+Active CLI startup, unrestricted-worker MCP discovery and real backend conformance
+remain unfinished; see the [implementation status](v0.4-implementation-status.md).

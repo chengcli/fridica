@@ -345,12 +345,13 @@ async fn system_launcher_applies_isolation_only_to_confined_local_workers() {
         protocol::WorkerSpec,
     };
     let f = Fixture::new();
-    let launcher = SystemLauncher {
-        home: f.home.clone(),
-        environment: BTreeMap::from([("FRIDICA_MCP_KEY".into(), "must-not-leak".into())]),
-        ssh_control_directory: f.home.join("ssh"),
-        isolation: Isolation::new(&f.config, &[]).unwrap(),
-    };
+    let launcher = SystemLauncher::from_config(
+        &f.config,
+        f.home.clone(),
+        BTreeMap::from([("FRIDICA_MCP_KEY".into(), "must-not-leak".into())]),
+        f.home.join("ssh"),
+    )
+    .unwrap();
     let mut spec: WorkerSpec = serde_json::from_value(serde_json::json!({"worker_id":"w", "machine":f.config.machines.machines[0], "workspace":f.config.machines.machines[0].workspaces[0], "backend":"codex", "instructions":"", "model":"", "reasoning_effort":"", "job_timeout":30, "idle_timeout":30, "excluded_env":[], "slot":0})).unwrap();
     spec.workspace.policy.gpu_confine = Some(true);
     let launch = launcher.launch(&spec, vec!["/bin/true".into()]).unwrap();

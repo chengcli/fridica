@@ -117,6 +117,10 @@ impl Worker for Fake {
 }
 #[derive(Default)]
 struct Fakes {
+    admissions: Mutex<Vec<WorkerSpec>>,
+    refuse_admission: AtomicBool,
+    block_admission: AtomicBool,
+    reject_config: AtomicBool,
     created: Mutex<Vec<Arc<Fake>>>,
     scripts: Mutex<HashMap<String, Arc<Script>>>,
 }
@@ -141,6 +145,31 @@ impl Fakes {
     }
 }
 impl Factory for Fakes {
+    fn validate_config(&self, _config: &Config) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.reject_config.load(Ordering::SeqCst), "stale adapter");
+        Ok(())
+    }
+    fn admit(
+        &self,
+        _config: Arc<Config>,
+        spec: WorkerSpec,
+    ) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
+        Box::pin(async move {
+            self.admissions.lock().unwrap().push(spec);
+            if self.block_admission.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            if self.refuse_admission.load(Ordering::SeqCst) {
+                return Err(WorkerFailure {
+                    kind: Failure::Refusal,
+                    code: "isolation_refused".into(),
+                    backend_session_id: String::new(),
+                });
+            }
+            Ok(())
+        })
+    }
+
     fn instructions(&self, _config: &Config, worker: &WorkerRecord) -> anyhow::Result<String> {
         Ok(format!("rules for {}", worker.role))
     }
@@ -623,6 +652,7 @@ async fn observe_only_never_constructs_workers_or_claims_jobs() {
     )
     .unwrap();
     assert!(observer.schedule().await.unwrap().is_empty());
+    assert!(h.factory.admissions.lock().unwrap().is_empty());
     assert!(h.factory.created.lock().unwrap().is_empty());
     assert_eq!(
         work::get_job(&h.store, "a-0".into()).await.unwrap().status,
@@ -1086,5 +1116,94 @@ async fn local_artifacts_are_read_validated_and_committed_with_the_result() {
             .await,
         "1"
     );
+    h.supervisor.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn admission_refusal_rechecks_warm_workers_before_fetch_and_never_retries() {
+    let io = Arc::new(FaultIo {
+        preparing: Semaphore::new(0),
+        block_prepare: false,
+    });
+    let h = Harness::with_io(io.clone()).await;
+    h.add("a", "gpu", 0, false, 2).await;
+    h.supervisor.schedule().await.unwrap();
+    let worker = h.factory.latest("a");
+    worker.release.add_permits(1);
+    h.wait_status("a-0", "done").await;
+    assert_eq!(io.preparing.available_permits(), 1);
+    h.factory.refuse_admission.store(true, Ordering::SeqCst);
+    h.supervisor.schedule().await.unwrap();
+    h.wait_status("a-1", "failed").await;
+    assert_eq!(h.factory.created.lock().unwrap().len(), 1);
+    assert_eq!(h.factory.admissions.lock().unwrap().len(), 2);
+    assert_eq!(worker.calls.lock().unwrap().len(), 1);
+    assert_eq!(io.preparing.available_permits(), 1);
+    assert!(!worker.alive());
+    assert_eq!(
+        h.scalar("SELECT error FROM jobs WHERE id='a-1'").await,
+        "isolation_refused"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "2"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox")
+            .await,
+        "2"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='worker_call'")
+            .await,
+        "1"
+    );
+    h.supervisor.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_during_admission_remains_responsive_and_prevents_fetch_and_backend() {
+    let io = Arc::new(FaultIo {
+        preparing: Semaphore::new(0),
+        block_prepare: false,
+    });
+    let h = Harness::with_io(io.clone()).await;
+    h.factory.block_admission.store(true, Ordering::SeqCst);
+    h.add("a", "gpu", 0, false, 2).await;
+    h.supervisor.schedule().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h.factory.admissions.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), h.supervisor.stop("a"))
+        .await
+        .unwrap()
+        .unwrap();
+    h.wait_status("a-0", "cancelled").await;
+    assert_eq!(
+        work::get_job(&h.store, "a-1".into()).await.unwrap().status,
+        "cancelled"
+    );
+    assert_eq!(io.preparing.available_permits(), 0);
+    assert!(h.factory.latest("a").calls.lock().unwrap().is_empty());
+    assert!(!h.factory.latest("a").alive());
+    h.supervisor.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn incompatible_adapter_configuration_is_rejected_before_publication() {
+    let h = Harness::new().await;
+    h.add("a", "gpu", 0, false, 1).await;
+    let mut config = (*h.config).clone();
+    config.limits.max_jobs = 0;
+    h.factory.reject_config.store(true, Ordering::SeqCst);
+    assert!(h.supervisor.reconfigure(Arc::new(config)).await.is_err());
+    h.factory.reject_config.store(false, Ordering::SeqCst);
+    assert_eq!(h.supervisor.schedule().await.unwrap(), vec!["a-0"]);
+    h.factory.latest("a").release.add_permits(1);
+    h.wait_status("a-0", "done").await;
     h.supervisor.close().await.unwrap();
 }

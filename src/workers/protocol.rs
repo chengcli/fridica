@@ -78,6 +78,21 @@ pub trait Worker: Send + Sync {
     fn close(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>>;
 }
 pub trait Factory: Send + Sync {
+    /// Reject snapshots incompatible with immutable adapter settings before
+    /// publishing configuration or changing approval policy. No external I/O.
+    fn validate_config(&self, _config: &crate::config::Config) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Run bounded admission after durable claim and before fetch/backend I/O.
+    /// Implementations must retain their probe permits through cancellation cleanup.
+    fn admit(
+        &self,
+        _config: Arc<crate::config::Config>,
+        _spec: WorkerSpec,
+    ) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Supply the full contract/rules and repository context. The supervisor
     /// never silently substitutes an abbreviated prompt for the owner rules.
     fn instructions(

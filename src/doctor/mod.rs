@@ -2,30 +2,13 @@
 //! output, credentials, inventory paths, or MCP settings.
 use crate::{
     config::{Config, LoadContext},
-    exec::{
-        isolation::Isolation,
-        local::LocalTransport,
-        process::{self, Launch},
-        ssh::SshTransport,
-    },
+    exec::{isolation::Isolation, local::LocalTransport, ssh::SshTransport},
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::{collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt, time::Duration};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Check {
-    Passed,
-    MissingRemoteInventory,
-    UnsupportedTransport,
-    LaunchConfigurationRefused,
-    InventoryRefused,
-    SettingsRefused,
-    NamespaceFailed,
-    RuntimeOrTransportFailed,
-    ProbeFailed,
-}
+pub use crate::exec::isolation::{run_probe, Check};
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub machine: String,
@@ -37,24 +20,6 @@ pub struct Report {
 impl Report {
     pub fn passed(&self) -> bool {
         self.check == Check::Passed
-    }
-}
-
-/// Bounded process ownership includes cancellation cleanup and the SSH stdin
-/// watchdog. Exact markers and successful exit are both required for success.
-pub async fn run_probe(launch: Launch, timeout: Duration) -> Check {
-    let Ok(result) = process::run_with_open_stdin(launch, timeout, 4096).await else {
-        return Check::ProbeFailed;
-    };
-    match (result.returncode, result.stdout.as_slice()) {
-        (0, b"fridica-isolation:namespace\nfridica-isolation:ready\n") => Check::Passed,
-        (97, b"fridica-isolation:inventory-refused\n") => Check::InventoryRefused,
-        (97, b"fridica-isolation:settings-refused\n") => Check::SettingsRefused,
-        (_, b"fridica-isolation:namespace\n")
-        | (97, b"fridica-isolation:namespace\nfridica-isolation:namespace-refused\n") => {
-            Check::NamespaceFailed
-        }
-        _ => Check::RuntimeOrTransportFailed,
     }
 }
 
@@ -118,24 +83,7 @@ pub async fn isolation(
                 environment,
             );
             if let Ok(launch) = &mut launch {
-                // First value wins in OpenSSH. A check must not reuse a live
-                // master, leave a persistent master, or enroll a new host key.
-                launch.argv.splice(
-                    1..1,
-                    [
-                        "-o",
-                        "ControlMaster=no",
-                        "-o",
-                        "ControlPath=none",
-                        "-o",
-                        "ControlPersist=no",
-                        "-o",
-                        "StrictHostKeyChecking=yes",
-                        "-o",
-                        "UpdateHostKeys=no",
-                    ]
-                    .map(str::to_owned),
-                );
+                crate::exec::isolation::read_only_ssh_probe(launch);
             }
             launch
         }

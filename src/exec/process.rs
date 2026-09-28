@@ -263,6 +263,16 @@ pub async fn run_with_open_stdin(
     run_command(launch, vec![], timeout, limit, true, None).await
 }
 
+/// Open-stdin variant retaining capacity until cancellation cleanup completes.
+pub async fn run_with_open_stdin_with_permit(
+    launch: Launch,
+    timeout: Duration,
+    limit: usize,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> Result<Completed> {
+    run_command(launch, vec![], timeout, limit, true, Some(permit)).await
+}
+
 async fn run_command(
     launch: Launch,
     input: Vec<u8>,

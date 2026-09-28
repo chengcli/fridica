@@ -30,11 +30,22 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::ChildStdin,
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, oneshot, watch, Semaphore},
     task::JoinHandle,
 };
 
 pub trait Launcher: Send + Sync {
+    fn validate_config(&self, _config: &Config) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn admit(
+        &self,
+        _config: Arc<Config>,
+        _spec: WorkerSpec,
+    ) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure>;
 }
 /// Explicit owner environment snapshot; no process-global environment mutation.
@@ -43,6 +54,8 @@ pub struct SystemLauncher {
     pub environment: BTreeMap<OsString, OsString>,
     pub ssh_control_directory: PathBuf,
     pub isolation: crate::exec::isolation::Isolation,
+    // Independent bounded probe capacity survives dropped admission futures.
+    probes: Arc<Semaphore>,
 }
 impl SystemLauncher {
     /// Construct from owner configuration, never from a worker/model payload.
@@ -57,10 +70,99 @@ impl SystemLauncher {
             environment,
             ssh_control_directory,
             isolation: crate::exec::isolation::Isolation::new(config, &[])?,
+            probes: Arc::new(Semaphore::new(1)),
         })
     }
 }
 impl Launcher for SystemLauncher {
+    fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
+        let current = crate::exec::isolation::Isolation::new(config, &[])?;
+        if current != self.isolation {
+            anyhow::bail!("worker isolation configuration changed; rebuild runtime adapters");
+        }
+        Ok(())
+    }
+    fn admit(
+        &self,
+        config: Arc<Config>,
+        spec: WorkerSpec,
+    ) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
+        Box::pin(async move {
+            self.validate_config(&config).map_err(|_| {
+                failure(
+                    Failure::Refusal,
+                    "worker_isolation_configuration_changed",
+                    "",
+                )
+            })?;
+            if !spec.confined() {
+                return Ok(());
+            }
+            // Probe the configured base: slot directories can be absent until
+            // launch. The actual slot/settings are checked again by the launch
+            // helper, which alone may create directories. No probe is cached.
+            let base = config
+                .machines
+                .get(&spec.machine.name)
+                .and_then(|m| m.workspace(&spec.workspace.name))
+                .ok_or_else(|| failure(Failure::Refusal, "worker_isolation_target_unknown", ""))?;
+            let permit =
+                self.probes.clone().acquire_owned().await.map_err(|_| {
+                    failure(Failure::Refusal, "worker_isolation_probe_unavailable", "")
+                })?;
+            let launch = match spec.machine.transport.as_str() {
+                "local" => self.isolation.preflight(
+                    &LocalTransport {
+                        machine: spec.machine.clone(),
+                        home: self.home.clone(),
+                        excluded_env: spec.excluded_env.clone(),
+                    },
+                    &base.path,
+                    self.environment.clone(),
+                ),
+                "ssh" => {
+                    let mut launch = self.isolation.preflight_remote(
+                        &SshTransport {
+                            machine: spec.machine.clone(),
+                            excluded_env: spec.excluded_env.clone(),
+                            control_directory: self.ssh_control_directory.clone(),
+                        },
+                        &base.path.to_string_lossy(),
+                        self.environment.clone(),
+                    );
+                    if let Ok(launch) = &mut launch {
+                        crate::exec::isolation::read_only_ssh_probe(launch);
+                    }
+                    launch
+                }
+                _ => {
+                    return Err(failure(
+                        Failure::Refusal,
+                        "worker_isolation_transport_unsupported",
+                        "",
+                    ))
+                }
+            }
+            .map_err(|_| failure(Failure::Refusal, "worker_isolation_launch_refused", ""))?;
+            let check = crate::exec::isolation::run_probe_with_permit(
+                launch,
+                Duration::from_secs(30),
+                permit,
+            )
+            .await;
+            use crate::exec::isolation::Check;
+            let code = match check {
+                Check::Passed => return Ok(()),
+                Check::InventoryRefused => "worker_isolation_inventory_refused",
+                Check::SettingsRefused => "worker_isolation_settings_refused",
+                Check::NamespaceFailed => "worker_isolation_namespace_failed",
+                Check::RuntimeOrTransportFailed => "worker_isolation_runtime_or_transport_failed",
+                _ => "worker_isolation_probe_failed",
+            };
+            Err(failure(Failure::Refusal, code, ""))
+        })
+    }
+
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
         let launch = match spec.machine.transport.as_str() {
             "local" => {
@@ -177,6 +279,29 @@ pub struct BackendFactory {
     pub recorder: Arc<dyn WireRecorder>,
 }
 impl Factory for BackendFactory {
+    fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
+        if self.options.disabled_mcp_servers != config.isolation.mcp_aliases {
+            anyhow::bail!("worker MCP identities changed; rebuild runtime adapters");
+        }
+        self.launcher.validate_config(config)
+    }
+    fn admit(
+        &self,
+        config: Arc<Config>,
+        spec: WorkerSpec,
+    ) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
+        Box::pin(async move {
+            self.validate_config(&config).map_err(|_| {
+                failure(
+                    Failure::Refusal,
+                    "worker_isolation_configuration_changed",
+                    "",
+                )
+            })?;
+            self.launcher.admit(config, spec).await
+        })
+    }
+
     fn instructions(&self, config: &Config, worker: &WorkerRecord) -> anyhow::Result<String> {
         self.instructions.build(config, worker)
     }

@@ -192,6 +192,7 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
         },
     );
     let tools = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(tools.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let fake_ssh = tools.path().join("ssh");
     std::fs::write(&fake_ssh, format!(
         "#!/bin/sh\ncase \"$*\" in *ControlMaster=no*ControlPath=none*ControlPersist=no*StrictHostKeyChecking=yes*UpdateHostKeys=no*) ;; *) exit 255;; esac\nwhile [ \"$1\" != -- ]; do shift; done\nshift\ntest \"$1\" = owner@synthetic || exit 255\nshift\nexport HOME={}\nexec /bin/sh -c \"$1\"\n",
@@ -205,7 +206,7 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
     let report = doctor::isolation(
         &f.config,
         &context(&f),
-        environment,
+        environment.clone(),
         "local",
         "project",
         Duration::from_secs(10),
@@ -213,6 +214,32 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
     .await
     .unwrap();
     assert!(report.passed(), "{report:?}");
+    use fridica::workers::jsonl::{Launcher, SystemLauncher};
+    let launcher = SystemLauncher::from_config(
+        &f.config,
+        f.home.clone(),
+        environment,
+        tools.path().to_owned(),
+    )
+    .unwrap();
+    let spec = worker_spec(&f);
+    launcher
+        .admit(std::sync::Arc::new(f.config.clone()), spec.clone())
+        .await
+        .unwrap();
+    let mut changed = f.config.clone();
+    changed.machines.machines[0].host = "owner@replacement".into();
+    changed.isolation.remote.get_mut("local").unwrap().host = "owner@replacement".into();
+    assert!(launcher.validate_config(&changed).is_err());
+    std::fs::remove_dir(remote_home.join("private")).unwrap();
+    assert_eq!(
+        launcher
+            .admit(std::sync::Arc::new(f.config.clone()), spec)
+            .await
+            .unwrap_err()
+            .code,
+        "worker_isolation_inventory_refused"
+    );
     assert!(!remote_home.join(".codex").exists());
     assert!(!remote_home.join(".claude").exists());
     assert!(!remote_home.join("private/state.db").exists());
@@ -222,4 +249,132 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
             .count(),
         0
     );
+}
+
+fn worker_spec(f: &Fixture) -> fridica::workers::protocol::WorkerSpec {
+    let machine = &f.config.machines.machines[0];
+    let mut workspace = machine.workspaces[0].for_slot(1);
+    workspace.policy.gpu_confine = Some(true);
+    serde_json::from_value(serde_json::json!({"worker_id":"w", "machine":machine,
+        "workspace":workspace, "backend":"codex", "instructions":"", "model":"",
+        "reasoning_effort":"", "job_timeout":30, "idle_timeout":30, "excluded_env":[], "slot":1}))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn automatic_admission_probes_without_provisioning_and_rechecks_changed_settings() {
+    use fridica::workers::jsonl::{Launcher, SystemLauncher};
+    use std::sync::Arc;
+    let f = Fixture::new();
+    let launcher = SystemLauncher::from_config(
+        &f.config,
+        f.home.clone(),
+        BTreeMap::new(),
+        f.home.join("ssh"),
+    )
+    .unwrap();
+    let spec = worker_spec(&f);
+    launcher
+        .admit(Arc::new(f.config.clone()), spec.clone())
+        .await
+        .unwrap();
+    assert!(!spec.workspace.path.exists());
+    assert!(!f.home.join(".codex").exists());
+    std::fs::create_dir(f.home.join(".codex")).unwrap();
+    std::fs::write(f.home.join(".codex/config.toml"), "invalid private-value").unwrap();
+    let error = launcher
+        .admit(Arc::new(f.config.clone()), spec.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "worker_isolation_settings_refused");
+    assert_eq!(error.kind, fridica::core::worker::Failure::Refusal);
+    assert!(!spec.workspace.path.exists());
+    assert!(!f.config.state.path.exists());
+    // Ordinary workers retain their policy and do not invoke a namespace probe.
+    let mut ordinary = spec;
+    ordinary.workspace.policy.gpu_confine = Some(false);
+    launcher
+        .admit(Arc::new(f.config.clone()), ordinary)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn immutable_launcher_rejects_inventory_identity_and_private_path_changes() {
+    use fridica::workers::jsonl::{Launcher, SystemLauncher};
+    use std::sync::Arc;
+    let f = Fixture::new();
+    let launcher = SystemLauncher::from_config(
+        &f.config,
+        f.home.clone(),
+        BTreeMap::new(),
+        f.home.join("ssh"),
+    )
+    .unwrap();
+    for index in 0..4 {
+        let mut config = f.config.clone();
+        match index {
+            0 => config
+                .isolation
+                .private_files
+                .push(f.home.join("private/key")),
+            1 => config.isolation.mcp_aliases.push("owner-wrapper".into()),
+            2 => config
+                .isolation
+                .mcp_urls
+                .push("http://localhost:8765/mcp".into()),
+            _ => config.state.control_socket = f.home.join("private/new-control.sock"),
+        }
+        assert!(launcher.validate_config(&config).is_err());
+        let error = launcher
+            .admit(Arc::new(config), worker_spec(&f))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "worker_isolation_configuration_changed");
+    }
+    assert_eq!(std::fs::read_dir(&f.home).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn cancelled_probe_retains_capacity_until_stubborn_child_is_reaped() {
+    use fridica::exec::isolation::run_probe_with_permit;
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let command = process::Launch {
+        argv: vec!["/usr/bin/python3".into(), "-I".into(), "-S".into(), "-c".into(),
+            "import os,pathlib,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)".into(),
+            pid_file.to_str().unwrap().into()],
+        cwd: Some("/".into()), env: BTreeMap::new(),
+    };
+    let permits = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = permits.clone().acquire_owned().await.unwrap();
+    let task = tokio::spawn(run_probe_with_permit(
+        command,
+        Duration::from_secs(20),
+        permit,
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while std::fs::read_to_string(&pid_file)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), permits.acquire())
+            .await
+            .is_err()
+    );
+    let _next = tokio::time::timeout(Duration::from_secs(5), permits.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());
 }

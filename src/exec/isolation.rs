@@ -12,11 +12,13 @@ use crate::config::{
     Config,
 };
 use anyhow::{bail, Result};
+use serde::Serialize;
 use serde_json::json;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 pub const HELPER: &str = concat!(
@@ -25,14 +27,14 @@ pub const HELPER: &str = concat!(
     include_str!("isolation_helper.py")
 );
 const BOOTSTRAP: &str = include_str!("isolation_bootstrap.py");
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Isolation {
     private: Vec<PathBuf>,
     remote: BTreeMap<String, RemoteFiles>,
     mcp_aliases: Vec<String>,
     mcp_urls: Vec<String>,
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct RemoteFiles {
     host: String,
     private: Vec<String>,
@@ -249,4 +251,69 @@ fn safe_path(path: &Path) -> bool {
         && path
             .components()
             .all(|p| matches!(p, Component::RootDir | Component::Normal(_)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Check {
+    Passed,
+    MissingRemoteInventory,
+    UnsupportedTransport,
+    LaunchConfigurationRefused,
+    InventoryRefused,
+    SettingsRefused,
+    NamespaceFailed,
+    RuntimeOrTransportFailed,
+    ProbeFailed,
+}
+/// Bounded process ownership includes cancellation cleanup and the SSH stdin
+/// watchdog. Exact markers and successful exit are both required for success.
+pub async fn run_probe(launch: Launch, timeout: Duration) -> Check {
+    probe_result(process::run_with_open_stdin(launch, timeout, 4096).await)
+}
+
+/// The cleanup owner retains probe capacity if admission is cancelled.
+pub async fn run_probe_with_permit(
+    launch: Launch,
+    timeout: Duration,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> Check {
+    probe_result(process::run_with_open_stdin_with_permit(launch, timeout, 4096, permit).await)
+}
+
+fn probe_result(result: Result<process::Completed>) -> Check {
+    let Ok(result) = result else {
+        return Check::ProbeFailed;
+    };
+    match (result.returncode, result.stdout.as_slice()) {
+        (0, b"fridica-isolation:namespace\nfridica-isolation:ready\n") => Check::Passed,
+        (97, b"fridica-isolation:inventory-refused\n") => Check::InventoryRefused,
+        (97, b"fridica-isolation:settings-refused\n") => Check::SettingsRefused,
+        (_, b"fridica-isolation:namespace\n")
+        | (97, b"fridica-isolation:namespace\nfridica-isolation:namespace-refused\n") => {
+            Check::NamespaceFailed
+        }
+        _ => Check::RuntimeOrTransportFailed,
+    }
+}
+
+/// First option wins in OpenSSH: probes must not reuse/persist a master or
+/// enroll a host key. Shared by explicit doctor and automatic job admission.
+pub fn read_only_ssh_probe(launch: &mut Launch) {
+    launch.argv.splice(
+        1..1,
+        [
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "ControlPersist=no",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "UpdateHostKeys=no",
+        ]
+        .map(str::to_owned),
+    );
 }

@@ -92,6 +92,7 @@ impl Supervisor {
         {
             bail!("invalid worker deadline");
         }
+        factory.validate_config(&config)?;
         Ok(Self {
             store,
             factory,
@@ -171,6 +172,7 @@ impl Supervisor {
         {
             bail!("invalid worker deadline");
         }
+        self.factory.validate_config(&config)?;
         self.approvals.reconfigure(config.clone()).await?;
         s.config = config;
         Ok(())
@@ -365,6 +367,7 @@ impl Supervisor {
                 Task {
                     store: self.store.clone(),
                     worker,
+                    factory: self.factory.clone(),
                     spec,
                     job: job.clone(),
                     record: record.clone(),
@@ -548,6 +551,7 @@ async fn close_worker(worker: &Arc<dyn Worker>, grace: Duration) -> bool {
 }
 struct Task {
     store: Store,
+    factory: Arc<dyn Factory>,
     worker: Arc<dyn Worker>,
     spec: WorkerSpec,
     job: Job,
@@ -568,6 +572,7 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
     };
     let in_backend = AtomicBool::new(false);
     let mut operation = Box::pin(async {
+        t.factory.admit(t.config.clone(), t.spec.clone()).await?;
         let prepared = t.io.prepare(t.spec.clone(), t.job.clone()).await?;
         let mut brief = frame(&t.job, &t.record);
         brief.push_str(&prepared);

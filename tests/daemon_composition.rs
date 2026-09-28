@@ -33,6 +33,8 @@ with pathlib.Path(os.environ['PARENT_LOG']).open('a') as log:
     log.write(json.dumps({'prompt':prompt,'argv':sys.argv})+'\n')
 schema=json.loads(sys.argv[sys.argv.index('--json-schema')+1])
 action={'decision':'respond'} if 'decision' in schema['properties'] else json.loads(os.environ['PARENT_ACTION'])
+if 'worker_isolation_settings_refused' in prompt:
+    action={'reply':{'text':'Worker refused: worker_isolation_settings_refused','status':'complete'}}
 print(json.dumps({'is_error':False,'structured_output':action}))
 "#;
 const GH: &str = r#"#!/usr/bin/python3
@@ -509,4 +511,81 @@ async fn enabled_context_cannot_silently_lose_its_adapter() {
     .is_err());
     assert!(!f.dir.path().join("parent.log").exists());
     assert_eq!(f.scalar("SELECT count(*) FROM replay_events").await, 0);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn composed_isolation_refusal_is_durable_and_precedes_fetch_and_backend_startup() {
+    let mut f = Fixture::new().await;
+    Arc::make_mut(&mut f.config).machines.machines[0].workspaces[0]
+        .policy
+        .gpu_confine = Some(true);
+    std::fs::create_dir(f.dir.path().join("home/.codex")).unwrap();
+    std::fs::write(
+        f.dir.path().join("home/.codex/config.toml"),
+        "invalid private-value",
+    )
+    .unwrap();
+    let runtime = f
+        .start(Mode::Active(Box::new(
+            f.execution("Run checks".into(), true),
+        )))
+        .await;
+    f.receive(&runtime).await;
+    assert_eq!(runtime.pass().await.unwrap().started, 1);
+    f.wait_for("SELECT count(*) FROM jobs WHERE status='failed' AND error='worker_isolation_settings_refused'", 1).await;
+    assert_eq!(f.scalar("SELECT count(*) FROM jobs").await, 1);
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM replay_events WHERE kind='worker_completion'")
+            .await,
+        1
+    );
+    assert_eq!(f.scalar("SELECT count(*) FROM replay_events WHERE kind IN ('worker_call','repo_fetch','backend_wire')").await, 0);
+    assert!(f.fetch.0.lock().unwrap().is_empty());
+    assert!(!f.dir.path().join("worker.log").exists());
+    assert!(!f.dir.path().join("project/worker1").exists());
+    runtime.pass().await.unwrap();
+    assert!(f
+        .slack
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|p| p.post.text.contains("worker_isolation_settings_refused")));
+    assert!(!serde_json::to_string(&*f.slack.sent.lock().unwrap())
+        .unwrap()
+        .contains("private-value"));
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn composition_rejects_stale_mcp_options_before_recovery_mutates_state() {
+    let mut f = Fixture::new().await;
+    let execution = f.execution("Run checks".into(), false);
+    Arc::make_mut(&mut f.config)
+        .isolation
+        .mcp_aliases
+        .push("new-owner-wrapper".into());
+    f.store.call(|c| {
+        c.execute("INSERT INTO threads(id,workspace,channel,root_ts,status,created,updated) VALUES(?,'TTEAM','CROOM','100.1','active',1,1)", [SESSION])?;
+        c.execute("INSERT INTO thread_inbox(session_id,kind,ref,payload_json,state,created) VALUES(?,'message','interrupted','{}','processing',1)", [SESSION])?;
+        Ok(())
+    }).await.unwrap();
+    let result = composition::start(
+        f.config.clone(),
+        f.store.clone(),
+        f.slack.clone(),
+        f.clock.clone(),
+        Arc::new(SequenceIds::default()),
+        Mode::Active(Box::new(execution)),
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(
+        f.scalar("SELECT count(*) FROM thread_inbox WHERE state='processing'")
+            .await,
+        1
+    );
+    assert!(!f.dir.path().join("parent.log").exists());
+    assert!(!f.dir.path().join("worker.log").exists());
 }

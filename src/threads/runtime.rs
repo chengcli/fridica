@@ -59,6 +59,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         ids: Arc<dyn Identifiers>,
         observe_only: bool,
     ) -> Result<Self> {
+        adapters.workers.validate_config(&config)?;
         let timeout = Duration::try_from_secs_f64(config.parent.timeout)?;
         work::recover(&store, clock.now()).await?;
         outbox::recover(&store, clock.now()).await?;
