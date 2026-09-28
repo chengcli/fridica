@@ -1378,3 +1378,74 @@ async fn cancelling_github_preparation_preserves_unfinished_context_intent() {
     assert!(!h.dir.path().join("log").exists());
     assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_attachment_call' AND complete=0").await,"1");
 }
+
+#[tokio::test]
+async fn clean_restore_followup_does_not_download_or_render_old_attachments() {
+    let h = Harness::new("claude", FAKE, "ok", 5.).await;
+    let downloads = Arc::new(AttachmentDownloads::default());
+    let base = h.actor();
+    let actor = Actor {
+        config: base.config,
+        store: base.store,
+        parent: Arc::new(attachment_parent(&h, downloads.clone())),
+        clock: base.clock,
+        ids: base.ids,
+        owner: base.owner,
+        limits: base.limits,
+        observe_only: false,
+        parent_timeout: base.parent_timeout,
+    };
+    h.intake(1, "<@UOWNER> review the old diff").await;
+    let attached = attachment_message("e1", "F1", "old.diff", "UALICE")["attachments"].to_string();
+    h.store.call(move|c|{c.execute("UPDATE messages SET attachments_json=?,files_json='[\"old.diff\"]' WHERE event_id='e1'",[attached])?;Ok(())}).await.unwrap();
+    assert_eq!(actor.step(SESSION.into()).await.unwrap(), Step::Committed);
+    assert_eq!(downloads.calls.lock().unwrap().len(), 1);
+    controls::apply(
+        &h.store,
+        SESSION.into(),
+        Control::Clean,
+        Authority::Owner,
+        21.,
+    )
+    .await
+    .unwrap();
+    controls::apply(
+        &h.store,
+        SESSION.into(),
+        Control::Restore,
+        Authority::Owner,
+        22.,
+    )
+    .await
+    .unwrap();
+    attention::intake(
+        &h.store,
+        Message {
+            event_id: "after-clean".into(),
+            workspace: "TTEAM".into(),
+            channel: "CROOM".into(),
+            ts: "101.1".into(),
+            thread_ts: Some("100.1".into()),
+            sender: "UALICE".into(),
+            text: "<@UOWNER> review the new request".into(),
+            files: vec![],
+            attachments: vec![],
+            source: "socket".into(),
+            meta: None,
+        },
+        "UOWNER".into(),
+        23.,
+        900.,
+        "new-ask".into(),
+    )
+    .await
+    .unwrap();
+    actor.step(SESSION.into()).await.unwrap();
+    assert_eq!(downloads.calls.lock().unwrap().len(), 1);
+    let prompt = last_prompt(&h).to_string();
+    assert!(!prompt.contains("old.diff"));
+    assert!(!prompt.contains("files.slack.com"));
+    assert!(!prompt.contains("- old\\n+ new"));
+    assert!(prompt.contains("new request"));
+    h.clean();
+}

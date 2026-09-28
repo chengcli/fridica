@@ -15,6 +15,8 @@ pub enum Control {
     Resume,
     Close,
     Archive,
+    Restore,
+    Clean,
     Instruct { text: String },
 }
 
@@ -165,14 +167,35 @@ fn apply_tx(
                 ThreadControl::Active,
             )
         }
-        Control::Close | Control::Archive => {
+        Control::Restore => {
             if actor != Authority::Owner {
-                bail!("only the owner may close or archive a thread");
+                bail!("restoration requires owner authentication");
+            }
+            let stopping: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='thread_worker_stop' AND complete=0 AND json_extract(payload_json,'$.session')=?)",
+                [&session], |r| r.get(0),
+            )?;
+            // Include older terminal threads which predate durable stop intents.
+            let live: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM workers WHERE session_id=? AND status!='stopped')",
+                [&session],
+                |r| r.get(0),
+            )?;
+            if stopping || (matches!(control.as_str(), "closed" | "archived" | "cleaned") && live) {
+                bail!("thread worker cleanup is pending");
+            }
+            ("active", "restore", ThreadControl::Active)
+        }
+        Control::Close | Control::Archive | Control::Clean => {
+            if actor != Authority::Owner {
+                bail!("only the owner may close, archive or clean a thread");
             }
             if matches!(action, Control::Close) {
                 ("closed", "close", ThreadControl::Closed)
-            } else {
+            } else if matches!(action, Control::Archive) {
                 ("archived", "archive", ThreadControl::Archived)
+            } else {
+                ("cleaned", "clean", ThreadControl::Cleaned)
             }
         }
     };
@@ -180,17 +203,18 @@ fn apply_tx(
         ThreadControl::Paused { reason, .. } => reason.as_str(),
         _ => "",
     };
+    let reset_streak = state == "active" && !matches!(action, Control::Restore);
     tx.execute(
         "UPDATE threads SET control=?,control_json=?,pause_reason=?,version=version+1,updated=?,
-            wait_streak=CASE WHEN ?='active' THEN 0 ELSE wait_streak END,
-            no_progress=CASE WHEN ?='active' THEN 0 ELSE no_progress END WHERE id=?",
+            wait_streak=CASE WHEN ? THEN 0 ELSE wait_streak END,
+            no_progress=CASE WHEN ? THEN 0 ELSE no_progress END WHERE id=?",
         params![
             state,
             serde_json::to_string(&detail)?,
             reason,
             now,
-            state,
-            state,
+            reset_streak,
+            reset_streak,
             session
         ],
     )?;
@@ -204,6 +228,22 @@ fn apply_tx(
     }
     if state == "active" {
         tx.execute("UPDATE thread_inbox SET not_before=0 WHERE session_id=? AND kind IN ('worker_result','worker_interrupted') AND state='pending'",[&session])?;
+    }
+    if matches!(action, Control::Close | Control::Archive | Control::Clean) {
+        queue_stops_tx(tx, &session, now, true)?;
+    }
+    if matches!(action, Control::Clean) {
+        tx.execute("UPDATE messages SET text='',files_json='[]',attachments_json='[]' WHERE workspace||':'||channel||':'||root_ts=?", [&session])?;
+        tx.execute(
+            "UPDATE threads SET summary='',decisions_json='[]' WHERE id=?",
+            [&session],
+        )?;
+        tx.execute("UPDATE thread_inbox SET payload_json='{\"text\":\"\"}' WHERE session_id=? AND kind='owner_instruction'", [&session])?;
+        // Retain IDs and history, but never execute work using wiped input or a
+        // context snapshot captured before cleaning. New intake remains visible.
+        tx.execute("UPDATE thread_inbox SET state='dropped' WHERE session_id=? AND state IN ('pending','processing')", [&session])?;
+        tx.execute("UPDATE reply_reservations SET state='released' WHERE session_id=? AND state='reserved' AND outbox_id IS NULL", [&session])?;
+        tx.execute("UPDATE obligations SET state='owner_closed',state_json='{\"kind\":\"owner_closed\",\"reason\":\"Thread cleaned by owner\"}',updated=? WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery')", params![now,session])?;
     }
     let mut instruction = None;
     match &action {
@@ -264,4 +304,24 @@ fn apply_tx(
         ],
     )?;
     Ok(instruction)
+}
+
+/// Persist termination intent with the control effect, before acknowledgement.
+/// Complete only after the supervisor confirms process cleanup. Replay storage
+/// keeps the intent recoverable even if worker status already became `stopped`.
+pub(crate) fn queue_stops_tx(
+    c: &rusqlite::Connection,
+    session: &str,
+    now: f64,
+    include_stopped: bool,
+) -> Result<()> {
+    c.execute(
+        "INSERT INTO replay_events(kind,time,payload_json,complete)
+         SELECT 'thread_worker_stop',?,json_object('session',session_id,'worker',id),0 FROM workers w
+         WHERE session_id=? AND (status!='stopped' OR ?) AND NOT EXISTS(
+            SELECT 1 FROM replay_events e WHERE e.kind='thread_worker_stop' AND e.complete=0
+            AND json_extract(e.payload_json,'$.worker')=w.id)",
+        params![now,session,include_stopped],
+    )?;
+    Ok(())
 }

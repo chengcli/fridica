@@ -172,9 +172,6 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     Ok(false) => return Response::error(404, "no_such_thread"),
                     Err(_) => return Response::error(500, "storage_failed"),
                 }
-                if matches!(*action, "restore" | "clean") {
-                    return Response::error(501, "thread_restoration_and_cleaning_not_implemented");
-                }
                 if *action == "instruct" {
                     let (Some(text), Some(client_id)) =
                         (body["text"].as_str(), body["client_id"].as_str())
@@ -259,6 +256,8 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     "resume" => Control::Resume,
                     "close" => Control::Close,
                     "archive" => Control::Archive,
+                    "restore" => Control::Restore,
+                    "clean" => Control::Clean,
                     _ => unreachable!(),
                 };
                 match self.runtime.control(id.clone(), control, authority).await {
@@ -372,6 +371,8 @@ fn operation_error(error: anyhow::Error) -> Response {
         Response::error(500, "storage_failed")
     } else if error.to_string().contains("owner") || error.to_string().contains("authentication") {
         Response::error(403, "owner_required")
+    } else if error.to_string() == "thread worker cleanup is pending" {
+        Response::error(409, "thread_cleanup_pending")
     } else if matches!(
         error.to_string().as_str(),
         "notes revision conflict"

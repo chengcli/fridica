@@ -52,18 +52,21 @@ impl<P: Parent> Actor<P> {
             Ok(step) => Ok(step),
             Err(_error) => {
                 let now = self.clock.now();
-                self.store.call(move|c| {
+                let recorded = self.store.call(move|c| {
                     let tx=c.transaction()?;
-                    let attempts:i64=tx.query_row("SELECT attempts FROM thread_inbox WHERE id=?",[id],|r|r.get(0))?;
+                    let (attempts,state):(i64,String)=tx.query_row("SELECT attempts,state FROM thread_inbox WHERE id=?",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+                    // Cleaning may discard this turn while an external call is
+                    // failing. Its late error must not create fresh signal work.
+                    if state != "processing" { return Ok(false); }
                     tx.execute("UPDATE thread_inbox SET attempts=attempts+1,state=?,not_before=? WHERE id=? AND state='processing'",params![if attempts>=2{"dropped"}else{"pending"},now+30.,id])?;
                     tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
                     tx.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated)
                         SELECT ?,?,'signal',?,?,'An inbox turn failed; review required',?,?,?
                         WHERE NOT EXISTS(SELECT 1 FROM thread_inbox i JOIN obligations o ON i.ref=o.id WHERE i.id=? AND i.kind='obligation_due' AND o.kind='signal')",params![format!("inbox-failed:{id}"),session,format!("inbox-failed:{id}"),json!({"inbox_id":id}).to_string(),now,now,now,id])?;
                     tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','inbox.failed',?,?)",params![now,session,json!({"inbox_id":id,"attempt":attempts+1}).to_string()])?;
-                    tx.commit()?;Ok(())
+                    tx.commit()?;Ok(true)
                 }).await?;
-                Ok(Step::Failed)
+                Ok(if recorded { Step::Failed } else { Step::Stale })
             }
         }
     }
@@ -81,18 +84,14 @@ impl<P: Parent> Actor<P> {
             } else {
                 "thread is paused or closed"
             };
-            if worker_result {
-                defer(&self.store, id, self.clock.now() + 60.).await?;
-            } else {
-                settle(
-                    &self.store,
-                    id,
-                    request.trigger.clone(),
-                    format!("observe: {reason}"),
-                )
-                .await?;
-            }
-            return Ok(Step::Observed);
+            return settle(
+                &self.store,
+                id,
+                &request,
+                format!("observe: {reason}"),
+                worker_result.then(|| self.clock.now() + 60.),
+            )
+            .await;
         }
         if worker_result
             && (request.trigger["pending"] == true
@@ -100,14 +99,14 @@ impl<P: Parent> Actor<P> {
                     .as_array()
                     .is_none_or(|r| r.is_empty()))
         {
-            settle(
+            return settle(
                 &self.store,
                 id,
-                request.trigger.clone(),
+                &request,
                 "observe: group still working or already reported".into(),
+                None,
             )
-            .await?;
-            return Ok(Step::Observed);
+            .await;
         }
         if !matches!(
             kind,
@@ -117,17 +116,19 @@ impl<P: Parent> Actor<P> {
                 | "worker_result"
                 | "worker_interrupted"
         ) {
-            let now = self.clock.now();
-            self.store
-                .call(move |c| {
-                    c.execute(
-                        "UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",
-                        params![now + 60., id],
-                    )?;
-                    Ok(())
-                })
-                .await?;
-            return Ok(Step::Unsupported);
+            let outcome = settle(
+                &self.store,
+                id,
+                &request,
+                String::new(),
+                Some(self.clock.now() + 60.),
+            )
+            .await?;
+            return Ok(if outcome == Step::Observed {
+                Step::Unsupported
+            } else {
+                outcome
+            });
         }
         if kind == "obligation_due" {
             let ref_id = request.trigger["ref"].as_str().unwrap_or("");
@@ -136,14 +137,14 @@ impl<P: Parent> Actor<P> {
                     && matches!(o["state"].as_str(), Some("open" | "deferred"))
                     && o["due"].as_f64().is_some_and(|due| due <= self.clock.now())
             }) {
-                settle(
+                return settle(
                     &self.store,
                     id,
-                    request.trigger.clone(),
+                    &request,
                     "observe: obligation no longer due".into(),
+                    None,
                 )
-                .await?;
-                return Ok(Step::Observed);
+                .await;
             }
         }
         let mut turn = request.session["turns"]
@@ -201,8 +202,7 @@ impl<P: Parent> Actor<P> {
             turn = outcome.turn;
             verdict = format!("{}: {}", outcome.kind, outcome.reason);
             if matches!(outcome.kind.as_str(), "ignore" | "observe") {
-                settle(&self.store, id, request.trigger.clone(), verdict).await?;
-                return Ok(Step::Observed);
+                return settle(&self.store, id, &request, verdict, None).await;
             }
             if outcome.kind == "triage" {
                 request.call = "triage".into();
@@ -465,13 +465,48 @@ fn validate(
     Ok(decision)
 }
 
-async fn settle(store: &Store, id: i64, trigger: Value, verdict: String) -> Result<()> {
-    store.call(move|c| {
-        let tx=c.transaction()?;
-        if let Some(event)=trigger["message"]["event_id"].as_str() {tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,event])?;}
-        tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
-        tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-        tx.commit()?;Ok(())
+/// Quiet/paused decisions need the same version fence as model decisions.
+/// Otherwise a late observation can consume an owner-resumed inbox item, or
+/// resurrect an item which a concurrent clean deliberately dropped.
+async fn settle(
+    store: &Store,
+    id: i64,
+    request: &ParentRequest,
+    verdict: String,
+    until: Option<f64>,
+) -> Result<Step> {
+    let session = request.session["id"]
+        .as_str()
+        .context("missing session ID")?
+        .to_owned();
+    let version = request.session["version"]
+        .as_i64()
+        .context("missing session version")?;
+    let event = request.trigger["message"]["event_id"]
+        .as_str()
+        .map(str::to_owned);
+    store.call(move |c| {
+        let tx = c.transaction()?;
+        let current: bool = tx.query_row(
+            "SELECT version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",
+            params![version,id,session], |r| r.get(0),
+        )?;
+        let outcome = if !current {
+            tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'", [id])?;
+            Step::Stale
+        } else if let Some(until) = until {
+            tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?", params![until,id])?;
+            Step::Observed
+        } else {
+            if let Some(event) = event {
+                tx.execute("UPDATE messages SET verdict=? WHERE event_id=?", params![verdict,event])?;
+            }
+            tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?", [id])?;
+            Step::Observed
+        };
+        tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL", [id])?;
+        tx.commit()?;
+        Ok(outcome)
     }).await
 }
 
@@ -592,13 +627,6 @@ pub async fn recover(store: &Store) -> Result<usize> {
         .await
 }
 
-async fn defer(store: &Store, id: i64, until: f64) -> Result<()> {
-    store.call(move |c| {
-        c.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=? AND state='processing'",params![until,id])?;
-        Ok(())
-    }).await
-}
-
 async fn current(store: &Store, id: i64, session: &str, request: &ParentRequest) -> Result<bool> {
     let session = session.to_owned();
     let version = request.session["version"].as_i64();
@@ -631,4 +659,133 @@ async fn settle_triage(
         tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('triage_commit',?,?)",params![now,json!({"inbox_id":id,"verdict":verdict}).to_string()])?;
         tx.commit()?;Ok(Step::Observed)
     }).await
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::{
+        attention::Message,
+        core::Authority,
+        threads::controls::{self, Control},
+    };
+
+    #[tokio::test]
+    async fn stale_observation_or_deferral_cannot_consume_resume_or_undo_clean() {
+        for until in [None, Some(100.)] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path().join("db")).await.unwrap();
+            let session = "TTEAM:CROOM:100.1".to_owned();
+            let id = attention::intake(
+                &store,
+                Message {
+                    event_id: "event".into(),
+                    workspace: "TTEAM".into(),
+                    channel: "CROOM".into(),
+                    ts: "100.1".into(),
+                    thread_ts: None,
+                    sender: "UALICE".into(),
+                    text: "<@UOWNER> help".into(),
+                    files: vec![],
+                    source: "socket".into(),
+                    meta: None,
+                    attachments: vec![],
+                },
+                "UOWNER".into(),
+                20.,
+                900.,
+                "ask".into(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            controls::apply(
+                &store,
+                session.clone(),
+                Control::Pause {
+                    reason: "Hold".into(),
+                },
+                Authority::Owner,
+                20.,
+            )
+            .await
+            .unwrap();
+            attention::claim_due(&store, session.clone(), 20.)
+                .await
+                .unwrap()
+                .unwrap();
+            let paused = load(&store, id, session.clone()).await.unwrap();
+            controls::apply(
+                &store,
+                session.clone(),
+                Control::Resume,
+                Authority::Owner,
+                21.,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                settle(&store, id, &paused, "observe: paused".into(), until)
+                    .await
+                    .unwrap(),
+                Step::Stale
+            );
+            let state: (String, f64, String) = store
+                .call(move |c| {
+                    Ok(c.query_row(
+                        "SELECT state,not_before,payload_json FROM thread_inbox WHERE id=?",
+                        [id],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(state.0, "pending");
+            assert_eq!(state.1, 0.);
+            assert_eq!(
+                serde_json::from_str::<Value>(&state.2).unwrap()["owner_trigger"],
+                true
+            );
+            attention::claim_due(&store, session.clone(), 21.)
+                .await
+                .unwrap()
+                .unwrap();
+            let before_clean = load(&store, id, session.clone()).await.unwrap();
+            controls::apply(
+                &store,
+                session.clone(),
+                Control::Clean,
+                Authority::Owner,
+                22.,
+            )
+            .await
+            .unwrap();
+            controls::apply(&store, session, Control::Restore, Authority::Owner, 23.)
+                .await
+                .unwrap();
+            assert_eq!(
+                settle(
+                    &store,
+                    id,
+                    &before_clean,
+                    "observe: old input".into(),
+                    until
+                )
+                .await
+                .unwrap(),
+                Step::Stale
+            );
+            let state: String = store
+                .call(move |c| {
+                    Ok(
+                        c.query_row("SELECT state FROM thread_inbox WHERE id=?", [id], |r| {
+                            r.get(0)
+                        })?,
+                    )
+                })
+                .await
+                .unwrap();
+            assert_eq!(state, "dropped");
+        }
+    }
 }

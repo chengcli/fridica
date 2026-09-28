@@ -350,13 +350,20 @@ path="{}"
             .unwrap()
     }
     async fn until(&self, sql: &'static str, want: i64) {
-        tokio::time::timeout(Duration::from_secs(4), async {
+        let result = tokio::time::timeout(Duration::from_secs(4), async {
             while self.scalar(sql).await != want {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
+        if result.is_err() {
+            let actual = self.scalar(sql).await;
+            let state: String = self.store.call(|c| Ok(c.query_row(
+                "SELECT json_object('inbox',json((SELECT json_group_array(json_object('kind',kind,'state',state,'not_before',not_before,'attempts',attempts)) FROM thread_inbox)), 'outbox',json((SELECT json_group_array(json_object('state',state,'error',error)) FROM outbox)), 'obligations',json((SELECT json_group_array(json_object('state',state,'summary',summary)) FROM obligations)))",
+                [], |r| r.get(0),
+            )?)).await.unwrap();
+            panic!("timed out waiting for {sql}: wanted {want}, got {actual}; state={state}");
+        }
     }
 }
 fn options() -> Options {

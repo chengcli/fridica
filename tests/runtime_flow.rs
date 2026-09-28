@@ -1430,3 +1430,476 @@ async fn instruction_transaction_rolls_back_and_idempotency_survives_reopen() {
         .unwrap();
     assert_eq!(control, "paused");
 }
+
+#[tokio::test]
+async fn clean_and_restore_clear_local_inputs_without_replaying_or_losing_new_intake() {
+    let h = Harness::new(
+        vec![json!({"reply":{"text":"New request handled.","status":"complete"}})],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    h.store.call(|c|{
+        c.execute("UPDATE messages SET files_json='[\"old.diff\"]',attachments_json='[{\"id\":\"FOLD\",\"url\":\"https://files.slack.com/private-old\"}]'",[])?;
+        c.execute("UPDATE threads SET summary='Old summary',decisions_json='[\"Old decision\"]',wait_streak=2,no_progress=1,turns=4,context_json='{\"repo\":\"owner/repo\"}'",[])?;
+        c.execute("INSERT INTO threads(id,workspace,channel,root_ts,created,updated,summary) VALUES('other','TTEAM','CROOM','90.1',1,1,'Keep this')",[])?;
+        c.execute("INSERT INTO messages(event_id,workspace,channel,root_ts,ts,sender,text,source,received_at) VALUES('other-event','TTEAM','CROOM','90.1','90.1','UALICE','Keep this too','socket',1)",[])?;Ok(())
+    }).await.unwrap();
+    let instruction = json!({"text":"Old instruction","client_id":"clean-1234"});
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/instruct"),
+            instruction.clone(),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    let clean = format!("/threads/{SESSION}/clean");
+    let restore = format!("/threads/{SESSION}/restore");
+    for authority in [Authority::Overseer, Authority::DesktopReadOnly] {
+        assert_eq!(
+            control_call(
+                &h,
+                "POST",
+                &clean,
+                json!({"actor":"UOWNER"}),
+                authority.clone()
+            )
+            .await
+            .status,
+            403
+        );
+        assert_eq!(
+            control_call(&h, "POST", &restore, json!({"actor":"UOWNER"}), authority)
+                .await
+                .status,
+            403
+        );
+    }
+    assert_eq!(
+        control_call(&h, "POST", &clean, json!({}), Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        h.scalar("SELECT control FROM threads WHERE id='TTEAM:CROOM:100.1'")
+            .await,
+        "cleaned"
+    );
+    assert_eq!(
+        h.scalar("SELECT text||files_json||attachments_json FROM messages WHERE event_id='e1'")
+            .await,
+        "[][]"
+    );
+    assert_eq!(
+        h.scalar("SELECT text FROM messages WHERE event_id='other-event'")
+            .await,
+        "Keep this too"
+    );
+    assert_eq!(
+        h.scalar("SELECT state FROM obligations").await,
+        "owner_closed"
+    );
+    assert_eq!(h.scalar("SELECT json_extract(payload_json,'$.text') FROM thread_inbox WHERE kind='owner_instruction'").await,"");
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE session_id='TTEAM:CROOM:100.1' AND state IN ('pending','processing')").await,"0");
+    assert_eq!(
+        control_call(&h, "POST", &restore, json!({}), Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/instruct"),
+            instruction,
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
+    h.runtime.pass().await.unwrap();
+    assert!(h.parent.calls.lock().unwrap().is_empty());
+    h.runtime
+        .intake(Message {
+            event_id: "fresh".into(),
+            workspace: "TTEAM".into(),
+            channel: "CROOM".into(),
+            ts: "101.1".into(),
+            thread_ts: Some("100.1".into()),
+            sender: "UALICE".into(),
+            text: "<@UOWNER> anything new?".into(),
+            files: vec![],
+            attachments: vec![],
+            source: "socket".into(),
+            meta: None,
+        })
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    let requests = h.parent.calls.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let old = requests[0]
+        .history
+        .iter()
+        .find(|v| v["event_id"] == "e1")
+        .unwrap();
+    assert_eq!(old["text"], "");
+    assert_eq!(old["files"], json!([]));
+    assert_eq!(old["attachments"], json!([]));
+    assert_eq!(requests[0].session["summary"], "");
+    assert_eq!(requests[0].session["context"]["repo"], "owner/repo");
+}
+
+#[tokio::test]
+async fn restore_preserves_history_and_counters_and_never_replays_latest_message() {
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    h.store.call(|c|{c.execute("UPDATE thread_inbox SET state='done'",[])?;c.execute("UPDATE threads SET turns=4,wait_streak=2,no_progress=1,reset_at=50,status='blocked',summary='Keep history'",[])?;Ok(())}).await.unwrap();
+    for closed in [
+        Control::Close,
+        Control::Archive,
+        Control::Pause {
+            reason: "Owner pause".into(),
+        },
+    ] {
+        h.runtime
+            .control(SESSION.into(), closed, Authority::Owner)
+            .await
+            .unwrap();
+        assert!(h
+            .runtime
+            .control(SESSION.into(), Control::Restore, Authority::Overseer)
+            .await
+            .is_err());
+        assert_eq!(
+            control_call(
+                &h,
+                "POST",
+                &format!("/threads/{SESSION}/restore"),
+                json!({}),
+                Authority::Owner
+            )
+            .await
+            .status,
+            200
+        );
+        assert_eq!(h.scalar("SELECT printf('%d/%d/%d/%.0f/%s/%s',turns,wait_streak,no_progress,reset_at,status,summary) FROM threads").await,"4/2/1/50/blocked/Keep history");
+        assert_eq!(
+            h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE state='pending'")
+                .await,
+            "0"
+        );
+    }
+}
+
+#[tokio::test]
+async fn clean_is_atomic_and_fences_a_parent_already_in_flight() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.store.call(|c|{c.execute_batch("CREATE TRIGGER fail_clean BEFORE UPDATE OF files_json ON messages BEGIN SELECT RAISE(ABORT,'write fault'); END;")?;Ok(())}).await.unwrap();
+    let path = format!("/threads/{SESSION}/clean");
+    assert_eq!(
+        control_call(&h, "POST", &path, json!({}), Authority::Owner)
+            .await
+            .status,
+        500
+    );
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "active");
+    assert_eq!(h.scalar("SELECT state FROM obligations").await, "open");
+    assert_ne!(h.scalar("SELECT text FROM messages").await, "");
+    h.store
+        .call(|c| {
+            c.execute_batch("DROP TRIGGER fail_clean;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    let runtime = h.runtime.clone();
+    let pass = tokio::spawn(async move { runtime.pass().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.parent.calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        control_call(&h, "POST", &path, json!({}), Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/restore"),
+            json!({}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    gate.add_permits(1);
+    pass.await.unwrap().unwrap();
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE state='pending'")
+            .await,
+        "0"
+    );
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    assert!(h.worker.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn restore_cannot_bypass_pending_worker_cleanup_even_after_status_is_stopped() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/clean"),
+            json!({}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    let restore = format!("/threads/{SESSION}/restore");
+    assert_eq!(
+        control_call(&h, "POST", &restore, json!({}), Authority::Owner)
+            .await
+            .status,
+        409
+    );
+    assert_eq!(
+        control_call(&h, "POST", &restore, json!({}), Authority::Owner)
+            .await
+            .body,
+        json!({"error":"thread_cleanup_pending"})
+    );
+    // Failure after the process has stopped must retain its durable stop intent.
+    h.store.call(|c|{c.execute_batch("CREATE TRIGGER fail_stop_ack BEFORE INSERT ON replay_events WHEN NEW.kind='thread_worker_stopped' BEGIN SELECT RAISE(ABORT,'ack fault'); END;")?;Ok(())}).await.unwrap();
+    assert!(h.runtime.pass().await.is_err());
+    assert_eq!(h.scalar("SELECT status FROM workers").await, "stopped");
+    assert!(h.runtime.processes().await.is_empty());
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='thread_worker_stop' AND complete=0").await,"1");
+    assert_eq!(
+        control_call(&h, "POST", &restore, json!({}), Authority::Owner)
+            .await
+            .status,
+        409
+    );
+    h.store
+        .call(|c| {
+            c.execute_batch("DROP TRIGGER fail_stop_ack;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='thread_worker_stop' AND complete=0").await,"0");
+    assert_eq!(
+        control_call(&h, "POST", &restore, json!({}), Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn frozen_python_clean_restore_transitions_match_declared_projection() {
+    use fridica::threads::controls;
+    let corpus: Value = serde_json::from_str(include_str!("corpus/thread_lifecycle.json")).unwrap();
+    for case in corpus["cases"].as_array().unwrap() {
+        let h = Harness::new(vec![], false).await;
+        let seed = corpus["seed"].clone();
+        h.store
+            .call(move |c| {
+                for command in seed.as_array().unwrap() {
+                    let params = command[1].as_array().unwrap().iter().map(|v| match v {
+                        Value::String(s) => rusqlite::types::Value::Text(s.clone()),
+                        Value::Number(n) if n.is_i64() => {
+                            rusqlite::types::Value::Integer(n.as_i64().unwrap())
+                        }
+                        Value::Number(n) => rusqlite::types::Value::Real(n.as_f64().unwrap()),
+                        _ => panic!("invalid fixture value"),
+                    });
+                    c.execute(
+                        command[0].as_str().unwrap(),
+                        rusqlite::params_from_iter(params),
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        for step in case.as_array().unwrap() {
+            let action = match step["action"].as_str().unwrap() {
+                "clean" => Control::Clean,
+                "restore" => Control::Restore,
+                "close" => Control::Close,
+                "archive" => Control::Archive,
+                _ => unreachable!(),
+            };
+            controls::apply(&h.store, SESSION.into(), action, Authority::Owner, 30.)
+                .await
+                .unwrap();
+            let actual:Value=h.store.call(|c|{
+                let raw:String=c.query_row("SELECT json_object('control',control,'status',status,'summary',summary,'turns',turns,'wait_streak',wait_streak,'no_progress',no_progress,'reset_at',reset_at) FROM threads",[],|r|r.get(0))?;
+                let decisions:String=c.query_row("SELECT decisions_json FROM threads",[],|r|r.get(0))?;
+                let repo:String=c.query_row("SELECT json_extract(context_json,'$.repo') FROM threads",[],|r|r.get(0))?;
+                let messages:Vec<String>=c.prepare("SELECT json_object('event_id',event_id,'text',text,'files_json',files_json,'attachments_json',attachments_json) FROM messages ORDER BY id")?.query_map([],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                let text:String=c.query_row("SELECT json_extract(payload_json,'$.text') FROM thread_inbox WHERE kind='owner_instruction'",[],|r|r.get(0))?;
+                let count:i64=c.query_row("SELECT count(*) FROM thread_inbox WHERE kind='message'",[],|r|r.get(0))?;
+                Ok(json!({"thread":serde_json::from_str::<Value>(&raw)?,"decisions":serde_json::from_str::<Value>(&decisions)?,"context_repo":repo,"messages":messages.iter().map(|s|serde_json::from_str::<Value>(s).unwrap()).collect::<Vec<_>>(),"instruction_text":text,"message_inbox_count":count}))
+            }).await.unwrap();
+            assert_eq!(actual, step["expected"], "{}", step["action"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_stop_intents_recover_after_runtime_restart_before_restore() {
+    for control in [Control::Close, Control::Archive, Control::Clean] {
+        let h = Harness::new(vec![], false).await;
+        h.intake(false).await;
+        h.store.call(|c|{
+            c.execute("INSERT INTO workers(id,session_id,machine,workspace,backend,created,updated) VALUES('restart-worker',?,'local','project','codex',20,20)",[SESSION])?;
+            c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,queued_at) VALUES('restart-job','restart-worker',?,'Never execute',20)",[SESSION])?;Ok(())
+        }).await.unwrap();
+        h.runtime
+            .control(SESSION.into(), control.clone(), Authority::Owner)
+            .await
+            .unwrap();
+        h.runtime
+            .control(SESSION.into(), control, Authority::Owner)
+            .await
+            .unwrap();
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='thread_worker_stop' AND complete=0").await,"1");
+        h.runtime.close().await.unwrap();
+        let Harness {
+            dir,
+            store,
+            config,
+            clock,
+            parent,
+            worker,
+            sink,
+            runtime,
+        } = h;
+        drop(runtime);
+        drop(store);
+        let store = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(s) = Store::open(dir.path().join("db")).await {
+                    break s;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let runtime = Runtime::start(
+            store.clone(),
+            config.clone(),
+            Adapters {
+                parent: parent.clone(),
+                delivery: sink.clone(),
+                workers: Arc::new(Fakes(worker.clone())),
+                job_io: Arc::new(NoJobIo),
+            },
+            clock.clone(),
+            Arc::new(SequenceIds::default()),
+            false,
+        )
+        .await
+        .unwrap();
+        let h = Harness {
+            dir,
+            store,
+            config,
+            clock,
+            parent,
+            worker,
+            sink,
+            runtime: Arc::new(runtime),
+        };
+        assert!(h
+            .runtime
+            .control(SESSION.into(), Control::Restore, Authority::Owner)
+            .await
+            .is_err());
+        h.runtime.pass().await.unwrap();
+        assert_eq!(h.scalar("SELECT status FROM jobs").await, "cancelled");
+        assert_eq!(h.scalar("SELECT status FROM workers").await, "stopped");
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='thread_worker_stop' AND complete=0").await,"0");
+        h.runtime
+            .control(SESSION.into(), Control::Restore, Authority::Owner)
+            .await
+            .unwrap();
+        assert!(h.worker.calls.lock().unwrap().is_empty());
+        h.runtime.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cleaned_parent_failure_cannot_create_fresh_signal_work() {
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    let runtime = h.runtime.clone();
+    let pass = tokio::spawn(async move { runtime.pass().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.parent.calls.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.runtime
+        .control(SESSION.into(), Control::Clean, Authority::Owner)
+        .await
+        .unwrap();
+    h.runtime
+        .control(SESSION.into(), Control::Restore, Authority::Owner)
+        .await
+        .unwrap();
+    gate.add_permits(1);
+    pass.await.unwrap().unwrap();
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM obligations WHERE state!='owner_closed'")
+            .await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE state='pending'")
+            .await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='inbox.failed'")
+            .await,
+        "0"
+    );
+}

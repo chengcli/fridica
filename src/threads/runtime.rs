@@ -174,9 +174,28 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         .await
     }
     async fn stop_closed_workers(&self) -> Result<()> {
-        let ids:Vec<String>=self.store.call(|c|Ok(c.prepare("SELECT w.id FROM workers w JOIN threads t ON t.id=w.session_id WHERE t.control IN ('closed','archived','cleaned') AND w.status!='stopped'")?.query_map([],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?)).await?;
-        for id in ids {
-            self.supervisor.stop(&id).await?;
+        let now = self.clock.now();
+        let pending: Vec<(i64,String)> = self.store.call(move |c| {
+            let tx = c.transaction()?;
+            let sessions: Vec<String> = tx.prepare("SELECT DISTINCT t.id FROM threads t JOIN workers w ON w.session_id=t.id WHERE t.control IN ('closed','archived','cleaned') AND w.status!='stopped'")?
+                .query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            for session in sessions { controls::queue_stops_tx(&tx, &session, now, false)?; }
+            let pending = tx.prepare("SELECT seq,json_extract(payload_json,'$.worker') FROM replay_events WHERE kind='thread_worker_stop' AND complete=0 ORDER BY seq")?
+                .query_map([], |r| Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            tx.commit()?;
+            Ok(pending)
+        }).await?;
+        for (intent, worker) in pending {
+            self.supervisor.stop(&worker).await?;
+            let now = self.clock.now();
+            self.store.call(move |c| {
+                let tx = c.transaction()?;
+                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('thread_worker_stopped',?,?)",
+                    rusqlite::params![now,serde_json::json!({"call":intent,"worker":worker}).to_string()])?;
+                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [intent])?;
+                tx.commit()?;
+                Ok(())
+            }).await?;
         }
         Ok(())
     }

@@ -1,0 +1,287 @@
+{
+  "cases": [
+    [
+      {
+        "action": "restore",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [
+            "Use feature branch"
+          ],
+          "instruction_text": "Old instruction",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[{\"id\":\"FOLD\",\"name\":\"old.diff\",\"url\":\"https://files.slack.com/synthetic\"}]",
+              "event_id": "old-event",
+              "files_json": "[\"old.diff\"]",
+              "text": "Old message"
+            }
+          ],
+          "thread": {
+            "control": "active",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "Local summary",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      }
+    ],
+    [
+      {
+        "action": "close",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [
+            "Use feature branch"
+          ],
+          "instruction_text": "Old instruction",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[{\"id\":\"FOLD\",\"name\":\"old.diff\",\"url\":\"https://files.slack.com/synthetic\"}]",
+              "event_id": "old-event",
+              "files_json": "[\"old.diff\"]",
+              "text": "Old message"
+            }
+          ],
+          "thread": {
+            "control": "closed",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "Local summary",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      },
+      {
+        "action": "restore",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [
+            "Use feature branch"
+          ],
+          "instruction_text": "Old instruction",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[{\"id\":\"FOLD\",\"name\":\"old.diff\",\"url\":\"https://files.slack.com/synthetic\"}]",
+              "event_id": "old-event",
+              "files_json": "[\"old.diff\"]",
+              "text": "Old message"
+            }
+          ],
+          "thread": {
+            "control": "active",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "Local summary",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      }
+    ],
+    [
+      {
+        "action": "archive",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [
+            "Use feature branch"
+          ],
+          "instruction_text": "Old instruction",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[{\"id\":\"FOLD\",\"name\":\"old.diff\",\"url\":\"https://files.slack.com/synthetic\"}]",
+              "event_id": "old-event",
+              "files_json": "[\"old.diff\"]",
+              "text": "Old message"
+            }
+          ],
+          "thread": {
+            "control": "archived",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "Local summary",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      },
+      {
+        "action": "restore",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [
+            "Use feature branch"
+          ],
+          "instruction_text": "Old instruction",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[{\"id\":\"FOLD\",\"name\":\"old.diff\",\"url\":\"https://files.slack.com/synthetic\"}]",
+              "event_id": "old-event",
+              "files_json": "[\"old.diff\"]",
+              "text": "Old message"
+            }
+          ],
+          "thread": {
+            "control": "active",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "Local summary",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      }
+    ],
+    [
+      {
+        "action": "clean",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [],
+          "instruction_text": "",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[]",
+              "event_id": "old-event",
+              "files_json": "[]",
+              "text": ""
+            }
+          ],
+          "thread": {
+            "control": "cleaned",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      },
+      {
+        "action": "restore",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [],
+          "instruction_text": "",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[]",
+              "event_id": "old-event",
+              "files_json": "[]",
+              "text": ""
+            }
+          ],
+          "thread": {
+            "control": "active",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      },
+      {
+        "action": "clean",
+        "expected": {
+          "context_repo": "owner/repo",
+          "decisions": [],
+          "instruction_text": "",
+          "message_inbox_count": 0,
+          "messages": [
+            {
+              "attachments_json": "[]",
+              "event_id": "old-event",
+              "files_json": "[]",
+              "text": ""
+            }
+          ],
+          "thread": {
+            "control": "cleaned",
+            "no_progress": 1,
+            "reset_at": 50.0,
+            "status": "blocked",
+            "summary": "",
+            "turns": 4,
+            "wait_streak": 2
+          }
+        }
+      }
+    ]
+  ],
+  "exceptions": [
+    "Rust acknowledges the durable control directly instead of queuing a control inbox item",
+    "Rust protects owner authority, persists worker stop intents, and blocks restoration during cleanup",
+    "Cleaning drops old pending inputs and owner-closes outstanding obligations in v6",
+    "Close/clean clear pause_reason in v6; excluded from the legacy state projection"
+  ],
+  "provenance": "Frozen v0.3.11 ThreadActor.on_control, synthetic state, no workers or external I/O",
+  "seed": [
+    [
+      "INSERT INTO threads(id,workspace,channel,root_ts,status,control,pause_reason,turns,wait_streak,no_progress,summary,decisions_json,context_json,reset_at,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "TTEAM:CROOM:100.1",
+        "TTEAM",
+        "CROOM",
+        "100.1",
+        "blocked",
+        "paused",
+        "Owner pause",
+        4,
+        2,
+        1,
+        "Local summary",
+        "[\"Use feature branch\"]",
+        "{\"repo\":\"owner/repo\"}",
+        50.0,
+        10.0,
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO messages(event_id,workspace,channel,root_ts,ts,sender,text,files_json,attachments_json,source,received_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "old-event",
+        "TTEAM",
+        "CROOM",
+        "100.1",
+        "100.1",
+        "UALICE",
+        "Old message",
+        "[\"old.diff\"]",
+        "[{\"id\":\"FOLD\",\"name\":\"old.diff\",\"url\":\"https://files.slack.com/synthetic\"}]",
+        "socket",
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO thread_inbox(session_id,kind,ref,payload_json,state,created) VALUES(?,?,?,?,?,?)",
+      [
+        "TTEAM:CROOM:100.1",
+        "owner_instruction",
+        "old-instruction",
+        "{\"text\":\"Old instruction\"}",
+        "done",
+        20.0
+      ]
+    ]
+  ]
+}
