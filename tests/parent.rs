@@ -171,6 +171,7 @@ impl Harness {
         attention::intake(
             &self.store,
             Message {
+                files: vec![],
                 event_id: format!("e{n}"),
                 workspace: "TTEAM".into(),
                 channel: "CROOM".into(),
@@ -648,6 +649,7 @@ async fn missing_owner_context_fails_before_spawning_and_disabling_general_messa
     attention::intake(
         &h.store,
         Message {
+            files: vec![],
             event_id: "followup".into(),
             workspace: "TTEAM".into(),
             channel: "CROOM".into(),

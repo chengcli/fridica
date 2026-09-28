@@ -19,6 +19,8 @@ pub struct Message {
     pub thread_ts: Option<String>,
     pub sender: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<Value>,
     #[serde(default = "socket_source")]
     pub source: String,
     #[serde(default)]
@@ -54,33 +56,82 @@ pub async fn intake(
     grace: f64,
     obligation_id: String,
 ) -> Result<Option<i64>> {
+    store
+        .call(move |c| {
+            let tx = c.transaction()?;
+            let inbox = intake_tx(&tx, msg, &owner, now, grace, &obligation_id, None)?;
+            tx.commit()?;
+            Ok(inbox)
+        })
+        .await
+}
+
+/// Shared atomic intake for direct callers, Socket Mode and catch-up. A catch-up
+/// cutoff decides history-only status against the thread in this transaction.
+pub(crate) fn intake_tx(
+    c: &rusqlite::Connection,
+    msg: Message,
+    owner: &str,
+    now: f64,
+    grace: f64,
+    obligation_id: &str,
+    history_before: Option<f64>,
+) -> Result<Option<i64>> {
     if !now.is_finite() || !grace.is_finite() || grace <= 0. {
         bail!("invalid intake time or grace");
     }
     msg.session_id()
         .parse::<ThreadId>()
         .map_err(anyhow::Error::msg)?;
-    store.call(move |c| {
-        let tx=c.transaction()?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('intake',?,?)",params![now,json!({"message":msg,"owner":owner,"grace":grace,"obligation_id":obligation_id}).to_string()])?;
-        let session=msg.session_id();
-        let root=msg.thread_ts.as_ref().unwrap_or(&msg.ts);
-        let mentioned=msg.text.contains(&format!("<@{owner}>"));
-        let inserted=tx.execute("INSERT OR IGNORE INTO messages(event_id,workspace,channel,ts,root_ts,thread_ts,sender,text,source,meta_json,received_at,attachments_json,mentions_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![msg.event_id,msg.workspace,msg.channel,msg.ts,root,msg.thread_ts,msg.sender,msg.text,msg.source,msg.meta.map(|m|m.to_string()),now,serde_json::to_string(&msg.attachments)?,mentioned])?;
-        if inserted==0 {tx.commit()?;return Ok(None);}
-        tx.execute("INSERT OR IGNORE INTO threads(id,workspace,channel,root_ts,created,updated,control_json) VALUES(?,?,?,?,?,?,'{\"kind\":\"active\"}')",
-            params![session,msg.workspace,msg.channel,root,now,now])?;
-        if msg.source=="self" {tx.commit()?;return Ok(None);}
-        tx.execute("INSERT INTO thread_inbox(session_id,kind,ref,created) VALUES(?,'message',?,?)",params![session,msg.event_id,now])?;
-        let inbox=tx.last_insert_rowid();
-        // Intake is independent of participation, pauses, and model availability.
-        if mentioned && msg.sender!=owner {
-            tx.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'mention',?,?,'Owner mentioned',?,?,?)",
-                params![obligation_id,session,format!("mention:{}:{}:{}",msg.workspace,msg.channel,msg.ts),json!({"event_id":msg.event_id}).to_string(),now,now+grace,now])?;
+    let session = msg.session_id();
+    let mentioned = msg.text.contains(&format!("<@{owner}>"));
+    let mut work = true;
+    let mut created = now;
+    if let Some(cutoff) = history_before {
+        let timestamp: f64 = msg.ts.parse()?;
+        if !timestamp.is_finite() || !cutoff.is_finite() {
+            bail!("invalid catch-up time");
         }
-        tx.commit()?; Ok(Some(inbox))
-    }).await
+        let waiting: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM threads WHERE id=? AND status='waiting')",
+            [&session],
+            |r| r.get(0),
+        )?;
+        work = timestamp >= cutoff || mentioned || waiting;
+        if !work {
+            created = now.min(timestamp);
+        }
+    }
+    let mut record =
+        json!({"message":msg,"owner":owner,"grace":grace,"obligation_id":obligation_id});
+    if history_before.is_some() {
+        record["work"] = json!(work);
+    }
+    c.execute(
+        "INSERT INTO replay_events(kind,time,payload_json) VALUES('intake',?,?)",
+        params![now, record.to_string()],
+    )?;
+    let root = msg.thread_ts.as_ref().unwrap_or(&msg.ts);
+    let inserted=c.execute("INSERT OR IGNORE INTO messages(event_id,workspace,channel,ts,root_ts,thread_ts,sender,text,files_json,source,meta_json,received_at,attachments_json,mentions_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![msg.event_id,msg.workspace,msg.channel,msg.ts,root,msg.thread_ts,msg.sender,msg.text,serde_json::to_string(&msg.files)?,msg.source,msg.meta.map(|m|m.to_string()),now,serde_json::to_string(&msg.attachments)?,mentioned])?;
+    if inserted == 0 {
+        return Ok(None);
+    }
+    c.execute("INSERT OR IGNORE INTO threads(id,workspace,channel,root_ts,created,updated,control_json) VALUES(?,?,?,?,?,?,'{\"kind\":\"active\"}')",
+        params![session,msg.workspace,msg.channel,root,created,created])?;
+    if msg.source == "self" || !work {
+        return Ok(None);
+    }
+    c.execute(
+        "INSERT INTO thread_inbox(session_id,kind,ref,created) VALUES(?,'message',?,?)",
+        params![session, msg.event_id, now],
+    )?;
+    let inbox = c.last_insert_rowid();
+    if mentioned && msg.sender != owner {
+        c.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'mention',?,?,'Owner mentioned',?,?,?)",
+            params![obligation_id,session,format!("mention:{}:{}:{}",msg.workspace,msg.channel,msg.ts),json!({"event_id":msg.event_id}).to_string(),now,now+grace,now])?;
+    }
+    Ok(Some(inbox))
 }
 
 pub async fn reserve(

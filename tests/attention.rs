@@ -8,6 +8,7 @@ use rusqlite::params;
 
 fn message(i: usize) -> Message {
     Message {
+        files: vec![],
         event_id: format!("e{i}"),
         workspace: "TTEAM".into(),
         channel: "CROOM".into(),

@@ -369,7 +369,7 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
         let data:String=tx.query_row("SELECT json_object('id',id,'workspace',workspace,'channel',channel,'root_ts',root_ts,'control',control,'status',status,'version',version,'turns',turns,'wait_streak',wait_streak,'no_progress',no_progress,'summary',summary,'last_reply_hash',last_reply_hash,'reset_at',reset_at,'context',json(context_json)) FROM threads WHERE id=?",[&session],|r|r.get(0))?;
         let (kind,reference,payload):(String,String,String)=tx.query_row("SELECT kind,ref,payload_json FROM thread_inbox WHERE id=? AND state='processing'",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         let mut trigger=json!({"kind":kind,"ref":reference,"payload":serde_json::from_str::<Value>(&payload)?});
-        let message_sql="SELECT json_object('event_id',event_id,'ts',ts,'sender',sender,'text',text,'meta',json(meta_json),'attachments',json(attachments_json)) FROM messages";
+        let message_sql="SELECT json_object('event_id',event_id,'ts',ts,'sender',sender,'text',text,'files',json(files_json),'meta',json(meta_json),'attachments',json(attachments_json)) FROM messages";
         if kind=="message" {
             let raw:String=tx.query_row(&format!("{message_sql} WHERE event_id=?"),[&reference],|r|r.get(0))?;
             trigger["message"]=serde_json::from_str(&raw)?;

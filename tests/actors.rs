@@ -63,6 +63,7 @@ async fn intake(s: &Store, n: usize) -> i64 {
     attention::intake(
         s,
         Message {
+            files: vec![],
             event_id: format!("e{n}"),
             workspace: "TTEAM".into(),
             channel: "CROOM".into(),
@@ -517,6 +518,7 @@ async fn manager_bounds_concurrency_and_preserves_work_for_the_next_pass() {
         attention::intake(
             &s,
             Message {
+                files: vec![],
                 event_id: format!("e{n}"),
                 workspace: "TTEAM".into(),
                 channel: "CROOM".into(),

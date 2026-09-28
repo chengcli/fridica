@@ -204,6 +204,7 @@ path="{}"
     }
     async fn intake(&self, peer: bool) {
         let message = Message {
+            files: vec![],
             event_id: "e1".into(),
             workspace: "TTEAM".into(),
             channel: "CROOM".into(),
@@ -413,7 +414,17 @@ async fn owner_pause_retains_result_and_resume_does_not_delegate_again() {
 #[tokio::test]
 async fn observe_only_has_no_parent_worker_or_delivery_effects() {
     let h = Harness::new(vec![delegate()], true).await;
-    h.intake(false).await;
+    let event = json!({"type":"events_api","envelope_id":"live-event","payload":{
+        "type":"event_callback","team_id":"TTEAM","event_id":"e1",
+        "event":{"type":"message","channel":"CROOM","ts":"100.1","user":"UALICE","text":"<@UOWNER> help"}
+    }});
+    assert!(h
+        .runtime
+        .slack_receiver()
+        .receive(&serde_json::to_vec(&event).unwrap())
+        .await
+        .unwrap()
+        .is_some());
     let progress = h.runtime.pass().await.unwrap();
     assert_eq!((progress.started, progress.delivered), (0, 0));
     assert!(h.parent.calls.lock().unwrap().is_empty());
@@ -801,6 +812,7 @@ async fn followup_delegation_reuses_worker_placement_and_backend_session() {
         .push_back(json!({"delegations":[{"worker_id":worker,"brief":"Run the followup checks"}]}));
     h.runtime
         .intake(Message {
+            files: vec![],
             event_id: "e2".into(),
             workspace: "TTEAM".into(),
             channel: "CROOM".into(),

@@ -111,6 +111,15 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             pass: Mutex::new(()),
         })
     }
+    /// Bind authenticated Slack envelopes to the same durable store and clock.
+    pub fn slack_receiver(&self) -> crate::slack::receiver::Receiver {
+        crate::slack::receiver::Receiver::new(
+            self.store.clone(),
+            self.config.clone(),
+            self.clock.clone(),
+            self.ids.clone(),
+        )
+    }
     /// A socket adapter may acknowledge only after this durable intake returns.
     pub async fn intake(&self, message: Message) -> Result<Option<i64>> {
         if message.workspace != self.config.slack.workspace
