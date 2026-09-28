@@ -4,6 +4,7 @@ pub mod config;
 pub mod control;
 pub mod core;
 pub mod daemon;
+pub mod doctor;
 pub mod exec;
 pub mod github;
 pub mod machines;

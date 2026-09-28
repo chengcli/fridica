@@ -74,8 +74,14 @@ def default(value, data):
         os.close(parent)
 
 
+preflight = False
+preflight_stage = "inventory"
+
+
 def main():
+    global preflight, preflight_stage
     request = json.loads(sys.argv[1])
+    preflight = request.get("preflight", False) is True
     if sys.platform != "linux":
         raise Refused()
     remote = request["home"] is None
@@ -125,18 +131,27 @@ def main():
     for mask in selected:
         os.close(directory(mask))
     os.close(directory(home))
-    os.close(directory(home + "/.codex", create=True))
-    os.close(directory(home + "/.claude/hooks", create=True))
-    default(home + "/.codex/config.toml", "")
-    default(home + "/.claude/settings.json", "{}")
-    default(home + "/.claude/settings.local.json", "{}")
+    if not preflight:
+        os.close(directory(home + "/.codex", create=True))
+        os.close(directory(home + "/.claude/hooks", create=True))
+        default(home + "/.codex/config.toml", "")
+        default(home + "/.claude/settings.json", "{}")
+        default(home + "/.claude/settings.local.json", "{}")
     # Snapshot on the execution target, before any backend/MCP initialization.
     command = sys.argv[2:]
+    if preflight:
+        # Fixed system interpreter only: never run a backend or project command.
+        command = [sys.executable, "-I", "-S", "-c",
+                   "import json, os, sys; "
+                   "assert all(not os.path.lexists(p) for p in json.loads(sys.argv[1])); "
+                   "print('fridica-isolation:ready')", json.dumps(private)]
+    preflight_stage = "settings"
     snapshots, aliases = settings_snapshots(home, workspace, selected, state, request, environment, command)
     if os.path.basename(command[0]) == "codex" and command[1:2] == ["app-server"]:
         for alias in aliases:
             command += ["-c", "mcp_servers." + json.dumps(alias, ensure_ascii=False) + ".enabled=false"]
 
+    preflight_stage = "inventory"
     fds = []
     words = ["/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
              "--cap-drop", "ALL", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev",
@@ -148,14 +163,20 @@ def main():
         fds.append(fd)
         words.extend(["--ro-bind-fd" if readonly else "--bind-fd", str(fd), dest])
 
-    mount(directory(workspace, create=request["create"]), workspace)
+    mount(directory(workspace, create=request["create"] and not preflight), workspace, readonly=preflight)
     for value in state:
         try:
             fd = regular(value) if value.endswith(".json") else directory(value)
         except FileNotFoundError:
             continue
-        mount(fd, value)
-    mount(directory(home + "/.claude/hooks"), home + "/.claude/hooks", readonly=True)
+        mount(fd, value, readonly=preflight)
+    try:
+        hooks = directory(home + "/.claude/hooks")
+    except FileNotFoundError:
+        if not preflight:
+            raise
+    else:
+        mount(hooks, home + "/.claude/hooks", readonly=True)
     for value, data in snapshots:
         fd = os.memfd_create("worker-settings", os.MFD_CLOEXEC)
         with os.fdopen(os.dup(fd), "wb") as output:
@@ -173,11 +194,16 @@ def main():
     words += ["--chdir", workspace, "--"] + command
     for fd in fds:
         os.set_inheritable(fd, True)
+    if preflight:
+        preflight_stage = "namespace"
+        print("fridica-isolation:namespace", flush=True)
     os.execve(words[0], words, environment)
 
 
 try:
     main()
 except (OSError, ValueError, KeyError, TypeError, ImportError, RecursionError, Refused):
+    if preflight:
+        print("fridica-isolation:" + preflight_stage + "-refused", flush=True)
     sys.stderr.write("fridica worker isolation: setup refused\n")
     sys.exit(97)

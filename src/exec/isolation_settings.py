@@ -24,17 +24,22 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         home + "/.claude/settings.json", home + "/.claude/settings.local.json",
         "/etc/codex/config.toml", "/etc/codex/managed_config.toml",
     }
-    fd = directory(home + "/.codex")
     try:
-        # Iterate instead of materializing an unbounded directory listing.
-        with os.scandir(fd) as entries:
-            for count, entry in enumerate(entries):
-                if count >= 4096:
-                    raise Refused()
-                if entry.name.endswith(".config.toml"):
-                    candidates.add(home + "/.codex/" + entry.name)
+        fd = directory(home + "/.codex")
+    except FileNotFoundError:
+        fd = None
+    try:
+        if fd is not None:
+            # Iterate instead of materializing an unbounded directory listing.
+            with os.scandir(fd) as entries:
+                for count, entry in enumerate(entries):
+                    if count >= 4096:
+                        raise Refused()
+                    if entry.name.endswith(".config.toml"):
+                        candidates.add(home + "/.codex/" + entry.name)
     finally:
-        os.close(fd)
+        if fd is not None:
+            os.close(fd)
     ancestor = workspace
     while True:
         candidates.update(ancestor.rstrip("/") + suffix for suffix in (

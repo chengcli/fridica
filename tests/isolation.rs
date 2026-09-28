@@ -17,6 +17,10 @@ mod remote;
 mod settings;
 
 #[cfg(target_os = "linux")]
+#[path = "support/isolation_preflight.rs"]
+mod preflight;
+
+#[cfg(target_os = "linux")]
 struct Fixture {
     _dir: tempfile::TempDir,
     config: Config,

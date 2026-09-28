@@ -4,7 +4,7 @@ Use these settings in a separate experimental Rust configuration. The installed
 Python daemon rejects the new `[isolation]` section. Do not add it to a live Python
 configuration or migrate a live database to v6 to try these settings. Active Rust
 startup remains gated; this configures the worker launcher library and offline
-validation.
+validation, with an explicit target runtime probe.
 
 Existing configurations remain valid without this section. Confined SSH workers
 require an explicit target inventory before they can start. Local workers already
@@ -68,7 +68,50 @@ unconfined target. It omits private paths, host values and MCP identities.
 creating state, starting a backend, contacting SSH, or testing mount support.
 A successful check does not certify launch readiness.
 
+To test confinement on one configured machine and workspace, use:
+
+```sh
+cargo run --offline --bin fridica -- doctor-isolation \
+  --config /path/to/experimental.toml --machine local --workspace project
+```
+
+Unlike `check-config`, this starts a bounded subprocess and contacts SSH when the
+selected machine uses SSH. It does not start a model/backend or contact Slack,
+GitHub or MCP. The target must have a supported system Python (3.11+) and Linux
+bubblewrap with usable user/PID namespaces and descriptor/data bind options.
+The target home, workspace and private mask directories must already exist.
+Backend settings/state directories may be absent; the probe does not create them.
+
+The probe shares the worker's path checks, settings parser and mount helper. It
+opens mount sources without following symlinks, sanitizes settings in memory,
+mounts workspace/backend state read-only, and verifies inventoried private paths
+are absent inside the namespace. It leaves configuration, state, workspace and
+backend settings unchanged. SSH uses its existing authentication and watchdog,
+temporary housekeeping directories, and an already trusted host key; the probe
+does not reuse or leave a persistent SSH master or enroll/update host keys.
+
+JSON output identifies only machine/workspace names and a fixed `check` result.
+Success requires both the expected probe response and a zero exit status. A
+failed check exits nonzero without printing subprocess output or private paths:
+
+| `check` | Meaning |
+| --- | --- |
+| `passed` | Inventory/settings checks and namespace probe succeeded. |
+| `missing_remote_inventory` | Provision an inventory for the selected SSH target. |
+| `inventory_refused` | Missing/unsafe paths, hard links, or overlapping mount sources. |
+| `settings_refused` | Unsafe/malformed settings or an unsupported backend home. |
+| `namespace_failed` | Bubblewrap could not establish or validate the mount view. |
+| `runtime_or_transport_failed` | System Python/SSH failed or returned an unexpected response. |
+| `probe_failed` | Subprocess startup, deadline, output bound or cleanup failed. |
+| `launch_configuration_refused` / `unsupported_transport` | The selected launch cannot be probed. |
+
+`--timeout` defaults to 30 seconds and accepts 1–120 seconds; process cleanup can
+take additional time. A successful probe always reports `active_launch_ready:
+false`. It does not establish inventory completeness, backend version/protocol
+conformance, writable state provisioning, unrestricted-worker MCP isolation, or
+full runtime parity. Launch-time checks still run again to catch later changes.
+
 Trusted daemon composition can use `SystemLauncher::from_config` to construct
-the existing local/SSH launch adapters with these settings. Runtime preflight,
-active CLI composition and real backend conformance remain unfinished; see the
-[implementation status](v0.4-implementation-status.md).
+the existing local/SSH launch adapters with these settings. Active CLI composition,
+automatic admission preflight and real backend conformance remain unfinished; see
+the [implementation status](v0.4-implementation-status.md).

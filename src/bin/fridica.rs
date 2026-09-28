@@ -33,6 +33,17 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Test worker isolation on one explicit local/SSH target without a backend.
+    DoctorIsolation {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        workspace: String,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=120))]
+        timeout: u64,
+    },
     /// Migrate a stopped daemon's database and configuration, with backups.
     Migrate {
         #[arg(long)]
@@ -109,6 +120,28 @@ async fn main() -> Result<()> {
                     "isolation": config.isolation.summary(&config.machines),
                 }))?
             );
+        }
+        Command::DoctorIsolation {
+            config,
+            machine,
+            workspace,
+            timeout,
+        } => {
+            let context = fridica::config::LoadContext::current()?;
+            let config = fridica::config::load(&config, &context)?;
+            let report = fridica::doctor::isolation(
+                &config,
+                &context,
+                std::env::vars_os().collect(),
+                &machine,
+                &workspace,
+                std::time::Duration::from_secs(timeout),
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if !report.passed() {
+                anyhow::bail!("worker isolation preflight did not pass");
+            }
         }
         Command::Migrate {
             database,

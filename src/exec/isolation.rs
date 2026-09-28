@@ -112,6 +112,35 @@ impl Isolation {
         inherited: BTreeMap<OsString, OsString>,
         create: bool,
     ) -> Result<Launch> {
+        self.launch_remote_mode(transport, command, cwd, inherited, create, false)
+    }
+    /// Read-only runtime probe through the same helper and transport as workers.
+    /// No backend is executed and missing workspace directories are not created.
+    pub fn preflight_remote(
+        &self,
+        transport: &SshTransport,
+        cwd: &str,
+        inherited: BTreeMap<OsString, OsString>,
+    ) -> Result<Launch> {
+        self.launch_remote_mode(
+            transport,
+            vec!["/bin/true".into()],
+            cwd,
+            inherited,
+            false,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn launch_remote_mode(
+        &self,
+        transport: &SshTransport,
+        command: Vec<String>,
+        cwd: &str,
+        inherited: BTreeMap<OsString, OsString>,
+        create: bool,
+        preflight: bool,
+    ) -> Result<Launch> {
         let Some(profile) = self.remote.get(&transport.machine.name) else {
             bail!("confined SSH requires a target private-file inventory");
         };
@@ -127,7 +156,7 @@ impl Isolation {
             BOOTSTRAP.into(),
             HELPER.into(),
             json!({"home":null,"workspace":cwd,"private":profile.private,
-                "create":create,"excluded_env":transport.excluded_env,
+                "create":create,"preflight":preflight,"excluded_env":transport.excluded_env,
                 "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
             .to_string(),
         ];
@@ -150,6 +179,35 @@ impl Isolation {
         inherited: BTreeMap<OsString, OsString>,
         create: bool,
     ) -> Result<Launch> {
+        self.launch_mode(transport, command, cwd, inherited, create, false)
+    }
+    /// Read-only runtime probe through the same helper and transport as workers.
+    /// No backend is executed and missing workspace directories are not created.
+    pub fn preflight(
+        &self,
+        transport: &LocalTransport,
+        cwd: &Path,
+        inherited: BTreeMap<OsString, OsString>,
+    ) -> Result<Launch> {
+        self.launch_mode(
+            transport,
+            vec!["/bin/true".into()],
+            cwd,
+            inherited,
+            false,
+            true,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn launch_mode(
+        &self,
+        transport: &LocalTransport,
+        command: Vec<String>,
+        cwd: &Path,
+        inherited: BTreeMap<OsString, OsString>,
+        create: bool,
+        preflight: bool,
+    ) -> Result<Launch> {
         if !cfg!(target_os = "linux")
             || transport.machine.transport != "local"
             || !safe_path(cwd)
@@ -171,7 +229,7 @@ impl Isolation {
             "-c".into(),
             BOOTSTRAP.into(),
             HELPER.into(),
-            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,
+            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,"preflight":preflight,
                 "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
             .to_string(),
         ];
