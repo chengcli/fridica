@@ -16,7 +16,7 @@ use crate::{
 use rusqlite::params;
 use serde::Serialize;
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{sync::watch, time::Instant};
 
 /// Authenticated connection boundary. Implementations must only publish Connected
@@ -24,6 +24,26 @@ use tokio::{sync::watch, time::Instant};
 pub trait Connection: Send + Sync {
     fn subscribe(&self) -> watch::Receiver<Status>;
     fn run(&self, stop: watch::Receiver<bool>) -> AdapterFuture<'_, Result<(), socket::Failure>>;
+}
+/// Optional host services, implemented above this module's dependency layer.
+/// Start runs before Slack/model/worker I/O; stop must drain accepted operations
+/// before returning, even after a failed start. Implementations must bound I/O.
+pub trait Lifecycle: Send + Sync + 'static {
+    fn start(&mut self) -> AdapterFuture<'_, Result<Option<PathBuf>, Failure>>;
+    fn stop(&mut self) -> AdapterFuture<'_, Result<(), Failure>>;
+    /// Resolves if an essential host service unexpectedly exits.
+    fn failed(&self) -> AdapterFuture<'_, ()> {
+        Box::pin(std::future::pending())
+    }
+}
+struct Standalone;
+impl Lifecycle for Standalone {
+    fn start(&mut self) -> AdapterFuture<'_, Result<Option<PathBuf>, Failure>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn stop(&mut self) -> AdapterFuture<'_, Result<(), Failure>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 impl Connection for SocketMode {
     fn subscribe(&self) -> watch::Receiver<Status> {
@@ -62,6 +82,7 @@ pub enum Failure {
     SocketStopped,
     Shutdown,
     Task,
+    HostService,
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,8 +146,17 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
     /// it does not detach a live socket or leave a parent loop running. Cleanup
     /// needs the Tokio runtime to remain alive (process crashes use DB recovery).
     pub async fn run(self, stop: watch::Receiver<bool>) -> Result<(), Failure> {
+        self.run_with_lifecycle(stop, Standalone).await
+    }
+    /// The owned coordinator also retains the host services after caller
+    /// cancellation, draining controls before it closes workers.
+    pub async fn run_with_lifecycle(
+        self,
+        stop: watch::Receiver<bool>,
+        lifecycle: impl Lifecycle,
+    ) -> Result<(), Failure> {
         let (cancel, cancelled) = watch::channel(false);
-        let task = tokio::spawn(self.coordinate(stop, cancelled));
+        let task = tokio::spawn(self.coordinate(stop, cancelled, lifecycle));
         // Keep the sender alive through the join. Dropping it also signals stop.
         let result = task.await.map_err(|_| Failure::Task)?;
         drop(cancel);
@@ -136,10 +166,25 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
         self,
         mut stop: watch::Receiver<bool>,
         mut cancelled: watch::Receiver<bool>,
+        mut lifecycle: impl Lifecycle,
     ) -> Result<(), Failure> {
         let started = self.receiver.clock.now();
         let mut result = self.begin(started).await;
+        let mut run = false;
         if result.is_ok() {
+            result = tokio::select! { biased;
+                _=socket::stopped(&mut stop)=>Ok(()),
+                _=socket::stopped(&mut cancelled)=>Ok(()),
+                outcome=lifecycle.start()=>match outcome {
+                    Ok(endpoint)=>{
+                        run = true;
+                        self.endpoint(endpoint).await
+                    },
+                    Err(error)=>Err(error),
+                },
+            };
+        }
+        if result.is_ok() && run {
             let (socket_stop, stopping) = watch::channel(false);
             let mut socket = Box::pin(self.connection.run(stopping));
             let mut socket_done = false;
@@ -153,6 +198,7 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
                 tokio::select! { biased;
                     _=socket::stopped(&mut stop)=>Ok(()),
                     _=socket::stopped(&mut cancelled)=>Ok(()),
+                    _=lifecycle.failed()=>Err(Failure::HostService),
                     outcome=&mut socket=>{
                         socket_done=true;
                         Err(outcome.err().map(|failure|Failure::Socket{failure}).unwrap_or(Failure::SocketStopped))
@@ -184,6 +230,20 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
                 }
             }
         }
+        // Stop accepting/drain authenticated controls before worker teardown.
+        // Always run this, including partial startup and caller cancellation.
+        if let Err(error) = lifecycle.stop().await {
+            let recorded = self.health("service_host_shutdown_failed", &error).await;
+            if result.is_ok() {
+                result = Err(error);
+            }
+            if recorded.is_err() {
+                result = Err(Failure::Storage);
+            }
+        }
+        if self.endpoint(None).await.is_err() {
+            result = Err(Failure::Storage);
+        }
         // Always attempt every worker close, even if socket/startup/storage failed.
         // Supervisor applies bounded per-worker termination and records failures.
         if self.runtime.close().await.is_err() {
@@ -199,6 +259,19 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
         }
         self.end(result.as_ref().err()).await?;
         result
+    }
+    async fn endpoint(&self, endpoint: Option<PathBuf>) -> Result<(), Failure> {
+        let endpoint = endpoint
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.receiver
+            .store
+            .call(move |c| {
+                c.execute("UPDATE runtime SET control_socket=? WHERE id=1", [endpoint])?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| Failure::Storage)
     }
     async fn work_loop(&self) -> Result<(), Failure> {
         connected(&mut self.connection.subscribe()).await?;

@@ -1578,7 +1578,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/runtime_flow.rs",
-      "coverage_scope": "Integrated injected-adapter intake/delegation/supervisor/result/delivery flow, grouped results, sticky worker/session reuse, exact fetch-grant validation, artifact/report dependencies, observe-only and restart ambiguity. Three frozen daemon scenarios compare declared final-state projections with translated parent envelopes and explicitly scripted attention. Live adapters, all placement combinations and full concurrent replay remain unverified; Python regression is retained."
+      "coverage_scope": "Integrated injected-adapter intake/delegation/supervisor/result/delivery flow, grouped results, sticky worker/session reuse, exact fetch-grant validation, artifact/report dependencies, observe-only and restart ambiguity. Three frozen daemon scenarios compare declared final-state projections with translated parent envelopes and explicitly scripted attention. Live adapters, all placement combinations and full concurrent replay remain unverified; Python regression is retained. Observer composition adds authenticated-control/lifecycle coverage in tests/service.rs and real CLI signal, lock and preflight checks in tests/daemon_cli.rs. Model and worker adapters refuse execution. No live Slack or full concurrent parity claim; Python coverage stays retained."
     },
     {
       "python": "tests/test_scenarios.py::test_fan_out_to_two_machines_joins_into_one_reply_and_follow_ups_reach_one_worker",
@@ -1664,7 +1664,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/actors.rs",
-      "coverage_scope": "Scoped Rust coverage only; full Python regression retained pending daemon parity."
+      "coverage_scope": "Scoped Rust coverage only; full Python regression retained pending daemon parity. Observer composition adds authenticated-control/lifecycle coverage in tests/service.rs and real CLI signal, lock and preflight checks in tests/daemon_cli.rs. Model and worker adapters refuse execution. No live Slack or full concurrent parity claim; Python coverage stays retained."
     },
     {
       "python": "tests/test_scenarios.py::test_interrupted_jobs_are_reported_or_resumed",

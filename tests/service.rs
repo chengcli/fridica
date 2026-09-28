@@ -1,5 +1,6 @@
 use fridica::{
     config::{loader, Config, LoadContext},
+    control::{api::Api, client::Client, server::Access},
     core::{
         delivery::*,
         parent::*,
@@ -7,6 +8,7 @@ use fridica::{
         worker::*,
         Authority,
     },
+    daemon::ControlServer,
     slack::{
         catchup::{History, HistoryFailure, PageRequest},
         receiver::Receiver,
@@ -16,7 +18,7 @@ use fridica::{
     threads::{
         controls::Control,
         runtime::{Adapters, Runtime},
-        service::{Connection, Failure, Options, Service},
+        service::{Connection, Failure, Lifecycle, Options, Service},
     },
     workers::protocol::*,
 };
@@ -37,6 +39,290 @@ impl Drop for Active<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
+}
+
+#[tokio::test]
+async fn control_endpoint_is_live_before_slack_and_removed_after_observer_stop() {
+    let mut h = Harness::new(true, options()).await;
+    let service = h.service.take().unwrap();
+    let config = service.runtime().config();
+    let controls = ControlServer::new(
+        config.clone(),
+        Arc::new(Api::new(service.runtime())),
+        Access::OwnerPeer,
+        Default::default(),
+    );
+    let (stop, rx) = watch::channel(false);
+    let task = tokio::spawn(service.run_with_lifecycle(rx, controls));
+    h.until("SELECT count(*) FROM runtime WHERE control_socket!=''", 1)
+        .await;
+    let client = Client::new(&config.state.control_socket, None).unwrap();
+    let status = client.request("GET", "/status", None).await.unwrap();
+    assert_eq!(status["observe_only"], true);
+    let endpoint: String = h
+        .store
+        .call(|c| Ok(c.query_row("SELECT control_socket FROM runtime", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(endpoint, config.state.control_socket.to_string_lossy());
+    assert!(h.pages.requests.lock().unwrap().is_empty());
+    h.connect();
+    h.intake("9999.1").await;
+    h.until(
+        "SELECT count(*) FROM replay_events WHERE kind='service_catchup'",
+        1,
+    )
+    .await;
+    assert_eq!(h.scalar("SELECT count(*) FROM obligations").await, 1);
+    assert_eq!(h.parent.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(h.sink.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(h.workers.created.load(Ordering::SeqCst), 0);
+    finish(stop, task).await.unwrap();
+    assert!(!config.state.control_socket.exists());
+    assert_eq!(
+        h.scalar(
+            "SELECT count(*) FROM runtime WHERE slack_status='stopped' AND control_socket='' "
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn control_bind_or_advertisement_failure_stops_before_slack_io() {
+    for fail_advertise in [false, true] {
+        let mut h = Harness::new(true, options()).await;
+        let service = h.service.take().unwrap();
+        let config = service.runtime().config();
+        if fail_advertise {
+            h.store.call(|c| { c.execute_batch("CREATE TRIGGER fail_endpoint BEFORE UPDATE ON runtime WHEN NEW.control_socket!='' BEGIN SELECT RAISE(ABORT,'private fault'); END;")?; Ok(()) }).await.unwrap();
+        } else {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(config.state.control_socket.parent().unwrap())
+                .unwrap();
+            std::fs::write(&config.state.control_socket, "do not replace").unwrap();
+        }
+        let controls = ControlServer::new(
+            config.clone(),
+            Arc::new(Api::new(service.runtime())),
+            Access::OwnerPeer,
+            Default::default(),
+        );
+        let (_stop, rx) = watch::channel(false);
+        let result = service.run_with_lifecycle(rx, controls).await;
+        assert_eq!(
+            result,
+            Err(if fail_advertise {
+                Failure::Storage
+            } else {
+                Failure::HostService
+            })
+        );
+        assert_eq!(h.wire.0.starts.load(Ordering::SeqCst), 0);
+        assert!(h.pages.requests.lock().unwrap().is_empty());
+        assert_eq!(
+            h.scalar(
+                "SELECT count(*) FROM runtime WHERE slack_status='stopped' AND control_socket='' "
+            )
+            .await,
+            1
+        );
+        if fail_advertise {
+            assert!(!config.state.control_socket.exists());
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(&config.state.control_socket).unwrap(),
+                "do not replace"
+            );
+        }
+    }
+}
+
+struct DelayedControl {
+    workers: Arc<Workers>,
+    entered: Semaphore,
+    release: Semaphore,
+    finished: AtomicBool,
+}
+impl fridica::control::Backend for DelayedControl {
+    fn request(
+        &self,
+        _: fridica::control::Request,
+        _: Authority,
+    ) -> AdapterFuture<'_, fridica::control::Response> {
+        Box::pin(async move {
+            self.entered.add_permits(1);
+            self.release.acquire().await.unwrap().forget();
+            assert!(
+                self.workers.alive.load(Ordering::SeqCst),
+                "worker cleanup raced an accepted control"
+            );
+            self.finished.store(true, Ordering::SeqCst);
+            fridica::control::Response::ok(json!({}))
+        })
+    }
+}
+#[tokio::test]
+async fn cancellation_drains_accepted_controls_before_worker_cleanup() {
+    let mut h = Harness::new(false, options()).await;
+    *h.parent.response.lock().unwrap() = json!({"delegations":[{"brief":"wait", "machine":"local","workspace":"project","backend":"codex"}]});
+    let service = h.service.take().unwrap();
+    let config = service.runtime().config();
+    let backend = Arc::new(DelayedControl {
+        workers: h.workers.clone(),
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+        finished: AtomicBool::new(false),
+    });
+    let controls = ControlServer::new(
+        config.clone(),
+        backend.clone(),
+        Access::OwnerPeer,
+        Default::default(),
+    );
+    let (_stop, rx) = watch::channel(false);
+    let task = tokio::spawn(service.run_with_lifecycle(rx, controls));
+    h.until("SELECT count(*) FROM runtime WHERE control_socket!=''", 1)
+        .await;
+    h.connect();
+    h.intake("9999.1").await;
+    wait_for(|| h.workers.active.load(Ordering::SeqCst)).await;
+    let client = Client::new(&config.state.control_socket, None).unwrap();
+    let request = tokio::spawn(async move {
+        client
+            .request("POST", "/threads/any/pause", Some(json!({})))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(4), backend.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    wait_for(|| !h.wire.0.active.load(Ordering::SeqCst)).await;
+    // The public run future is gone, but its coordinator still owns the server.
+    assert_eq!(h.workers.closed.load(Ordering::SeqCst), 0);
+    backend.release.add_permits(1);
+    h.until(
+        "SELECT count(*) FROM runtime WHERE slack_status='stopped' AND control_socket=''",
+        1,
+    )
+    .await;
+    assert!(backend.finished.load(Ordering::SeqCst));
+    assert!(h.workers.closed.load(Ordering::SeqCst) > 0);
+    assert!(!h.workers.alive.load(Ordering::SeqCst));
+    assert!(!config.state.control_socket.exists());
+    let _ = request.await.unwrap(); // Disconnect may hide a completed control.
+}
+
+struct FailingHost {
+    stopped: Arc<AtomicBool>,
+}
+
+struct PendingHost {
+    entered: Arc<Semaphore>,
+    stopped: Arc<AtomicBool>,
+}
+impl Lifecycle for PendingHost {
+    fn start(&mut self) -> AdapterFuture<'_, Result<Option<std::path::PathBuf>, Failure>> {
+        Box::pin(async {
+            self.entered.add_permits(1);
+            std::future::pending().await
+        })
+    }
+    fn stop(&mut self) -> AdapterFuture<'_, Result<(), Failure>> {
+        Box::pin(async {
+            self.stopped.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+#[tokio::test]
+async fn stop_before_or_during_host_start_never_opens_slack_and_cleans_partial_start() {
+    for prestopped in [true, false] {
+        let mut h = Harness::new(true, options()).await;
+        let stopped = Arc::new(AtomicBool::new(false));
+        let entered = Arc::new(Semaphore::new(0));
+        let (_stop, rx) = watch::channel(prestopped);
+        let task = tokio::spawn(h.service.take().unwrap().run_with_lifecycle(
+            rx,
+            PendingHost {
+                entered: entered.clone(),
+                stopped: stopped.clone(),
+            },
+        ));
+        if prestopped {
+            tokio::time::timeout(Duration::from_secs(4), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(entered.available_permits(), 0);
+        } else {
+            tokio::time::timeout(Duration::from_secs(4), entered.acquire())
+                .await
+                .unwrap()
+                .unwrap()
+                .forget();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            h.until(
+                "SELECT count(*) FROM runtime WHERE slack_status='stopped'",
+                1,
+            )
+            .await;
+        }
+        assert!(stopped.load(Ordering::SeqCst));
+        assert_eq!(h.wire.0.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(h.parent.calls.load(Ordering::SeqCst), 0);
+    }
+}
+impl Lifecycle for FailingHost {
+    fn start(&mut self) -> AdapterFuture<'_, Result<Option<std::path::PathBuf>, Failure>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn stop(&mut self) -> AdapterFuture<'_, Result<(), Failure>> {
+        Box::pin(async {
+            self.stopped.store(true, Ordering::SeqCst);
+            Err(Failure::HostService)
+        })
+    }
+    fn failed(&self) -> AdapterFuture<'_, ()> {
+        Box::pin(async {})
+    }
+}
+#[tokio::test]
+async fn failed_host_service_stops_scheduler_and_audits_shutdown_failure() {
+    let mut h = Harness::new(true, options()).await;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let (_stop, rx) = watch::channel(false);
+    let result = h
+        .service
+        .take()
+        .unwrap()
+        .run_with_lifecycle(
+            rx,
+            FailingHost {
+                stopped: stopped.clone(),
+            },
+        )
+        .await;
+    assert_eq!(result, Err(Failure::HostService));
+    assert!(stopped.load(Ordering::SeqCst));
+    assert_eq!(
+        h.scalar("SELECT count(*) FROM health_events WHERE kind='service_host_shutdown_failed'")
+            .await,
+        1
+    );
+    assert_eq!(
+        h.scalar("SELECT count(*) FROM runtime WHERE slack_status='stopped'")
+            .await,
+        1
+    );
+    assert_eq!(h.parent.calls.load(Ordering::SeqCst), 0);
 }
 struct ParentStub {
     calls: AtomicUsize,
@@ -242,6 +528,7 @@ backends=["codex"]
 project="{}"
 [state]
 path="{}"
+control_socket="private/control.sock"
 "#,
                     dir.path().join("project").display(),
                     dir.path().join("db").display()

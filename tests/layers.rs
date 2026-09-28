@@ -14,7 +14,7 @@ fn level(name: &str) -> usize {
         "store" => 2,
         "exec" | "workers" | "machines" | "github" => 3,
         "attention" | "threads" | "parent" | "slack" | "approvals" | "report" | "overseer" => 4,
-        "cli" | "control" | "dashboard" | "doctor" | "mcp" | "bin" => 5,
+        "cli" | "control" | "daemon" | "dashboard" | "doctor" | "mcp" | "bin" => 5,
         _ => panic!("unclassified architecture module: {name}"),
     }
 }

@@ -153,6 +153,7 @@ impl Drop for SocketGuard {
 }
 pub struct Server {
     stop: watch::Sender<bool>,
+    finished: watch::Receiver<bool>,
     done: Option<tokio::task::JoinHandle<Result<(), Failure>>>,
 }
 impl Drop for Server {
@@ -262,18 +263,35 @@ impl Server {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|_| Failure::Bind)?;
         let (stop, stopping) = watch::channel(false);
-        let done = tokio::spawn(run(
-            listener,
-            guard,
-            backend,
-            Arc::new(access),
-            options,
-            stopping,
-        ));
+        let (finished, completion) = watch::channel(false);
+        let done = tokio::spawn(async move {
+            let result = run(
+                listener,
+                guard,
+                backend,
+                Arc::new(access),
+                options,
+                stopping,
+            )
+            .await;
+            finished.send_replace(true);
+            result
+        });
         Ok(Self {
             stop,
+            finished: completion,
             done: Some(done),
         })
+    }
+    /// Also resolves if the listener task panics. Waiting does not consume its
+    /// result: close still joins it and reports cleanup failure.
+    pub async fn wait_stopped(&self) {
+        let mut finished = self.finished.clone();
+        while !*finished.borrow_and_update() {
+            if finished.changed().await.is_err() {
+                break;
+            }
+        }
     }
     pub async fn close(mut self) -> Result<(), Failure> {
         self.stop.send_replace(true);

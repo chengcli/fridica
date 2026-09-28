@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Experimental v0.4 configuration, migration, controls and offline report tools. The Python launcher remains the production daemon."
+    about = "Experimental v0.4 observer, controls, migration and offline report tools. The Python launcher remains the production daemon."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -20,6 +20,14 @@ struct Cli {
 enum Command {
     #[command(flatten)]
     Control(fridica::control::cli::Commands),
+    /// Experimental Slack observer with owner-authenticated local controls.
+    Start {
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Required until active-runtime parity and worker isolation gates pass.
+        #[arg(long)]
+        observe_only: bool,
+    },
     /// Validate configuration and resolved placement policies without starting adapters.
     CheckConfig {
         #[arg(long)]
@@ -58,6 +66,34 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Start {
+            config,
+            observe_only,
+        } => {
+            if !observe_only {
+                anyhow::bail!("experimental Rust start requires --observe-only; active launch awaits runtime parity and worker MCP isolation");
+            }
+            let context = fridica::config::LoadContext::current()?;
+            let path = config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
+            let config = fridica::config::load(&path, &context)?;
+            let credentials =
+                fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())?;
+            // Install both handlers before any durable startup or network I/O.
+            let mut interrupt =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+            let mut terminate =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            let (stop, stopping) = tokio::sync::watch::channel(false);
+            let running = fridica::daemon::observe(config, credentials, stopping);
+            tokio::pin!(running);
+            tokio::select! {
+                result=&mut running=>result?,
+                _=async { tokio::select! { _=interrupt.recv()=>{}, _=terminate.recv()=>{} } }=>{
+                    stop.send_replace(true);
+                    running.await?;
+                },
+            }
+        }
         Command::Control(command) => {
             println!("{}", serde_json::to_string_pretty(&command.run().await?)?)
         }
