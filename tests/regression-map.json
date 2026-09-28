@@ -2032,35 +2032,35 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_script_quotes_arguments_env_and_home_relative_cwd[bash]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_script_quotes_arguments_env_and_home_relative_cwd[sh]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_confinement_binds_writable_roots_and_keeps_settings_read_only",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception. tests/isolation.rs adds real local Linux bubblewrap checks for daemon files/socket masking, pinned mount descriptors, path replacement, symlink/hard-link refusal, settings protection and FRIDICA_* environment scrubbing. These are explicit v0.4 hardening changes, not frozen parity. tests/support/remote_isolation.rs adds fake-SSH execution of the same Linux boundary, explicit target inventories, remote-home expansion, shared/remote secret masking, target environment scrubbing, exit status and confined descendant cleanup on EOF/signals. tests/support/isolation_settings.rs covers default-layer MCP alias discovery, sanitized settings snapshots, owner-file preservation, startup disabling and bounded/refused inputs. These are hardening tests, not full MCP/backend conformance. Inventory/identity provisioning, live SSH and external configuration-source conformance remain open."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception. tests/isolation.rs adds real local Linux bubblewrap checks for daemon files/socket masking, pinned mount descriptors, path replacement, symlink/hard-link refusal, settings protection and FRIDICA_* environment scrubbing. These are explicit v0.4 hardening changes, not frozen parity. tests/support/remote_isolation.rs adds fake-SSH execution of the same Linux boundary, explicit target inventories, remote-home expansion, shared/remote secret masking, target environment scrubbing, exit status and confined descendant cleanup on EOF/signals. tests/support/isolation_settings.rs covers default-layer MCP alias discovery, sanitized settings snapshots, owner-file preservation, startup disabling and bounded/refused inputs. These are hardening tests, not full MCP/backend conformance. Inventory/identity provisioning, live SSH and external configuration-source conformance remain open."
     },
     {
       "python": "tests/test_transport.py::test_local_launch_scrubs_tokens_and_adds_resource_limits",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception. tests/isolation.rs adds real local Linux bubblewrap checks for daemon files/socket masking, pinned mount descriptors, path replacement, symlink/hard-link refusal, settings protection and FRIDICA_* environment scrubbing. These are explicit v0.4 hardening changes, not frozen parity. tests/support/remote_isolation.rs adds fake-SSH execution of the same Linux boundary, explicit target inventories, remote-home expansion, shared/remote secret masking, target environment scrubbing, exit status and confined descendant cleanup on EOF/signals. tests/support/isolation_settings.rs covers default-layer MCP alias discovery, sanitized settings snapshots, owner-file preservation, startup disabling and bounded/refused inputs. These are hardening tests, not full MCP/backend conformance. Inventory/identity provisioning, live SSH and external configuration-source conformance remain open."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception. tests/isolation.rs adds real local Linux bubblewrap checks for daemon files/socket masking, pinned mount descriptors, path replacement, symlink/hard-link refusal, settings protection and FRIDICA_* environment scrubbing. These are explicit v0.4 hardening changes, not frozen parity. tests/support/remote_isolation.rs adds fake-SSH execution of the same Linux boundary, explicit target inventories, remote-home expansion, shared/remote secret masking, target environment scrubbing, exit status and confined descendant cleanup on EOF/signals. tests/support/isolation_settings.rs covers default-layer MCP alias discovery, sanitized settings snapshots, owner-file preservation, startup disabling and bounded/refused inputs. These are hardening tests, not full MCP/backend conformance. Inventory/identity provisioning, live SSH and external configuration-source conformance remain open."
     },
     {
       "python": "tests/test_transport.py::test_remote_confinement_prepares_settings_without_clobbering",
@@ -2074,14 +2074,14 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/isolation.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception. tests/support/remote_isolation.rs adds fake-SSH execution of the same Linux boundary, explicit target inventories, remote-home expansion, shared/remote secret masking, target environment scrubbing, exit status and confined descendant cleanup on EOF/signals. tests/support/isolation_settings.rs covers default-layer MCP alias discovery, sanitized settings snapshots, owner-file preservation, startup disabling and bounded/refused inputs. These are hardening tests, not full MCP/backend conformance. Inventory/identity provisioning, live SSH and external configuration-source conformance remain open."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception. tests/support/remote_isolation.rs adds fake-SSH execution of the same Linux boundary, explicit target inventories, remote-home expansion, shared/remote secret masking, target environment scrubbing, exit status and confined descendant cleanup on EOF/signals. tests/support/isolation_settings.rs covers default-layer MCP alias discovery, sanitized settings snapshots, owner-file preservation, startup disabling and bounded/refused inputs. These are hardening tests, not full MCP/backend conformance. Inventory/identity provisioning, live SSH and external configuration-source conformance remain open."
     },
     {
       "python": "tests/test_transport.py::test_ssh_failures_are_explained",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_spawned_process_speaks_over_stdio",
@@ -2093,7 +2093,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_read_file_stays_inside_roots[True]",
@@ -2110,21 +2110,21 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_run_once_bounds_output",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_diagnostic_is_a_bounded_single_line",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_remote_read_works_with_bsd_realpath",
@@ -2141,14 +2141,14 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_teardown_releases_pipes_held_by_an_escaped_grandchild",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_long_lived_remote_agents_die_with_their_channel[bash]",
@@ -2165,14 +2165,14 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_a_long_lived_agent_that_exits_passes_its_status[sh]",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_transport.py::test_a_signalled_wrapper_stops_its_agent_and_cleans_up[bash]",
@@ -2189,7 +2189,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/transport.rs",
-      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads remain unported; stricter override scrubbing is an explicit fixture exception."
+      "coverage_scope": "Local subprocess/SSH-template fault tests and 59 frozen scoped projections. No live SSH or backend protocol parity claim. Remote artifact reads now have fake-SSH coverage in tests/remote_artifacts.rs, including target-home resolution, bounded binary frames, confinement before transfer, special-file/hard-link refusal, malformed output and process cleanup. Hard-link refusal and no-follow component reads are explicit hardening differences from frozen Python; stricter override scrubbing remains an explicit fixture exception."
     },
     {
       "python": "tests/test_upgrade_note.py::test_every_v03_setting_named_in_the_key_map_exists",

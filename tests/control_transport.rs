@@ -467,3 +467,117 @@ async fn shutdown_deadline_reports_incomplete_work_and_removes_socket() {
     assert_eq!(b.finished.load(Ordering::SeqCst), 0);
     assert!(!f.config.state.control_socket.exists());
 }
+
+#[tokio::test]
+async fn obligations_cli_sends_bounded_explicit_backfill_or_owner_close_requests() {
+    let f = Fixture::new();
+    let echo = Arc::new(Echo::default());
+    let server = f
+        .bind(echo.clone(), Access::OwnerPeer, Options::default())
+        .await;
+    for (args, target, body) in [
+        (vec!["obligations"], "/obligations", json!({})),
+        (
+            vec![
+                "obligations",
+                "--backfill",
+                "--since",
+                "100",
+                "--until",
+                "200",
+            ],
+            "/obligations/backfill",
+            json!({"since":100.,"until":200.,"apply":false,"client_id":""}),
+        ),
+        (
+            vec![
+                "obligations",
+                "--backfill",
+                "--since",
+                "100",
+                "--until",
+                "200",
+                "--apply",
+                "--client-id",
+                "backfill-1234",
+            ],
+            "/obligations/backfill",
+            json!({"since":100.,"until":200.,"apply":true,"client_id":"backfill-1234"}),
+        ),
+        (
+            vec![
+                "obligations",
+                "--close",
+                "o1",
+                "--reason",
+                "Already handled",
+            ],
+            "/obligations/o1/close",
+            json!({"reason":"Already handled"}),
+        ),
+    ] {
+        let mut argv = vec![env!("CARGO_BIN_EXE_fridica").to_string()];
+        argv.extend(args.into_iter().map(str::to_owned));
+        argv.extend([
+            "--socket".into(),
+            f.config.state.control_socket.to_str().unwrap().into(),
+        ]);
+        let result = fridica::exec::process::run_once(
+            fridica::exec::process::Launch {
+                argv,
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+            },
+            vec![],
+            Duration::from_secs(5),
+            4096,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.returncode,
+            0,
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(output["target"], target);
+        assert_eq!(output["body"], body);
+    }
+    let before = echo.calls.load(Ordering::SeqCst);
+    for args in [
+        vec!["obligations", "--apply"],
+        vec!["obligations", "--backfill"],
+        vec![
+            "obligations",
+            "--backfill",
+            "--since",
+            "NaN",
+            "--until",
+            "200",
+        ],
+        vec!["obligations", "--close", "o1"],
+    ] {
+        let mut argv = vec![env!("CARGO_BIN_EXE_fridica").to_string()];
+        argv.extend(args.into_iter().map(str::to_owned));
+        argv.extend([
+            "--socket".into(),
+            f.config.state.control_socket.to_str().unwrap().into(),
+        ]);
+        let result = fridica::exec::process::run_once(
+            fridica::exec::process::Launch {
+                argv,
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+            },
+            vec![],
+            Duration::from_secs(5),
+            4096,
+        )
+        .await
+        .unwrap();
+        assert_ne!(result.returncode, 0);
+    }
+    assert_eq!(echo.calls.load(Ordering::SeqCst), before);
+    server.close().await.unwrap();
+}

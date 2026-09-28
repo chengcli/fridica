@@ -279,7 +279,29 @@ mcp_aliases=["owner-fridica"]
 #[tokio::test]
 async fn composed_processes_fetch_context_and_artifacts_close_only_after_all_confirmed_deliveries()
 {
-    let f = Fixture::new().await;
+    composed_artifact_flow(false).await;
+}
+
+#[tokio::test]
+async fn ssh_worker_artifacts_reach_confirmed_delivery_through_shared_composition() {
+    composed_artifact_flow(true).await;
+}
+
+async fn composed_artifact_flow(remote: bool) {
+    let mut f = Fixture::new().await;
+    if remote {
+        std::fs::set_permissions(
+            f.dir.path().join("private"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let machine = &mut Arc::make_mut(&mut f.config).machines.machines[0];
+        machine.transport = "ssh".into();
+        machine.host = "owner@fixture".into();
+        let path = f.dir.path().join("bin/ssh");
+        std::fs::write(&path,"#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\ntest \"$1\" = owner@fixture || exit 255\nshift\nexec /bin/sh -c \"$1\"\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let artifact = f.dir.path().join("project/worker1/result.png");
     let runtime = f
         .start(Mode::Active(Box::new(

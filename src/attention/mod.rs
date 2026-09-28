@@ -1,5 +1,6 @@
 //! Durable attention operations. All decisions that reserve capacity or satisfy
 //! an obligation share a transaction with the inbox/outbox effects they describe.
+pub mod backfill;
 use crate::{
     config::Attention,
     core::{ids::ThreadId, Authority},
@@ -323,12 +324,15 @@ pub async fn disposition(
         bail!("read-only capability");
     }
     store.call(move |c| {
-        let current: String = c.query_row("SELECT state FROM obligations WHERE id=?", [&id], |r| r.get(0))?;
+        let tx = c.transaction()?;
+        let current: String = tx.query_row("SELECT state FROM obligations WHERE id=?", [&id], |r| r.get(0))?;
         if current == "awaiting_delivery" && state != "owner_closed" {
             bail!("resolve the existing delivery before changing its obligation");
         }
-        if c.execute("UPDATE obligations SET state=?,state_json=?,due=COALESCE(?,due),updated=? WHERE id=? AND state IN ('open','deferred','awaiting_delivery')",
+        if tx.execute("UPDATE obligations SET state=?,state_json=?,due=COALESCE(?,due),updated=? WHERE id=? AND state IN ('open','deferred','awaiting_delivery')",
             params![state,serde_json::to_string(&change)?,due,now,id])?!=1 {bail!("obligation is already closed or missing");}
+        tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'obligation.disposition',?,?)", params![now,serde_json::to_string(&actor)?,id,serde_json::to_string(&change)?])?;
+        tx.commit()?;
         Ok(())
     }).await
 }

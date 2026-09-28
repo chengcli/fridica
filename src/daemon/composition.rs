@@ -15,11 +15,11 @@ use crate::{
     store::Store,
     threads::runtime::{Adapters, Runtime},
     workers::{
-        artifacts::LocalJobIo,
+        artifacts::SystemJobIo,
         fetch::ScopedJobIo,
         instructions::OwnerInstructions,
         jsonl::{self, BackendFactory, Launcher, StoreWireRecorder, SystemLauncher},
-        protocol::NoJobIo,
+        protocol::{JobIo, NoJobIo},
     },
 };
 use anyhow::{bail, Result};
@@ -45,7 +45,7 @@ pub struct Execution {
     pub parent: parent::Options,
     pub launcher: Arc<dyn Launcher>,
     pub fetcher: Arc<dyn Fetcher>,
-    pub home: PathBuf,
+    pub artifacts: Arc<dyn JobIo>,
     pub github: Option<Arc<dyn client::Api>>,
     pub workers: jsonl::Options,
 }
@@ -79,6 +79,12 @@ impl Execution {
             None
         };
         Ok(Self {
+            artifacts: Arc::new(SystemJobIo {
+                home: host.home.clone(),
+                environment: host.environment.clone(),
+                ssh_control_directory: host.ssh_control_directory.clone(),
+                read_timeout: std::time::Duration::from_secs(30),
+            }),
             launcher: Arc::new(SystemLauncher::from_config(
                 config,
                 host.home.clone(),
@@ -96,7 +102,6 @@ impl Execution {
                 temporary_root: host.parent_temporary_root,
                 environment: host.environment,
             },
-            home: host.home,
             github,
             workers: jsonl::Options {
                 disabled_mcp_servers: config.isolation.mcp_aliases.clone(),
@@ -168,9 +173,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
             let io = ScopedJobIo {
                 store: store.clone(),
                 fetcher: execution.fetcher,
-                artifacts: Arc::new(LocalJobIo {
-                    home: execution.home,
-                }),
+                artifacts: execution.artifacts,
                 clock: clock.clone(),
             };
             (

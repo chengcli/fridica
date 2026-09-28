@@ -110,6 +110,28 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
+    /// List obligations, or explicitly preview/apply historical mention backfill.
+    Obligations {
+        #[arg(long)]
+        backfill: bool,
+        /// Inclusive source-message Unix timestamp.
+        #[arg(long, requires = "backfill", required_if_eq("backfill", "true"))]
+        since: Option<f64>,
+        /// Exclusive source-message Unix timestamp, no later than now.
+        #[arg(long, requires = "backfill", required_if_eq("backfill", "true"))]
+        until: Option<f64>,
+        /// Without this flag backfill only previews candidate mentions.
+        #[arg(long, requires_all=["backfill","client_id"])]
+        apply: bool,
+        #[arg(long, requires = "apply")]
+        client_id: Option<String>,
+        #[arg(long, conflicts_with = "backfill", requires = "reason")]
+        close: Option<String>,
+        #[arg(long, requires = "close")]
+        reason: Option<String>,
+        #[command(flatten)]
+        connection: Connection,
+    },
     /// Queue an owner instruction. Reuse the client ID after an uncertain response.
     Instruct {
         id: String,
@@ -196,6 +218,42 @@ impl Commands {
                 None => (connection, "GET", "/outbox".into(), None),
                 _ => bail!("invalid outbox identifier"),
             },
+            Self::Obligations {
+                backfill,
+                since,
+                until,
+                apply,
+                client_id,
+                connection,
+                close,
+                reason,
+            } => {
+                if let Some(id) = close {
+                    (
+                        connection,
+                        "POST",
+                        format!("/obligations/{}/close", segment(&id)?),
+                        Some(json!({"reason":reason.unwrap_or_default()})),
+                    )
+                } else if backfill {
+                    let (Some(since), Some(until)) = (since, until) else {
+                        bail!("backfill requires --since and --until");
+                    };
+                    if !since.is_finite() || !until.is_finite() || since < 0. || until <= since {
+                        bail!("invalid backfill time range");
+                    }
+                    (
+                        connection,
+                        "POST",
+                        "/obligations/backfill".into(),
+                        Some(
+                            json!({"since":since,"until":until,"apply":apply,"client_id":client_id.unwrap_or_default()}),
+                        ),
+                    )
+                } else {
+                    (connection, "GET", "/obligations".into(), None)
+                }
+            }
             Self::Instruct {
                 id,
                 text,

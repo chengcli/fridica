@@ -1903,3 +1903,93 @@ async fn cleaned_parent_failure_cannot_create_fresh_signal_work() {
         "0"
     );
 }
+
+#[tokio::test]
+async fn historical_backfill_and_closure_require_owner_authority_and_preserve_owner_pause() {
+    let h = Harness::new(vec![], false).await;
+    h.intake(false).await;
+    h.clock.set(200.);
+    h.runtime
+        .control(
+            SESSION.into(),
+            Control::Pause {
+                reason: "Owner review".into(),
+            },
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    // Simulate the historical rows that predate v6 mention tracking.
+    h.store
+        .call(|c| {
+            c.execute("DELETE FROM obligations", [])?;
+            c.execute("UPDATE messages SET mentions_owner=0", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let body = json!({"since":100.,"until":101.,"apply":true,"client_id":"backfill-1234"});
+    for authority in [Authority::Overseer, Authority::DesktopReadOnly] {
+        assert_eq!(
+            control_call(&h, "POST", "/obligations/backfill", body.clone(), authority)
+                .await
+                .status,
+            403
+        );
+    }
+    let response = control_call(
+        &h,
+        "POST",
+        "/obligations/backfill",
+        body.clone(),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(response.status, 200, "{:?}", response.body);
+    assert_eq!(response.body["count"], 1);
+    assert_eq!(
+        control_call(&h, "POST", "/obligations/backfill", body, Authority::Owner)
+            .await
+            .body,
+        response.body
+    );
+    let id = response.body["items"][0]["id"].as_str().unwrap();
+    let route = format!("/obligations/{id}/close");
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &route,
+            json!({"reason":"Already handled"}),
+            Authority::Overseer
+        )
+        .await
+        .status,
+        403
+    );
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &route,
+            json!({"reason":"Already handled"}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        200
+    );
+    assert_eq!(
+        h.scalar("SELECT state FROM obligations").await,
+        "owner_closed"
+    );
+    assert_eq!(h.scalar("SELECT control FROM threads").await, "paused");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='obligation.disposition'")
+            .await,
+        "1"
+    );
+    assert!(h.parent.calls.lock().unwrap().is_empty());
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    h.runtime.close().await.unwrap();
+}

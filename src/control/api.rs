@@ -123,6 +123,54 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         let p: Vec<_> = parts.iter().map(String::as_str).collect();
         let body = request.body;
         match p.as_slice() {
+            ["obligations", id, "close"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                let Some(reason) = body
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty() && s.chars().count() <= 4000)
+                else {
+                    return Response::error(400, "invalid_reason");
+                };
+                if body.as_object().unwrap().len() != 1 {
+                    return Response::error(400, "unknown_body_field");
+                }
+                match crate::attention::disposition(
+                    &store,
+                    id.to_string(),
+                    crate::attention::Disposition::OwnerClosed {
+                        reason: reason.into(),
+                    },
+                    authority,
+                    now,
+                )
+                .await
+                {
+                    Ok(()) => Response::ok(json!({"id":id,"state":"owner_closed"})),
+                    Err(_) => Response::error(409, "obligation_close_refused"),
+                }
+            }
+            ["obligations", "backfill"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                let Ok(request) =
+                    serde_json::from_value::<crate::attention::backfill::Request>(body)
+                else {
+                    return Response::error(400, "invalid_backfill_request");
+                };
+                if !request.valid(now) {
+                    return Response::error(400, "invalid_backfill_request");
+                }
+                match crate::attention::backfill::run(&store, &config, request, authority, now)
+                    .await
+                {
+                    Ok(result) => Response::ok(result),
+                    Err(_) => Response::error(409, "backfill_refused"),
+                }
+            }
             ["threads", id, action] => {
                 if authority != Authority::Owner && !matches!(*action, "pause" | "resume") {
                     return Response::error(403, "owner_required");
