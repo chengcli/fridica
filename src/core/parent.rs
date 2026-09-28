@@ -12,6 +12,8 @@ pub struct ParentRequest {
     pub obligations: Vec<Value>,
     #[serde(default)]
     pub linked: Vec<Value>,
+    #[serde(default)]
+    pub github_state: Vec<Value>,
     pub previous: Option<Value>,
     pub errors: Vec<String>,
 }

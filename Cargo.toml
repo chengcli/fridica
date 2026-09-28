@@ -38,6 +38,7 @@ rustix = { version = "1", features = ["process", "fs"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", features = ["sink"] }
+regex = "1"
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }

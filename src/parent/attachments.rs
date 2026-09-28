@@ -26,6 +26,7 @@ pub struct WithAttachments<P: Parent, D: Downloader> {
     clock: Arc<dyn Clock>,
     timeout: Duration,
     links: Option<Arc<dyn links::Reader>>,
+    github: Option<Arc<dyn crate::github::links::Reader>>,
 }
 fn failure(code: &str) -> ParentFailure {
     ParentFailure { code: code.into() }
@@ -51,6 +52,7 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             clock,
             timeout: Duration::from_secs(30),
             links: None,
+            github: None,
         }
     }
     /// Add linked messages to the same preparation budget and durable snapshot.
@@ -58,11 +60,19 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
         self.links = Some(reader);
         self
     }
+    pub fn with_github(mut self, reader: Arc<dyn crate::github::links::Reader>) -> Self {
+        self.github = Some(reader);
+        self
+    }
     async fn prepare(&self, mut request: ParentRequest) -> Result<ParentRequest, ParentFailure> {
         request.linked.clear();
-        // No external context I/O for triage, worker results or owner controls.
+        request.github_state.clear();
+        let message_call = request.trigger["kind"] == "message";
+        let github_enabled = self.config.github.enabled && self.github.is_some();
+        // Triage never performs external reads. GitHub context also informs
+        // worker-result summaries and authenticated instruction calls.
         if !matches!(request.call.as_str(), "decide" | "repair")
-            || request.trigger["kind"] != "message"
+            || (!message_call && !github_enabled)
         {
             if let Some(message) = request.trigger.get_mut("message") {
                 strip(message);
@@ -79,9 +89,13 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
         {
             return Err(failure("parent_context_scope"));
         }
-        let mut messages = vec![request.trigger["message"].clone()];
+        let mut messages = if message_call {
+            vec![request.trigger["message"].clone()]
+        } else {
+            vec![json!({"text":request.trigger["text"]})]
+        };
         messages.extend(request.history.iter().rev().cloned());
-        let input = json!({"session":request.session["id"],"version":request.session["version"],"inbox":request.inbox_id,"messages":messages,"links":self.links.is_some(),"context_version":2,"scope":{"workspace":self.config.slack.workspace,"channels":self.config.slack.channels,"owner":self.config.owner.slack_user}});
+        let input = json!({"session":request.session["id"],"version":request.session["version"],"inbox":request.inbox_id,"messages":messages,"links":self.links.is_some(),"context_version":3,"github":github_enabled,"github_cache_seconds":self.config.github.cache_seconds,"scope":{"workspace":self.config.slack.workspace,"channels":self.config.slack.channels,"owner":self.config.owner.slack_user}});
         let key = format!("{:x}", Sha256::digest(input.to_string().as_bytes()));
         let context = if request.call == "repair" {
             let raw=self.store.call(move|c|Ok(c.query_row("SELECT json_extract(payload_json,'$.context') FROM replay_events WHERE kind='parent_attachment_result' AND complete=1 AND json_extract(payload_json,'$.key')=? ORDER BY seq DESC LIMIT 1",[key],|r|r.get::<_,String>(0)).optional()?)).await.map_err(|_|failure("parent_context_recording_failed"))?;
@@ -120,7 +134,7 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             // consumes the model deadline nor doubles the preparation budget.
             let linked = async {
                 match &self.links {
-                    Some(reader) => {
+                    Some(reader) if message_call => {
                         links::read(
                             reader.as_ref(),
                             &self.config.slack.channels,
@@ -131,22 +145,50 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
                         )
                         .await
                     }
-                    None => Ok(vec![]),
+                    _ => Ok(vec![]),
                 }
             };
-            let (views, linked) = tokio::join!(
-                files::read(self.files.as_ref(), &messages, &own, self.timeout),
-                linked
-            );
+            let attachments = async {
+                if message_call {
+                    files::read(self.files.as_ref(), &messages, &own, self.timeout).await
+                } else {
+                    Ok(Default::default())
+                }
+            };
+            let github = async {
+                match &self.github {
+                    Some(reader) if github_enabled => {
+                        let texts = messages
+                            .iter()
+                            .filter_map(|m| m["text"].as_str().map(str::to_owned))
+                            .collect();
+                        match tokio::time::timeout(Duration::from_secs(20), reader.linked(texts))
+                            .await
+                        {
+                            Ok(Ok(data)) => Ok((data, "complete")),
+                            Ok(Err(crate::github::client::Failure::Recording)) => {
+                                Err(failure("parent_context_recording_failed"))
+                            }
+                            Ok(Err(_)) => Ok((vec![], "unavailable")),
+                            Err(_) => Ok((vec![], "timeout")),
+                        }
+                    }
+                    _ => Ok((vec![], "disabled")),
+                }
+            };
+            let (views, linked, github) = tokio::join!(attachments, linked, github);
             let mut views = views.map_err(|_| failure("parent_context_recording_failed"))?;
             let linked = linked.map_err(|_| failure("parent_context_recording_failed"))?;
+            let (github_state, github_status) = github?;
             let mut trigger = request.trigger.clone();
             let mut history = request.history.clone();
             let trigger_id = trigger["message"]["event_id"]
                 .as_str()
                 .unwrap_or("")
                 .to_owned();
-            strip(&mut trigger["message"]);
+            if let Some(message) = trigger.get_mut("message") {
+                strip(message);
+            }
             if let Some(attached) = views.remove(&trigger_id) {
                 trigger["message"]["attachments"] = json!(attached);
             }
@@ -161,7 +203,7 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             // Persist the rendered attachment and linked-message snapshot.
             // Attachment budgets also apply when building the transport prompt;
             // linked text has its own budget. Never replace raw stored messages.
-            let context = json!({"trigger":trigger,"history":history,"linked":linked});
+            let context = json!({"trigger":trigger,"history":history,"linked":linked,"github_state":github_state,"github_status":github_status});
             let record = json!({"call":call,"key":key,"context":context});
             let now = self.clock.now();
             self.store.call(move|c|{let tx=c.transaction()?;
@@ -175,12 +217,17 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             .map_err(|_| failure("parent_context_snapshot_invalid"))?;
         request.linked = serde_json::from_value(context["linked"].clone())
             .map_err(|_| failure("parent_context_snapshot_invalid"))?;
+        request.github_state = serde_json::from_value(context["github_state"].clone())
+            .map_err(|_| failure("parent_context_snapshot_invalid"))?;
         Ok(request)
     }
 }
 impl<P: Parent, D: Downloader> Parent for WithAttachments<P, D> {
     fn preparation_timeout(&self, request: &ParentRequest) -> Duration {
-        if request.call == "decide" && request.trigger["kind"] == "message" {
+        if request.call == "decide"
+            && (request.trigger["kind"] == "message"
+                || (self.config.github.enabled && self.github.is_some()))
+        {
             self.timeout
         } else {
             Duration::ZERO

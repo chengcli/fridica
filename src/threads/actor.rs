@@ -394,7 +394,7 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
             let snapshot=super::results::load(&tx,&session,&reference)?;
             for (key,value) in snapshot.as_object().context("invalid result snapshot")? {trigger[key]=value.clone();}
         }
-        let result=ParentRequest{linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
+        let result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
         tx.commit()?;Ok(result)
