@@ -24,6 +24,17 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
             if key in environment and path(environment[key]) != expected:
                 raise Refused()
 
+    required = set()
+    for name in request.get("settings_files", []):
+        if name.startswith("~/"):
+            name = home + name[1:]
+        name = path(name)
+        if not name.endswith((".toml", ".json")):
+            raise Refused()
+        required.add(name)
+    if len(required) > 64:
+        raise Refused()
+
     limit = 1024 * 1024
     candidates = {codex_home + "/config.toml", "/etc/codex/config.toml",
                   "/etc/codex/managed_config.toml"}
@@ -55,6 +66,7 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         if ancestor == "/":
             break
         ancestor = os.path.dirname(ancestor)
+    candidates.update(required)
     if len(candidates) > 256:
         raise Refused()
 
@@ -75,10 +87,14 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         # Do not restore a layer already hidden by a private-directory mask.
         if (any(within(name, mask) for mask in masks)
                 and not any(within(name, root) for root in [workspace] + state)):
+            if name in required:
+                raise Refused()
             continue
         try:
             fd = regular(name)
         except FileNotFoundError:
+            if name in required:
+                raise Refused()
             continue
         with os.fdopen(fd, "rb") as source:
             raw = source.read(limit + 1)

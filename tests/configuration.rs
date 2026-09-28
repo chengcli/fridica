@@ -447,3 +447,38 @@ fn offline_cli_reports_missing_and_configured_inventory_without_probe_or_private
         assert!(!root.join("home/.codex").exists());
     }
 }
+
+#[test]
+fn mcp_source_inventory_resolves_local_files_and_requires_safe_target_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup(root);
+    let source = format!("{}{}\n[isolation]\nsettings_files=['sources/extra.toml']\nmcp_inventory_complete=true\n[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/sources/managed.json']\nmcp_inventory_complete=true\n", basic(root), remote_machine());
+    let config = loader::parse(&source, &root.join("etc/config.toml"), &context(root)).unwrap();
+    assert_eq!(
+        config.isolation.settings_files,
+        vec![root.join("etc/sources/extra.toml")]
+    );
+    assert_eq!(
+        config.isolation.remote["remote"].settings_files,
+        vec!["~/sources/managed.json"]
+    );
+    assert!(config.isolation.remote["remote"].private_files.is_empty());
+    let summary = config.isolation.summary(&config.machines).to_string();
+    assert!(!summary.contains("managed.json"));
+    assert!(!summary.contains("extra.toml"));
+    assert!(!root.join("etc/sources").exists());
+    for fragment in [
+        "[isolation]\nsettings_files=['opaque.yaml']",
+        "[isolation]\nmcp_inventory_complete='yes'",
+        "[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['relative/private.toml']",
+        "[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/../private.toml']",
+    ] {
+        assert!(loader::parse(
+            &format!("{}{}\n{fragment}", basic(root), remote_machine()),
+            &root.join("etc/config.toml"),
+            &context(root)
+        )
+        .is_err());
+    }
+}

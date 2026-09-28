@@ -185,6 +185,7 @@ impl Launcher for SystemLauncher {
                     self.isolation
                         .mcp_startup(
                             command,
+                            &spec.machine,
                             Some(&self.home),
                             &spec.workspace.path,
                             &spec.excluded_env,
@@ -231,6 +232,7 @@ impl Launcher for SystemLauncher {
                     self.isolation
                         .mcp_startup(
                             command,
+                            &spec.machine,
                             None,
                             &spec.workspace.path,
                             &spec.excluded_env,

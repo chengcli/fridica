@@ -222,7 +222,11 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     };
     registry.validate()?;
     let mut isolation: super::isolation::Settings = decode(root.get("isolation"))?;
-    for path in &mut isolation.private_files {
+    for path in isolation
+        .private_files
+        .iter_mut()
+        .chain(isolation.settings_files.iter_mut())
+    {
         *path = resolve_path(path, base, &context.home)?;
     }
     isolation.validate(&registry)?;

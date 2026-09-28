@@ -189,13 +189,7 @@ impl Server {
             .mode(0o700)
             .create(parent)
             .map_err(|_| Failure::UnsafePath)?;
-        let metadata = std::fs::symlink_metadata(parent).map_err(|_| Failure::UnsafePath)?;
-        if !metadata.is_dir()
-            || metadata.uid() != users::get_current_uid()
-            || metadata.mode() & 0o077 != 0
-        {
-            return Err(Failure::UnsafePath);
-        }
+        validate_parent_directory(parent, false)?;
         let parent = parent.canonicalize().map_err(|_| Failure::UnsafePath)?;
         let path = parent.join(path.file_name().ok_or(Failure::UnsafePath)?);
         for machine in &config.machines.machines {
@@ -451,4 +445,24 @@ fn http(response: Response) -> hyper::Response<Full<Bytes>> {
         .header("connection", "close")
         .body(Full::new(Bytes::from(bytes)))
         .unwrap()
+}
+
+/// Shared read-only prerequisite check; binding alone may create a missing
+/// directory. Readiness never creates or changes permissions on owner paths.
+pub fn validate_parent_directory(
+    parent: &std::path::Path,
+    allow_missing: bool,
+) -> Result<(), Failure> {
+    let metadata = match std::fs::symlink_metadata(parent) {
+        Ok(metadata) => metadata,
+        Err(e) if allow_missing && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(Failure::UnsafePath),
+    };
+    if !metadata.is_dir()
+        || metadata.uid() != users::get_current_uid()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(Failure::UnsafePath);
+    }
+    Ok(())
 }

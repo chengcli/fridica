@@ -15,6 +15,11 @@ files; `private_files` adds capability files outside those directories.
 [isolation]
 # Relative paths resolve beside this configuration; ~/ uses the daemon's home.
 private_files = ["credentials/mcp.key", "credentials/overseer.key"]
+# Additional MCP configuration sources outside the automatically scanned layers.
+# Explicit sources are required to exist and must be TOML or JSON.
+settings_files = ["backend-settings/extra.toml"]
+# Set true only after reviewing every local source and registering opaque aliases.
+mcp_inventory_complete = true
 
 # Register identities for opaque wrappers or HTTP servers. Do not put secrets here.
 mcp_aliases = ["desktop-fridica"]
@@ -24,6 +29,9 @@ mcp_urls = ["http://127.0.0.1:8765/mcp"]
 [isolation.remote.compute]
 # Must exactly match machines.compute.host, including the owner account/SSH alias.
 host = "owner@compute"
+settings_files = ["~/.config/owner/extra-mcp.json"]
+# This declaration applies only to the exact SSH machine/host above.
+mcp_inventory_complete = true
 # These are TARGET paths. ~/ expands on the target, never on the daemon host.
 private_files = [
   "~/.config/fridica/config.toml",
@@ -55,6 +63,23 @@ settings register identities to disable and sanitize; they do not enable an MCP
 service or contact an endpoint. Opaque wrappers and configuration sources still
 need an owner inventory; discovery does not establish its completeness.
 
+`settings_files` adds up to 64 required TOML/JSON sources per target to the same
+bounded, no-follow parser. Local relative paths resolve beside the configuration;
+remote paths must be absolute or start with `~/` and expand on that target.
+Missing, malformed, oversized or linked explicit files refuse discovery. Confined
+launches sanitize these sources in their mount view; unrestricted Codex discovers
+aliases and appends disable overrides without editing the files. Claude uses its
+strict empty MCP configuration. Inventory sources hidden by a private-directory
+mask are refused rather than silently omitted. Source-only SSH profiles are
+allowed for unrestricted workers; confinement still requires `private_files`.
+
+`mcp_inventory_complete` defaults to false. It asserts that the owner has reviewed
+all effective sources, including dynamic/cloud configuration and opaque wrappers,
+and has registered aliases for sources that cannot be represented by these files.
+It does not prove that assertion or fetch cloud settings. Do not set it merely to
+make the check pass. Actual-target review and backend conformance remain required.
+Changing either field invalidates an existing launcher's configuration binding.
+
 Run the offline check against the separate configuration:
 
 ```sh
@@ -67,6 +92,39 @@ unconfined target. It omits private paths, host values and MCP identities.
 `runtime_checks` is always `not_run`: this command reads configuration without
 creating state, starting a backend, contacting SSH, or testing mount support.
 A successful check does not certify launch readiness.
+
+To check startup prerequisites across every configured machine, workspace and
+backend, without Slack credentials or an existing database, use:
+
+```sh
+cargo run --offline --bin fridica -- start --check-ready \
+  --config /path/to/experimental.toml --timeout 30
+```
+
+This checks the existing control-directory permissions, owner contract/repository
+inputs, parent executable, worker home/workspace and executable presence, reviewed
+MCP inventories, and supported settings sources. Confined targets also check the
+namespace and executable visibility inside it. No backend is invoked, even for a
+version check. Parent checks use its existing tool-less startup policy. Local/SSH
+helper probes may run; there are no Slack/GitHub/MCP calls, database opens, control
+sockets or backend-state/slot directory creation. Missing control directories are
+left for actual startup to provision. Temporary SSH housekeeping is removed.
+
+The JSON report binds results to the build version and configuration fingerprint,
+identifies machine/workspace/backend names and fixed failure codes, and omits
+private paths and settings. `startup_checks_passed` requires every target and the
+host/parent checks to pass. Unreviewed targets report `mcp_inventory_unreviewed`;
+other readiness codes include `host_paths_refused`, `owner_inputs_refused`,
+`backend_missing` and `workspace_refused`. Failure or cancellation exits nonzero.
+SIGINT/SIGTERM finish cleanup of the current bounded probe before skipping later
+probes; the timeout is per probe, and cleanup may take additional time.
+
+A passing report always retains `active_launch_ready: false` and lists the later
+compatibility, replay/recovery, packaging and deployment gates. It does not check
+backend versions/protocols/authentication, Slack access, database migration/locking,
+or guarantee writable state provisioning. Active library host startup reruns these
+checks before state/recovery and daemon service I/O; the active CLI remains gated.
+`--check-ready` and `--observe-only` are mutually exclusive.
 
 To test confinement on one configured machine and workspace, use:
 
@@ -167,8 +225,9 @@ Unrestricted workers remain in the trusted-owner model: they can still read
 owner files and deliberately invoke tools themselves. This startup scan is not
 credential isolation or a guarantee against concurrent settings changes. External
 and cloud-delivered sources not represented by the scanned files still require
-explicit identity provisioning and target validation. Active CLI startup, complete
-configuration-source coverage and real backend conformance remain unfinished;
+explicit identity provisioning, an owner coverage declaration and target validation.
+Readiness and explicit source inventory are implemented; active CLI enablement,
+real inventory review and backend conformance remain later gates;
 see the [implementation status](v0.4-implementation-status.md).
 
 The override behavior follows the official [configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic)

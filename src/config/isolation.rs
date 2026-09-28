@@ -12,6 +12,10 @@ use std::{
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub private_files: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub settings_files: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mcp_inventory_complete: bool,
     pub mcp_aliases: Vec<String>,
     pub mcp_urls: Vec<String>,
     pub remote: BTreeMap<String, Remote>,
@@ -21,7 +25,12 @@ pub struct Settings {
 #[serde(deny_unknown_fields)]
 pub struct Remote {
     pub host: String,
+    #[serde(default)]
     pub private_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mcp_inventory_complete: bool,
 }
 
 impl Settings {
@@ -35,6 +44,14 @@ impl Settings {
                 "isolation.private_files requires absolute file paths below dedicated directories"
             );
         }
+        validate_settings_files(
+            &self
+                .settings_files
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            false,
+        )?;
         for (name, inventory) in &self.remote {
             let Some(machine) = machines.get(name) else {
                 bail!("isolation.remote refers to an unknown machine");
@@ -45,7 +62,16 @@ impl Settings {
             {
                 bail!("isolation.remote host must match its configured SSH machine");
             }
-            validate_remote_files(&inventory.private_files)?;
+            if inventory.private_files.is_empty()
+                && inventory.settings_files.is_empty()
+                && !inventory.mcp_inventory_complete
+            {
+                bail!("remote isolation requires a private-file or MCP source inventory");
+            }
+            if !inventory.private_files.is_empty() {
+                validate_remote_files(&inventory.private_files)?;
+            }
+            validate_settings_files(&inventory.settings_files, true)?;
         }
         Ok(())
     }
@@ -57,10 +83,11 @@ impl Settings {
             .map(|m| {
                 let required = m.workspaces.iter().any(|w| w.policy.gpu_confine == Some(true));
                 let inventory = self.remote.get(&m.name);
-                json!({"machine":m.name, "inventory":if inventory.is_some(){"configured"}else if required{"missing"}else{"not_required"},
-                    "private_file_count":inventory.map_or(0, |v| v.private_files.len())})
+                json!({"machine":m.name, "inventory":if inventory.is_some_and(|i| !i.private_files.is_empty()){"configured"}else if required{"missing"}else{"not_required"},
+                    "private_file_count":inventory.map_or(0, |v| v.private_files.len()), "settings_file_count":inventory.map_or(0, |v| v.settings_files.len()), "mcp_inventory_complete":inventory.is_some_and(|v| v.mcp_inventory_complete)})
             }).collect();
         json!({"additional_private_file_count":self.private_files.len(),
+            "settings_file_count":self.settings_files.len(),"mcp_inventory_complete":self.mcp_inventory_complete,
             "mcp_identity_count":self.mcp_aliases.len()+self.mcp_urls.len(),
             "remote":targets,"runtime_checks":"not_run"})
     }
@@ -124,4 +151,20 @@ fn private_path(path: &Path) -> bool {
         && path
             .components()
             .all(|p| matches!(p, Component::RootDir | Component::Normal(_)))
+}
+
+pub fn validate_settings_files(files: &[String], remote: bool) -> Result<()> {
+    if files.len() > 64
+        || files.iter().any(|p| {
+            !remote_path(p)
+                || (!remote && !Path::new(p).is_absolute())
+                || !matches!(
+                    Path::new(p).extension().and_then(|s| s.to_str()),
+                    Some("toml" | "json")
+                )
+        })
+    {
+        bail!("MCP settings files require bounded absolute or target-home TOML/JSON paths");
+    }
+    Ok(())
 }

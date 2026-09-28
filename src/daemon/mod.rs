@@ -1,5 +1,5 @@
-//! Experimental daemon composition. Active execution remains gated until the
-//! full runtime parity and worker MCP isolation requirements are implemented.
+//! Experimental daemon composition. Active CLI execution remains gated by
+//! compatibility, replay/recovery, packaging and deployment validation.
 pub mod composition;
 use crate::{
     config::Config,
@@ -140,6 +140,67 @@ pub async fn observe(
     credentials: Credentials,
     stop: watch::Receiver<bool>,
 ) -> Result<()> {
+    run(config, credentials, stop, None).await
+}
+
+/// Active host wiring for the candidate. The CLI rollout gate remains closed.
+/// Each invocation reruns preparation before database recovery or service I/O.
+pub async fn active(
+    config: Config,
+    context: crate::config::LoadContext,
+    environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    credentials: Credentials,
+    stop: watch::Receiver<bool>,
+) -> Result<()> {
+    let report = crate::doctor::readiness::check(
+        &config,
+        &context,
+        environment.clone(),
+        Duration::from_secs(30),
+        stop.clone(),
+    )
+    .await?;
+    if report.cancelled {
+        return Ok(());
+    }
+    if !report.startup_checks_passed {
+        bail!("active startup readiness checks did not pass");
+    }
+    // Private housekeeping is provisioned only after read-only checks succeed.
+    use std::os::unix::fs::PermissionsExt;
+    let temporary = tempfile::Builder::new()
+        .prefix("fridica-parent-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let ssh = crate::exec::ssh::control_directory(context.runtime_dir.as_deref(), context.uid)?;
+    if *stop.borrow() {
+        return Ok(());
+    }
+    let result = run(
+        config,
+        credentials,
+        stop,
+        Some(composition::Host {
+            home: context.home,
+            environment,
+            ssh_control_directory: ssh,
+            parent_temporary_root: temporary.path().to_owned(),
+        }),
+    )
+    .await;
+    drop(temporary);
+    result
+}
+
+async fn run(
+    config: Config,
+    credentials: Credentials,
+    stop: watch::Receiver<bool>,
+    host: Option<composition::Host>,
+) -> Result<()> {
+    if *stop.borrow() {
+        return Ok(());
+    }
     let config = Arc::new(config);
     let store = Store::open(config.state.path.clone()).await?;
     let clock = Arc::new(SystemClock);
@@ -150,15 +211,18 @@ pub async fn observe(
         credentials.user,
         Duration::from_secs(30),
     )?);
-    let runtime = composition::start(
-        config.clone(),
-        store,
-        web,
-        clock,
-        Arc::new(RandomIds),
-        composition::Mode::ObserveOnly,
-    )
-    .await?;
+    let mode = if let Some(host) = host {
+        composition::Mode::Active(Box::new(composition::Execution::system(
+            &config,
+            store.clone(),
+            clock.clone(),
+            host,
+        )?))
+    } else {
+        composition::Mode::ObserveOnly
+    };
+    let runtime =
+        composition::start(config.clone(), store, web, clock, Arc::new(RandomIds), mode).await?;
     let service = runtime.slack_service(
         credentials.app,
         socket::Options::default(),

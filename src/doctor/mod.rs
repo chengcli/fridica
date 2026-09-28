@@ -1,5 +1,7 @@
 //! Explicit target checks. Reports contain fixed diagnostics, never subprocess
 //! output, credentials, inventory paths, or MCP settings.
+pub mod readiness;
+
 use crate::{
     config::{Config, LoadContext},
     exec::{isolation::Isolation, local::LocalTransport, ssh::SshTransport},
@@ -34,6 +36,28 @@ pub async fn isolation(
     workspace: &str,
     timeout: Duration,
 ) -> Result<Report> {
+    isolation_backend(
+        config,
+        context,
+        environment,
+        machine,
+        workspace,
+        timeout,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn isolation_backend(
+    config: &Config,
+    context: &LoadContext,
+    environment: BTreeMap<OsString, OsString>,
+    machine: &str,
+    workspace: &str,
+    timeout: Duration,
+    backend: Option<&str>,
+) -> Result<Report> {
     if timeout < Duration::from_secs(1) || timeout > Duration::from_secs(120) {
         bail!("isolation probe timeout must be between 1 and 120 seconds");
     }
@@ -57,15 +81,24 @@ pub async fn isolation(
     // Retain the private temporary directory until SSH and its cleanup exit.
     let mut control = None;
     let launch = match machine.transport.as_str() {
-        "local" => isolation.preflight(
-            &LocalTransport {
-                machine: machine.clone(),
-                home: context.home.clone(),
-                excluded_env,
-            },
-            &workspace.path,
-            environment,
-        ),
+        "local" => {
+            let probe = |transport: &LocalTransport, path: &std::path::Path, environment| {
+                if let Some(backend) = backend {
+                    isolation.preflight_backend(transport, path, environment, backend)
+                } else {
+                    isolation.preflight(transport, path, environment)
+                }
+            };
+            probe(
+                &LocalTransport {
+                    machine: machine.clone(),
+                    home: context.home.clone(),
+                    excluded_env,
+                },
+                &workspace.path,
+                environment,
+            )
+        }
         "ssh" => {
             control = Some(
                 tempfile::Builder::new()
@@ -73,7 +106,14 @@ pub async fn isolation(
                     .permissions(std::fs::Permissions::from_mode(0o700))
                     .tempdir()?,
             );
-            let mut launch = isolation.preflight_remote(
+            let probe = |transport: &SshTransport, path: &str, environment| {
+                if let Some(backend) = backend {
+                    isolation.preflight_backend_remote(transport, path, environment, backend)
+                } else {
+                    isolation.preflight_remote(transport, path, environment)
+                }
+            };
+            let mut launch = probe(
                 &SshTransport {
                     machine: machine.clone(),
                     excluded_env,

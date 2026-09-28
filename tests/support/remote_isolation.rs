@@ -50,6 +50,8 @@ impl Remote {
         provisioned.isolation.remote.insert(
             machine.name.clone(),
             fridica::config::isolation::Remote {
+                settings_files: vec![],
+                mcp_inventory_complete: false,
                 host: machine.host.clone(),
                 private_files: vec![
                     local.config.path.to_str().unwrap().into(),

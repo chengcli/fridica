@@ -77,10 +77,15 @@ def main():
     command = sys.argv[2:]
     if preflight:
         # Fixed system interpreter only: never run a backend or project command.
+        backend = request.get("probe_backend") or ""
+        if backend not in ("", "codex", "claude"):
+            raise Refused()
         command = [sys.executable, "-I", "-S", "-c",
-                   "import json, os, sys; "
+                   "import json, os, sys, shutil; "
                    "assert all(not os.path.lexists(p) for p in json.loads(sys.argv[1])); "
-                   "print('fridica-isolation:ready')", json.dumps(private)]
+                   "missing = bool(sys.argv[2]) and shutil.which(sys.argv[2]) is None; "
+                   "print('fridica-isolation:backend-missing' if missing else 'fridica-isolation:ready'); "
+                   "sys.exit(97 if missing else 0)", json.dumps(private), backend]
     preflight_stage = "settings"
     snapshots, aliases = settings_snapshots(home, workspace, selected, state, request, environment, command)
     if os.path.basename(command[0]) == "codex" and command[1:2] == ["app-server"]:

@@ -187,6 +187,8 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
     f.config.isolation.remote.insert(
         "local".into(),
         fridica::config::isolation::Remote {
+            settings_files: vec![],
+            mcp_inventory_complete: false,
             host: "owner@synthetic".into(),
             private_files: vec!["~/private/state.db".into()],
         },
@@ -377,4 +379,29 @@ async fn cancelled_probe_retains_capacity_until_stubborn_child_is_reaped() {
         .unwrap()
         .unwrap();
     assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());
+}
+
+#[tokio::test]
+async fn explicit_extra_source_is_sanitized_in_confined_mounts_and_missing_source_refuses() {
+    let mut f = Fixture::new();
+    let extra = f.workspace.join("extra.json");
+    let source = r#"{"mcpServers":{"outside-default-layers":{"command":"fridica","env":{"KEY":"private-source"}}}}"#;
+    std::fs::write(&extra, source).unwrap();
+    f.config.isolation.settings_files.push(extra.clone());
+    let launch = f.command("import json, pathlib; assert json.loads(pathlib.Path('extra.json').read_text()) == {'mcpServers': {}}");
+    let result = process::run_once(launch, vec![], Duration::from_secs(10), 4096)
+        .await
+        .unwrap();
+    assert_eq!(
+        result.returncode,
+        0,
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&extra).unwrap(), source);
+    std::fs::remove_file(&extra).unwrap();
+    assert_eq!(
+        doctor::run_probe(super::preflight::launch(&f), Duration::from_secs(10)).await,
+        Check::SettingsRefused
+    );
 }

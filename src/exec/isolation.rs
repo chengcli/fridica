@@ -35,10 +35,19 @@ const MCP_STARTUP: &str = concat!(
     "\n",
     include_str!("mcp_startup.py")
 );
+const READINESS: &str = concat!(
+    include_str!("settings_paths.py"),
+    "\n",
+    include_str!("isolation_settings.py"),
+    "\n",
+    include_str!("readiness.py")
+);
 const BOOTSTRAP: &str = include_str!("isolation_bootstrap.py");
 #[derive(Clone, PartialEq, Eq)]
 pub struct Isolation {
     private: Vec<PathBuf>,
+    settings_files: Vec<PathBuf>,
+    inventory_complete: bool,
     remote: BTreeMap<String, RemoteFiles>,
     mcp_aliases: Vec<String>,
     mcp_urls: Vec<String>,
@@ -47,6 +56,8 @@ pub struct Isolation {
 struct RemoteFiles {
     host: String,
     private: Vec<String>,
+    settings_files: Vec<String>,
+    inventory_complete: bool,
 }
 impl Isolation {
     /// Additional capability files must be supplied by trusted daemon
@@ -70,6 +81,8 @@ impl Isolation {
         }
         let mut isolation = Self {
             private,
+            settings_files: config.isolation.settings_files.clone(),
+            inventory_complete: config.isolation.mcp_inventory_complete,
             remote: BTreeMap::new(),
             mcp_aliases: vec![],
             mcp_urls: vec![],
@@ -80,7 +93,15 @@ impl Isolation {
                 .machines
                 .get(name)
                 .expect("validated inventory machine");
-            isolation = isolation.with_remote_files(machine, &inventory.private_files)?;
+            isolation.remote.insert(
+                name.clone(),
+                RemoteFiles {
+                    host: machine.host.clone(),
+                    private: inventory.private_files.clone(),
+                    settings_files: inventory.settings_files.clone(),
+                    inventory_complete: inventory.mcp_inventory_complete,
+                },
+            );
         }
         Ok(isolation)
     }
@@ -111,6 +132,8 @@ impl Isolation {
             RemoteFiles {
                 host: machine.host.clone(),
                 private: private.to_vec(),
+                settings_files: vec![],
+                inventory_complete: false,
             },
         );
         Ok(self)
@@ -120,6 +143,7 @@ impl Isolation {
     pub fn mcp_startup(
         &self,
         command: Vec<String>,
+        machine: &Machine,
         home: Option<&Path>,
         cwd: &Path,
         excluded_env: &[String],
@@ -133,6 +157,15 @@ impl Isolation {
         {
             bail!("invalid Codex startup settings request");
         }
+        let settings = if machine.transport == "ssh" {
+            self.remote
+                .get(&machine.name)
+                .filter(|p| p.host == machine.host)
+                .map(|p| json!(p.settings_files))
+                .unwrap_or_else(|| json!([]))
+        } else {
+            json!(self.settings_files)
+        };
         let mut argv = vec![
             "/usr/bin/python3".into(),
             "-I".into(),
@@ -141,12 +174,49 @@ impl Isolation {
             BOOTSTRAP.into(),
             MCP_STARTUP.into(),
             json!({"home":home,"workspace":cwd,"create":create,
-                   "excluded_env":excluded_env,"mcp_aliases":self.mcp_aliases,
+                   "excluded_env":excluded_env,"settings_files":settings,"mcp_aliases":self.mcp_aliases,
                    "mcp_urls":self.mcp_urls})
             .to_string(),
         ];
         argv.extend(command);
         Ok(argv)
+    }
+
+    /// Read-only helper arguments; caller selects local or SSH transport.
+    /// Binary presence is checked without running a version/authentication command.
+    pub fn readiness(
+        &self,
+        machine: &Machine,
+        home: Option<&Path>,
+        workspace: &Path,
+        backend: &str,
+        excluded_env: &[String],
+        parent: bool,
+    ) -> Result<Vec<String>> {
+        if !["codex", "claude"].contains(&backend) {
+            bail!("unknown readiness backend");
+        }
+        let settings = if machine.transport == "ssh" {
+            self.remote
+                .get(&machine.name)
+                .filter(|p| p.host == machine.host)
+                .map(|p| json!(p.settings_files))
+                .unwrap_or_else(|| json!([]))
+        } else {
+            json!(self.settings_files)
+        };
+        Ok(vec![
+            "/usr/bin/python3".into(),
+            "-I".into(),
+            "-S".into(),
+            "-c".into(),
+            BOOTSTRAP.into(),
+            READINESS.into(),
+            json!({"home":home,"workspace":workspace,"backend":backend,"parent":parent,
+                   "excluded_env":excluded_env,"settings_files":settings,
+                   "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
+            .to_string(),
+        ])
     }
 
     pub fn launch_remote(
@@ -157,7 +227,7 @@ impl Isolation {
         inherited: BTreeMap<OsString, OsString>,
         create: bool,
     ) -> Result<Launch> {
-        self.launch_remote_mode(transport, command, cwd, inherited, create, false)
+        self.launch_remote_mode(transport, command, cwd, inherited, create, false, None)
     }
     /// Read-only runtime probe through the same helper and transport as workers.
     /// No backend is executed and missing workspace directories are not created.
@@ -174,6 +244,41 @@ impl Isolation {
             inherited,
             false,
             true,
+            None,
+        )
+    }
+    pub fn preflight_backend_remote(
+        &self,
+        transport: &SshTransport,
+        cwd: &str,
+        inherited: BTreeMap<OsString, OsString>,
+        backend: &str,
+    ) -> Result<Launch> {
+        self.launch_remote_mode(
+            transport,
+            vec!["/bin/true".into()],
+            cwd,
+            inherited,
+            false,
+            true,
+            Some(backend),
+        )
+    }
+    pub fn preflight_backend(
+        &self,
+        transport: &LocalTransport,
+        cwd: &Path,
+        inherited: BTreeMap<OsString, OsString>,
+        backend: &str,
+    ) -> Result<Launch> {
+        self.launch_mode(
+            transport,
+            vec!["/bin/true".into()],
+            cwd,
+            inherited,
+            false,
+            true,
+            Some(backend),
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -185,11 +290,13 @@ impl Isolation {
         inherited: BTreeMap<OsString, OsString>,
         create: bool,
         preflight: bool,
+        probe_backend: Option<&str>,
     ) -> Result<Launch> {
         let Some(profile) = self.remote.get(&transport.machine.name) else {
             bail!("confined SSH requires a target private-file inventory");
         };
-        if profile.host != transport.machine.host || !remote_path(cwd) {
+        if profile.private.is_empty() || profile.host != transport.machine.host || !remote_path(cwd)
+        {
             bail!("confined SSH target or workspace does not match its inventory");
         }
         shell::validate(&command)?;
@@ -201,8 +308,8 @@ impl Isolation {
             BOOTSTRAP.into(),
             HELPER.into(),
             json!({"home":null,"workspace":cwd,"private":profile.private,
-                "create":create,"preflight":preflight,"excluded_env":transport.excluded_env,
-                "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
+                "create":create,"preflight":preflight,"probe_backend":probe_backend,"excluded_env":transport.excluded_env,
+                "settings_files":profile.settings_files,"mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
             .to_string(),
         ];
         argv.extend(command);
@@ -224,7 +331,7 @@ impl Isolation {
         inherited: BTreeMap<OsString, OsString>,
         create: bool,
     ) -> Result<Launch> {
-        self.launch_mode(transport, command, cwd, inherited, create, false)
+        self.launch_mode(transport, command, cwd, inherited, create, false, None)
     }
     /// Read-only runtime probe through the same helper and transport as workers.
     /// No backend is executed and missing workspace directories are not created.
@@ -241,6 +348,7 @@ impl Isolation {
             inherited,
             false,
             true,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -252,6 +360,7 @@ impl Isolation {
         inherited: BTreeMap<OsString, OsString>,
         create: bool,
         preflight: bool,
+        probe_backend: Option<&str>,
     ) -> Result<Launch> {
         if !cfg!(target_os = "linux")
             || transport.machine.transport != "local"
@@ -274,8 +383,8 @@ impl Isolation {
             "-c".into(),
             BOOTSTRAP.into(),
             HELPER.into(),
-            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,"preflight":preflight,
-                "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
+            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,"preflight":preflight,"probe_backend":probe_backend,
+                "settings_files":self.settings_files,"mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
             .to_string(),
         ];
         argv.extend(command);
@@ -308,6 +417,11 @@ pub enum Check {
     NamespaceFailed,
     RuntimeOrTransportFailed,
     ProbeFailed,
+    McpInventoryUnreviewed,
+    BackendMissing,
+    WorkspaceRefused,
+    HostPathsRefused,
+    OwnerInputsRefused,
 }
 /// Bounded process ownership includes cancellation cleanup and the SSH stdin
 /// watchdog. Exact markers and successful exit are both required for success.
@@ -330,6 +444,9 @@ fn probe_result(result: Result<process::Completed>) -> Check {
     };
     match (result.returncode, result.stdout.as_slice()) {
         (0, b"fridica-isolation:namespace\nfridica-isolation:ready\n") => Check::Passed,
+        (97, b"fridica-isolation:namespace\nfridica-isolation:backend-missing\n") => {
+            Check::BackendMissing
+        }
         (97, b"fridica-isolation:inventory-refused\n") => Check::InventoryRefused,
         (97, b"fridica-isolation:settings-refused\n") => Check::SettingsRefused,
         (_, b"fridica-isolation:namespace\n")
@@ -359,4 +476,18 @@ pub fn read_only_ssh_probe(launch: &mut Launch) {
         ]
         .map(str::to_owned),
     );
+}
+
+/// Same bounded process ownership as namespace probes, with fixed diagnostics.
+pub async fn run_readiness(launch: Launch, timeout: Duration) -> Check {
+    let Ok(result) = process::run_with_open_stdin(launch, timeout, 4096).await else {
+        return Check::ProbeFailed;
+    };
+    match (result.returncode, result.stdout.as_slice()) {
+        (0, b"fridica-readiness:ready\n") => Check::Passed,
+        (97, b"fridica-readiness:backend-missing\n") => Check::BackendMissing,
+        (97, b"fridica-readiness:workspace-refused\n") => Check::WorkspaceRefused,
+        (97, b"fridica-readiness:settings-refused\n") => Check::SettingsRefused,
+        _ => Check::RuntimeOrTransportFailed,
+    }
 }
