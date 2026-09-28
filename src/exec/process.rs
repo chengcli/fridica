@@ -39,6 +39,7 @@ pub fn scrubbed_environment(
         let name = key.to_string_lossy();
         !excluded.iter().any(|k| key == k.as_str())
             && !name.to_ascii_uppercase().contains("SLACK")
+            && !name.to_ascii_uppercase().starts_with("FRIDICA_")
             && !TOKEN_PREFIXES
                 .iter()
                 .any(|prefix| value.to_string_lossy().starts_with(prefix))

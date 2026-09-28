@@ -42,25 +42,38 @@ pub struct SystemLauncher {
     pub home: PathBuf,
     pub environment: BTreeMap<OsString, OsString>,
     pub ssh_control_directory: PathBuf,
+    pub isolation: crate::exec::isolation::Isolation,
 }
 impl Launcher for SystemLauncher {
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
         let roots = vec![spec.workspace.path.to_string_lossy().into_owned()];
         let confine = spec.confined().then_some(roots.as_slice());
         let launch = match spec.machine.transport.as_str() {
-            "local" => LocalTransport {
-                machine: spec.machine.clone(),
-                home: self.home.clone(),
-                excluded_env: spec.excluded_env.clone(),
+            "local" => {
+                let transport = LocalTransport {
+                    machine: spec.machine.clone(),
+                    home: self.home.clone(),
+                    excluded_env: spec.excluded_env.clone(),
+                };
+                if spec.confined() {
+                    self.isolation.launch(
+                        &transport,
+                        command,
+                        &spec.workspace.path,
+                        self.environment.clone(),
+                        spec.create_cwd(),
+                    )
+                } else {
+                    transport.launch(
+                        command,
+                        &spec.workspace.path,
+                        self.environment.clone(),
+                        &BTreeMap::new(),
+                        None,
+                        spec.create_cwd(),
+                    )
+                }
             }
-            .launch(
-                command,
-                &spec.workspace.path,
-                self.environment.clone(),
-                &BTreeMap::new(),
-                confine,
-                spec.create_cwd(),
-            ),
             "ssh" => SshTransport {
                 machine: spec.machine.clone(),
                 excluded_env: spec.excluded_env.clone(),
