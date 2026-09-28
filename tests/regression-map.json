@@ -845,102 +845,142 @@
     {
       "python": "tests/test_github_links.py::test_pull_request_state_block_in_the_parents_context",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_without_a_github_service_there_is_no_block",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_instructions_in_a_pr_body_are_data_not_rules",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_mergeable_unknown_is_retried_once_then_shown_as_unknown",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_cancelled_checks_are_their_own_state",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_approvals_on_an_older_commit_are_stale_and_behind_base_is_shown",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_state_is_cached_per_repo_and_number",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_issues_errors_and_link_limits",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_github_config_and_its_token_stays_out_of_child_processes",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_body_head_and_state_lines_are_checked_never_shown_as_facts",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_the_campaign_status_form_is_checked_and_missing_data_is_unverified",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_the_cache_is_bounded",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_one_bad_response_costs_only_its_own_link",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_skipped_only_is_neutral_and_unlisted_runs_make_ci_incomplete",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_a_rate_limit_pauses_every_later_call",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_merged_draft_and_issue_or_pull_redirects",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_dismissed_and_commented_reviews",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_link_parsing_edges",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_a_failing_github_never_blocks_the_reply",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_github_links.py::test_client_maps_statuses_to_errors",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/github.rs",
+      "coverage_scope": "Frozen synthetic link/status/claim/state projections with explicit owner-authentication and typed-response hardening exceptions; request multisets only, not concurrent replay order. Parent fake-CLI tests cover combined repair snapshots, unavailable versus audit faults, disabled/triage/owner-pause/observe-only gates and worker-result context. tests/support/github_client.rs covers fixed read-only gh calls, environment isolation, redaction, bounded processes, audit failures and persisted rate limits. Authenticated daemon wiring, doctor and verified campaign evidence remain open; the Python regression is retained."
     },
     {
       "python": "tests/test_machines.py::test_explicit_machine_wins",

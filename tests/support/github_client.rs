@@ -2,11 +2,13 @@ use super::*;
 use crate::core::time::ReplayClock;
 use std::os::unix::fs::PermissionsExt;
 const SCRIPT: &str = r#"#!/usr/bin/env python3
-import json, os, pathlib, sys, time
+import json, os, pathlib, signal, sys, time
 root=pathlib.Path(__file__).parent
 spec=json.loads((root/'response').read_text())
+if spec.get('stubborn'): signal.signal(signal.SIGTERM, signal.SIG_IGN)
 with (root/'calls').open('a') as log:
     log.write(json.dumps({'argv':sys.argv[1:],'cwd':os.getcwd(),'env':dict(os.environ)})+'\n')
+if spec.get('stubborn'): time.sleep(600)
 if spec.get('hang'):
     time.sleep(0.4)
     (root/'survived').write_text('bad')
@@ -62,7 +64,7 @@ impl Harness {
             },
             env,
             secrets,
-            permits: tokio::sync::Semaphore::new(4),
+            permits: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
     fn response(&self, value: Value) {
@@ -111,7 +113,7 @@ async fn gh_reads_use_fixed_gets_private_cwd_owner_credentials_and_redacted_reco
     let mut reply = response(
         200,
         "",
-        r#"{"number":1,"body":"ghp_synthetic_secret xoxp_another_secret github_pat_echo"}"#,
+        r#"{"number":1,"body":"ghp_synthetic_secret xoxp-another-secret github_pat_echo"}"#,
     );
     reply["stderr"] = json!("token ghp_synthetic_secret");
     h.response(reply);
@@ -155,7 +157,7 @@ async fn gh_reads_use_fixed_gets_private_cwd_owner_credentials_and_redacted_reco
     assert!(!std::path::Path::new(call["cwd"].as_str().unwrap()).exists());
     let ledger = h.ledger().await;
     assert!(!ledger.contains("synthetic_secret"));
-    assert!(!ledger.contains("another_secret"));
+    assert!(!ledger.contains("another-secret"));
     assert!(!ledger.contains("github_pat_echo"));
     assert_eq!(
         h.scalar("SELECT count(*) FROM replay_events WHERE kind='github_api_call' AND complete=1")
@@ -201,15 +203,18 @@ async fn gh_errors_malformed_output_and_process_limits_are_truthful() {
         ),
         (response(200, "", "not JSON"), Failure::Invalid),
         (json!({"stdout":"","exit":1}), Failure::Invalid),
+        (json!({"stdout":"","exit":4}), Failure::Authentication),
         (json!({"oversize":true}), Failure::Unavailable),
         (json!({"hang":true}), Failure::Unavailable),
     ] {
         let h = Harness::new().await;
+        let timeout = if reply["hang"] == true {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(2)
+        };
         h.response(reply);
-        assert_eq!(
-            h.gh(Duration::from_millis(100)).get(request()).await,
-            Err(expected)
-        );
+        assert_eq!(h.gh(timeout).get(request()).await, Err(expected));
         assert_eq!(h.calls().len(), 1);
         assert!(!h.dir.path().join("survived").exists());
     }
@@ -291,4 +296,111 @@ fn gh_rate_delay_and_environment_selection_do_not_request_new_credentials() {
         "MY_GH_TOKEN",
     );
     assert_eq!(env[std::ffi::OsStr::new("GH_TOKEN")], "existing");
+}
+
+#[tokio::test]
+async fn gh_process_concurrency_is_bounded_and_waiters_cancel_without_spawning() {
+    let h = Harness::new().await;
+    h.response(json!({"hang":true}));
+    let gh = Arc::new(h.gh(Duration::from_secs(8)));
+    let mut tasks = vec![];
+    for _ in 0..6 {
+        let gh = gh.clone();
+        tasks.push(tokio::spawn(async move { gh.get(request()).await }));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.calls().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(h.calls().len(), 4);
+    for task in &tasks {
+        task.abort();
+    }
+    for task in tasks {
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    assert_eq!(h.calls().len(), 4);
+    assert!(!h.dir.path().join("survived").exists());
+    assert_eq!(
+        h.scalar("SELECT count(*) FROM replay_events WHERE kind='github_api_call' AND complete=0")
+            .await,
+        4
+    );
+}
+
+#[tokio::test]
+async fn gh_permit_is_not_reused_until_cancelled_process_cleanup_finishes() {
+    let h = Harness::new().await;
+    h.response(json!({"stubborn":true}));
+    let gh = Arc::new(h.gh(Duration::from_secs(8)));
+    let mut tasks = vec![];
+    // Establish which caller owns the first process before filling the other slots.
+    let first = gh.clone();
+    tasks.push(tokio::spawn(async move { first.get(request()).await }));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.calls().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for _ in 0..4 {
+        let gh = gh.clone();
+        tasks.push(tokio::spawn(async move { gh.get(request()).await }));
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.calls().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    tasks[0].abort();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(h.calls().len(), 4);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h.calls().len() < 5 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for task in &tasks {
+        task.abort();
+    }
+    for task in tasks {
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while gh.permits.available_permits() != 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn gh_redaction_handles_dense_token_prefixes_and_proxy_credentials() {
+    let raw = json!({"body":"ghp_fake ".repeat(20_000)}).to_string();
+    let cleaned: Value = serde_json::from_str(&redact(&raw, &[])).unwrap();
+    assert_eq!(cleaned["body"], "[redacted] ".repeat(20_000));
+    let (_, secrets) = environment(
+        [(
+            "HTTPS_PROXY".into(),
+            "https://owner:proxy-private@proxy.invalid".into(),
+        )],
+        "MY_GH_TOKEN",
+    );
+    assert_eq!(
+        redact(
+            "https://owner:proxy-private@proxy.invalid proxy-private",
+            &secrets
+        ),
+        "[redacted] [redacted]"
+    );
 }

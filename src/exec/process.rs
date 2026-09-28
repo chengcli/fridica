@@ -237,7 +237,19 @@ pub async fn run_once(
     timeout: Duration,
     limit: usize,
 ) -> Result<Completed> {
-    run_command(launch, input, timeout, limit, false).await
+    run_command(launch, input, timeout, limit, false, None).await
+}
+
+/// Keep a process permit in the cleanup owner task, including after the caller
+/// is cancelled. Queued work cannot reuse capacity while termination is pending.
+pub async fn run_once_with_permit(
+    launch: Launch,
+    input: Vec<u8>,
+    timeout: Duration,
+    limit: usize,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> Result<Completed> {
+    run_command(launch, input, timeout, limit, false, Some(permit)).await
 }
 
 /// Target-host helpers watch channel EOF for crash/disconnect cleanup. Keep the
@@ -247,7 +259,7 @@ pub async fn run_with_open_stdin(
     timeout: Duration,
     limit: usize,
 ) -> Result<Completed> {
-    run_command(launch, vec![], timeout, limit, true).await
+    run_command(launch, vec![], timeout, limit, true, None).await
 }
 
 async fn run_command(
@@ -256,6 +268,7 @@ async fn run_command(
     timeout: Duration,
     limit: usize,
     keep_stdin: bool,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<Completed> {
     if timeout.is_zero() {
         bail!("process deadline must be positive");
@@ -263,6 +276,7 @@ async fn run_command(
     let mut process = Process::start(&launch)?;
     let (mut sender, receiver) = oneshot::channel();
     tokio::spawn(async move {
+        let _permit = permit;
         let mut stdin = process.stdin().unwrap();
         let stdout = process.stdout().unwrap();
         let stderr = process.stderr().unwrap();

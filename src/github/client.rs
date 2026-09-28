@@ -9,7 +9,13 @@ use crate::{
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -31,6 +37,7 @@ pub struct Request {
 pub enum Failure {
     Invalid,
     NotFound,
+    Authentication,
     Http { status: u16 },
     RateLimited { after: f64 },
     Unavailable,
@@ -42,6 +49,9 @@ impl Failure {
             Self::Invalid => "unexpected response from GitHub".into(),
             Self::NotFound => {
                 "not found (missing or inaccessible to the authenticated owner)".into()
+            }
+            Self::Authentication => {
+                "GitHub owner authentication is unavailable; check gh auth status".into()
             }
             Self::Http { status } => format!("HTTP {status}"),
             Self::RateLimited { .. } => "not fetched: GitHub rate limit".into(),
@@ -160,7 +170,7 @@ pub struct Gh {
     options: Options,
     env: BTreeMap<OsString, OsString>,
     secrets: Vec<String>,
-    permits: tokio::sync::Semaphore,
+    permits: Arc<tokio::sync::Semaphore>,
 }
 fn environment(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
@@ -212,7 +222,7 @@ fn environment(
     ] {
         env.insert(k.into(), v.into());
     }
-    let secrets = original
+    let mut secrets: Vec<String> = original
         .iter()
         .filter(|(k, _)| {
             k.to_str()
@@ -220,6 +230,22 @@ fn environment(
         })
         .filter_map(|(_, v)| v.to_str().filter(|v| !v.is_empty()).map(str::to_owned))
         .collect();
+    for (key, value) in &env {
+        if key
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("_proxy")
+        {
+            if let Some(value) = value.to_str() {
+                if let Ok(url) = reqwest::Url::parse(value) {
+                    if let Some(password) = url.password().filter(|s| !s.is_empty()) {
+                        secrets.push(value.to_owned());
+                        secrets.push(password.to_owned());
+                    }
+                }
+            }
+        }
+    }
     (env, secrets)
 }
 impl Gh {
@@ -242,14 +268,15 @@ impl Gh {
             options,
             env,
             secrets,
-            permits: tokio::sync::Semaphore::new(4),
+            permits: Arc::new(tokio::sync::Semaphore::new(4)),
         })
     }
     async fn run(&self, request: Request) -> Result<Value, Failure> {
         let endpoint = request.endpoint()?;
-        let _permit = self
+        let permit = self
             .permits
-            .acquire()
+            .clone()
+            .acquire_owned()
             .await
             .map_err(|_| Failure::Unavailable)?;
         let now = self.clock.now();
@@ -288,7 +315,7 @@ impl Gh {
         };
         // An empty private cwd prevents repository-local gh placeholders/configuration.
         let dir = tempfile::tempdir().map_err(|_| Failure::Unavailable)?;
-        let output = process::run_once(
+        let output = process::run_once_with_permit(
             Launch {
                 argv,
                 cwd: Some(dir.path().into()),
@@ -297,6 +324,7 @@ impl Gh {
             vec![],
             self.options.timeout,
             process::OUTPUT_LIMIT,
+            permit,
         )
         .await;
         let (result, record, complete) = match output {
@@ -307,29 +335,33 @@ impl Gh {
                 } else {
                     Err(Failure::Invalid)
                 };
-                let result = match &decoded {
-                    Ok((status, headers, body)) => {
-                        if *status == 404 {
-                            Err(Failure::NotFound)
-                        } else if *status == 429
-                            || (*status == 403
-                                && (headers
-                                    .get("x-ratelimit-remaining")
-                                    .is_some_and(|s| s == "0")
-                                    || headers.contains_key("retry-after")))
-                        {
-                            Err(Failure::RateLimited {
-                                after: retry_after(headers, self.clock.now()),
-                            })
-                        } else if *status >= 400 {
-                            Err(Failure::Http { status: *status })
-                        } else if *status != 200 || output.returncode != 0 {
-                            Err(Failure::Unavailable)
-                        } else {
-                            Ok(body.clone())
+                let result = if output.returncode == 4 {
+                    Err(Failure::Authentication)
+                } else {
+                    match &decoded {
+                        Ok((status, headers, body)) => {
+                            if *status == 404 {
+                                Err(Failure::NotFound)
+                            } else if *status == 429
+                                || (*status == 403
+                                    && (headers
+                                        .get("x-ratelimit-remaining")
+                                        .is_some_and(|s| s == "0")
+                                        || headers.contains_key("retry-after")))
+                            {
+                                Err(Failure::RateLimited {
+                                    after: retry_after(headers, self.clock.now()),
+                                })
+                            } else if *status >= 400 {
+                                Err(Failure::Http { status: *status })
+                            } else if *status != 200 || output.returncode != 0 {
+                                Err(Failure::Unavailable)
+                            } else {
+                                Ok(body.clone())
+                            }
                         }
+                        Err(e) => Err(e.clone()),
                     }
-                    Err(e) => Err(e.clone()),
                 };
                 let record = json!({"call":call,"returncode":output.returncode,"stdout":raw,"stderr":redact(&String::from_utf8_lossy(&output.stderr),&self.secrets),"result":result});
                 (result, record, true)
@@ -364,27 +396,14 @@ fn redact(value: &str, secrets: &[String]) -> String {
             value = value.replace(secret, "[redacted]");
         }
     }
-    for prefix in [
-        "ghp_",
-        "gho_",
-        "ghu_",
-        "ghs_",
-        "ghr_",
-        "github_pat_",
-        "xoxp-",
-        "xoxb-",
-        "xapp-",
-        "xoxe-",
-    ] {
-        while let Some(start) = value.find(prefix) {
-            let end = value[start..]
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-                .map_or(value.len(), |i| start + i);
-            value.replace_range(start..end, "[redacted]");
-        }
-    }
-    value
+    // One linear scan: repeated token-like strings in an untrusted body must
+    // not turn redaction into quadratic work that blocks the async executor.
+    static TOKENS: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?:gh[pousr]_|github_pat_|xox[pb]-|xapp-|xoxe-)[A-Za-z0-9_-]*").unwrap()
+    });
+    TOKENS.replace_all(&value, "[redacted]").into_owned()
 }
+
 pub fn retry_after(headers: &BTreeMap<String, String>, now: f64) -> f64 {
     for (key, relative) in [("retry-after", true), ("x-ratelimit-reset", false)] {
         if let Some(n) = headers

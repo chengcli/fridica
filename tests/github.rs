@@ -227,7 +227,7 @@ async fn github_cache_is_bounded_and_oversized_pages_never_certify_success() {
             json!({"number":n,"title":"small","state":"open"});
     }
     let script = Arc::new(Script::new(routes));
-    let reader = Links::new(script.clone(), store, clock, 180.).unwrap();
+    let reader = Links::new(script.clone(), store, clock.clone(), 180.).unwrap();
     for n in 1..=258 {
         reader
             .linked(vec![format!("https://github.com/o/r/issues/{n}")])
@@ -246,10 +246,63 @@ async fn github_cache_is_bounded_and_oversized_pages_never_certify_success() {
     let head = format!("924d2d8{}", "a".repeat(33));
     routes[format!("/repos/o/r/commits/{head}/check-runs")] = json!({"total_count":1,"check_runs":vec![json!({"status":"completed","conclusion":"success"});101]});
     *script.routes.lock().unwrap() = routes;
+    clock.set(1181.);
     let values = reader
         .linked(vec!["https://github.com/o/r/pull/218".into()])
         .await
         .unwrap();
     assert_eq!(values[0]["ci"], "incomplete");
     assert_eq!(values[0]["checks"]["success"], 100);
+}
+
+struct AuditFaultWithHungSibling {
+    auxiliary: bool,
+}
+impl Api for AuditFaultWithHungSibling {
+    fn get(&self, request: Request) -> AdapterFuture<'_, Result<Value, Failure>> {
+        Box::pin(async move {
+            if self.auxiliary {
+                match request.operation {
+                    Operation::Pull { .. } => {
+                        Ok(corpus()["states"][0]["routes"]["/repos/o/r/pulls/218"].clone())
+                    }
+                    Operation::Tree { .. } => Err(Failure::Recording),
+                    _ => std::future::pending().await,
+                }
+            } else if request.repo == "o/fault" {
+                Err(Failure::Recording)
+            } else {
+                std::future::pending().await
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn hung_sibling_cannot_hide_a_recording_fault_behind_optional_timeout() {
+    for auxiliary in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("db")).await.unwrap();
+        let clock = Arc::new(ReplayClock::new(1000.));
+        let reader = Links::new(
+            Arc::new(AuditFaultWithHungSibling { auxiliary }),
+            store,
+            clock,
+            180.,
+        )
+        .unwrap();
+        let text = if auxiliary {
+            "https://github.com/o/r/pull/218"
+        } else {
+            "https://github.com/o/hang/pull/1 https://github.com/o/fault/pull/1"
+        };
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                reader.linked(vec![text.into()])
+            )
+            .await
+            .unwrap(),
+            Err(Failure::Recording)
+        );
+    }
 }

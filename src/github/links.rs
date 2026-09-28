@@ -244,28 +244,29 @@ impl<A: Api> Links<A> {
             head: head.clone(),
             base,
         }));
-        let (tree, behind, runs, reviews) = tokio::join!(
-            tree,
-            behind,
-            self.pages(link, &head, true),
-            self.pages(link, &head, false)
-        );
-        // An audit failure must never become an innocuous unavailable field.
-        let tree = optional(tree)?.and_then(|v| {
+        // Propagate recording faults immediately. Waiting for a hung sibling
+        // could let the parent's optional-read timeout conceal the audit failure.
+        let (tree, behind, runs, reviews) = tokio::try_join!(
+            async { optional(tree.await) },
+            async { optional(behind.await) },
+            async { optional(self.pages(link, &head, true).await) },
+            async { optional(self.pages(link, &head, false).await) },
+        )?;
+        let tree = tree.and_then(|v| {
             v["tree"]["sha"]
                 .as_str()
                 .filter(|s| super::client::sha(s))
                 .map(str::to_owned)
         });
-        let behind = optional(behind)?.and_then(|v| v["behind_by"].as_i64());
+        let behind = behind.and_then(|v| v["behind_by"].as_i64());
         Ok(view::pull(
             &link.repository(),
             &pull,
             Aux {
                 tree,
                 behind,
-                runs: optional(runs)?,
-                reviews: optional(reviews)?,
+                runs,
+                reviews,
             },
         ))
     }
@@ -320,11 +321,10 @@ fn optional<T>(value: Result<T, Failure>) -> Result<Option<T>, Failure> {
 impl<A: Api> Reader for Links<A> {
     fn linked(&self, texts: Vec<String>) -> AdapterFuture<'_, Result<Vec<Value>, Failure>> {
         Box::pin(async move {
-            let results = futures_util::future::join_all(
+            futures_util::future::try_join_all(
                 links(&texts).into_iter().map(|link| self.state(link)),
             )
-            .await;
-            results.into_iter().collect()
+            .await
         })
     }
 }
