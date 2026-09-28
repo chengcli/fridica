@@ -6,7 +6,11 @@ use super::{
     shell,
     ssh::{LaunchOptions, SshTransport},
 };
-use crate::config::{registry::Machine, Config};
+use crate::config::{
+    isolation::{remote_path, validate_identities, validate_remote_files},
+    registry::Machine,
+    Config,
+};
 use anyhow::{bail, Result};
 use serde_json::json;
 use std::{
@@ -37,6 +41,7 @@ impl Isolation {
     /// Additional capability files must be supplied by trusted daemon
     /// construction; they cannot come from a job or a model response.
     pub fn new(config: &Config, additional: &[PathBuf]) -> Result<Self> {
+        config.isolation.validate(&config.machines)?;
         let mut private = vec![
             config.path.clone(),
             config.state.path.clone(),
@@ -45,35 +50,34 @@ impl Isolation {
         private.extend(config.owner.contract.iter().cloned());
         private.extend(config.parent.repos.iter().cloned());
         private.extend_from_slice(additional);
+        private.extend(config.isolation.private_files.iter().cloned());
         if private
             .iter()
             .any(|p| !safe_path(p) || p.parent() == Some(Path::new("/")))
         {
             bail!("worker isolation requires private files below dedicated directories");
         }
-        Ok(Self {
+        let mut isolation = Self {
             private,
             remote: BTreeMap::new(),
             mcp_aliases: vec![],
             mcp_urls: vec![],
-        })
+        }
+        .with_mcp_identities(&config.isolation.mcp_aliases, &config.isolation.mcp_urls)?;
+        for (name, inventory) in &config.isolation.remote {
+            let machine = config
+                .machines
+                .get(name)
+                .expect("validated inventory machine");
+            isolation = isolation.with_remote_files(machine, &inventory.private_files)?;
+        }
+        Ok(isolation)
     }
     /// Owner-provisioned identities for wrappers and HTTP servers that cannot
     /// be identified from a direct Fridica executable or environment reference.
     /// Endpoints must not contain credentials: these identities travel in argv.
     pub fn with_mcp_identities(mut self, aliases: &[String], urls: &[String]) -> Result<Self> {
-        if aliases
-            .iter()
-            .chain(urls)
-            .any(|s| s.is_empty() || s.len() > 1024 || s.chars().any(char::is_control))
-            || aliases.len() + urls.len() > 128
-            || urls.iter().any(|s| {
-                !s.starts_with("http://") && !s.starts_with("https://")
-                    || s.contains(['@', '?', '#'])
-            })
-        {
-            bail!("invalid worker MCP identities");
-        }
+        validate_identities(aliases, urls)?;
         self.mcp_aliases = aliases.to_vec();
         self.mcp_urls = urls.to_vec();
         Ok(self)
@@ -86,14 +90,11 @@ impl Isolation {
     pub fn with_remote_files(mut self, machine: &Machine, private: &[String]) -> Result<Self> {
         if machine.transport != "ssh"
             || !crate::config::registry::ssh_host(&machine.host)
-            || private.is_empty()
-            || private
-                .iter()
-                .any(|p| !safe_remote_path(p) || Path::new(p).parent() == Some(Path::new("/")))
             || self.remote.contains_key(&machine.name)
         {
             bail!("worker isolation requires a unique SSH target and private-file inventory");
         }
+        validate_remote_files(private)?;
         self.remote.insert(
             machine.name.clone(),
             RemoteFiles {
@@ -114,7 +115,7 @@ impl Isolation {
         let Some(profile) = self.remote.get(&transport.machine.name) else {
             bail!("confined SSH requires a target private-file inventory");
         };
-        if profile.host != transport.machine.host || !safe_remote_path(cwd) {
+        if profile.host != transport.machine.host || !remote_path(cwd) {
             bail!("confined SSH target or workspace does not match its inventory");
         }
         shell::validate(&command)?;
@@ -183,16 +184,6 @@ impl Isolation {
             env,
         })
     }
-}
-fn safe_remote_path(value: &str) -> bool {
-    let expanded = value
-        .strip_prefix("~/")
-        .map(|tail| format!("/remote-home/{tail}"));
-    let path = Path::new(expanded.as_deref().unwrap_or(value));
-    safe_path(path)
-        && path != Path::new("/")
-        && !value.ends_with('/')
-        && !value.split('/').any(|part| part == "." || part == "..")
 }
 fn safe_path(path: &Path) -> bool {
     path.is_absolute()

@@ -399,7 +399,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/configuration.rs",
-      "coverage_scope": "Configuration resolution and acceptance fixtures; Python regression retained pending full runtime parity."
+      "coverage_scope": "Configuration resolution and acceptance fixtures; Python regression retained pending full runtime parity. Rust-only isolation inventory tests add comment-preserving read-only loading, explicit SSH-host bindings, private-file validation and path-free offline coverage reporting. tests/isolation.rs also verifies configured file/MCP boundaries through real local bubblewrap and fake SSH. Inventory completeness and target runtime preflight remain open; Python configurations are unchanged."
     },
     {
       "python": "tests/test_config.py::test_machine_and_workspace_policy_overrides",
@@ -420,7 +420,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/configuration.rs",
-      "coverage_scope": "Configuration resolution and acceptance fixtures; Python regression retained pending full runtime parity."
+      "coverage_scope": "Configuration resolution and acceptance fixtures; Python regression retained pending full runtime parity. Rust-only isolation inventory tests add comment-preserving read-only loading, explicit SSH-host bindings, private-file validation and path-free offline coverage reporting. tests/isolation.rs also verifies configured file/MCP boundaries through real local bubblewrap and fake SSH. Inventory completeness and target runtime preflight remain open; Python configurations are unchanged."
     },
     {
       "python": "tests/test_config.py::test_rejects_invalid_machines[[machines.x]\\ntransport = 'ssh'\\n[machines.x.workspaces]\\nw = '/w'\\n-host must be]",
@@ -546,7 +546,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/configuration.rs",
-      "coverage_scope": "Configuration resolution and acceptance fixtures; Python regression retained pending full runtime parity."
+      "coverage_scope": "Configuration resolution and acceptance fixtures; Python regression retained pending full runtime parity. Rust-only isolation inventory tests add comment-preserving read-only loading, explicit SSH-host bindings, private-file validation and path-free offline coverage reporting. tests/isolation.rs also verifies configured file/MCP boundaries through real local bubblewrap and fake SSH. Inventory completeness and target runtime preflight remain open; Python configurations are unchanged."
     },
     {
       "python": "tests/test_config.py::test_rejects_bad_identity_and_channels",

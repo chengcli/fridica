@@ -131,6 +131,8 @@ pub struct Config {
     pub state: State,
     pub github: GitHub,
     pub attention: Attention,
+    #[serde(default, skip_serializing_if = "super::isolation::Settings::is_empty")]
+    pub isolation: super::isolation::Settings,
     pub path: PathBuf,
     pub fingerprint: String,
 }

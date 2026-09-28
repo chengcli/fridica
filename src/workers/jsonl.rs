@@ -44,6 +44,22 @@ pub struct SystemLauncher {
     pub ssh_control_directory: PathBuf,
     pub isolation: crate::exec::isolation::Isolation,
 }
+impl SystemLauncher {
+    /// Construct from owner configuration, never from a worker/model payload.
+    pub fn from_config(
+        config: &Config,
+        home: PathBuf,
+        environment: BTreeMap<OsString, OsString>,
+        ssh_control_directory: PathBuf,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            home,
+            environment,
+            ssh_control_directory,
+            isolation: crate::exec::isolation::Isolation::new(config, &[])?,
+        })
+    }
+}
 impl Launcher for SystemLauncher {
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
         let launch = match spec.machine.transport.as_str() {

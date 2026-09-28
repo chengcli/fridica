@@ -1,5 +1,6 @@
 //! Configuration transformations preserve comments and never silently discard keys.
 pub mod contract;
+pub mod isolation;
 pub mod loader;
 pub mod registry;
 pub mod repos;

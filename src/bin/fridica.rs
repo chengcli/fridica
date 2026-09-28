@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
                     "machines": config.machines.names(),
                     "default_machine": config.parent.default_machine,
                     "attention": config.attention,
+                    "isolation": config.isolation.summary(&config.machines),
                 }))?
             );
         }

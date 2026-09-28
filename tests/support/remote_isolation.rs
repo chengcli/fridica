@@ -44,27 +44,31 @@ impl Remote {
         ).unwrap();
         std::fs::set_permissions(&fake_ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
         let control = ssh::control_directory(Some(&local.home), users::get_current_uid()).unwrap();
-        let isolation = Isolation::new(&local.config, &[])
-            .unwrap()
-            .with_remote_files(
-                &machine,
-                &[
+        let mut provisioned = local.config.clone();
+        provisioned.machines.machines = vec![machine.clone()];
+        provisioned.machines.default = machine.name.clone();
+        provisioned.isolation.remote.insert(
+            machine.name.clone(),
+            fridica::config::isolation::Remote {
+                host: machine.host.clone(),
+                private_files: vec![
                     local.config.path.to_str().unwrap().into(),
                     local.config.state.path.to_str().unwrap().into(),
                     "~/private/state.db".into(),
                     "~/private/control.sock".into(),
                 ],
-            )
-            .unwrap();
-        let launcher = SystemLauncher {
-            home: local.home.clone(),
-            environment: BTreeMap::from([
+            },
+        );
+        let launcher = SystemLauncher::from_config(
+            &provisioned,
+            local.home.clone(),
+            BTreeMap::from([
                 ("HOME".into(), local.home.clone().into_os_string()),
                 ("PATH".into(), "/usr/bin:/bin".into()),
             ]),
-            ssh_control_directory: control,
-            isolation,
-        };
+            control,
+        )
+        .unwrap();
         Self {
             local,
             home,

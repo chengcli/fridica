@@ -328,3 +328,122 @@ fn path_comparison_covers_every_python_casefold_mapping() {
         loader::casefold_path(Path::new("/e\u{301}cole/Straße"))
     );
 }
+
+fn remote_machine() -> &'static str {
+    "\n[machines.remote]\ntransport='ssh'\nhost='owner@target'\n[machines.remote.resources]\ngpus=[0]\n[machines.remote.policy]\ngpu_confine=true\n[machines.remote.workspaces]\nproject='~/project'\n"
+}
+
+#[test]
+fn isolation_inventory_resolves_only_local_paths_and_preserves_source_and_legacy_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup(root);
+    let path = root.join("etc/config.toml");
+    let source = format!("{}{}\n# Owner-provisioned, no tokens stored here.\n[isolation]\nprivate_files=['keys/control.key']\nmcp_aliases=['opaque-wrapper']\nmcp_urls=['http://localhost:8123/fridica']\n[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/.local/state/fridica/control.sock','/shared/private/state.db']\n",basic(root),remote_machine());
+    std::fs::write(&path, &source).unwrap();
+    let parsed = config::load(&path, &context(root)).unwrap();
+    assert_eq!(
+        parsed.isolation.private_files,
+        vec![root.join("etc/keys/control.key")]
+    );
+    assert_eq!(
+        parsed.isolation.remote["remote"].private_files[0],
+        "~/.local/state/fridica/control.sock"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+    assert!(!root.join("db").exists());
+    assert!(!root.join("etc/keys").exists());
+    let legacy = loader::parse(&basic(root), &path, &context(root)).unwrap();
+    assert!(legacy.isolation.is_empty());
+    assert!(serde_json::to_value(&legacy)
+        .unwrap()
+        .get("isolation")
+        .is_none());
+    assert_ne!(parsed.fingerprint, legacy.fingerprint);
+    let mut moved = parsed.clone();
+    moved
+        .machines
+        .machines
+        .iter_mut()
+        .find(|m| m.name == "remote")
+        .unwrap()
+        .host = "other-host".into();
+    assert!(fridica::exec::isolation::Isolation::new(&moved, &[]).is_err());
+}
+
+#[test]
+fn isolation_configuration_rejects_wrong_hosts_unsafe_paths_and_embedded_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup(root);
+    let base = format!("{}{}", basic(root), remote_machine());
+    loader::parse(&base, &root.join("etc/config.toml"), &context(root)).unwrap();
+    for fragment in [
+        "[isolation]\nunknown=true",
+        "[isolation]\nmcp_urls=['http://user:private-secret@host/']",
+        "[isolation]\nmcp_urls=['https://host/?key=private-secret']",
+        "[isolation]\nmcp_urls=['http://']",
+        "[isolation]\nmcp_urls=['http:host']",
+        "[isolation]\nprivate_files=['/private-secret']",
+        "[isolation.remote.remote]\nhost='changed-host'\nprivate_files=['~/private/secret']",
+        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=[]",
+        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/../private/secret']",
+        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['relative/secret']",
+        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['/secret']",
+        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/private/secret']\nunknown=true",
+        "[isolation.remote.missing]\nhost='owner@target'\nprivate_files=['~/private/secret']",
+        "[isolation.remote.local]\nhost='owner@target'\nprivate_files=['~/private/secret']",
+    ] {
+        let error = loader::parse(&format!("{base}\n{fragment}\n"), &root.join("etc/config.toml"), &context(root)).unwrap_err();
+        assert!(!format!("{error:#}").contains("private-secret"));
+    }
+    // Private files cannot be exposed even through a read-only local workspace.
+    let source = format!(
+        "{}\n[policy]\nmode='read-only'\n[isolation]\nprivate_files=['../project/control.key']\n",
+        basic(root)
+    );
+    assert!(loader::parse(&source, &root.join("etc/config.toml"), &context(root)).is_err());
+}
+
+#[test]
+fn offline_cli_reports_missing_and_configured_inventory_without_probe_or_private_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup(root);
+    let path = root.join("etc/config.toml");
+    let base = format!("{}{}", basic(root), remote_machine());
+    for configured in [false, true] {
+        let inventory = if configured {
+            "\n[isolation]\nmcp_aliases=['private-alias']\n[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/private/hidden-capability.key']\n"
+        } else {
+            ""
+        };
+        std::fs::write(&path, format!("{base}{inventory}")).unwrap();
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+            .args(["check-config", "--config"])
+            .arg(&path)
+            .env_clear()
+            .env("HOME", root.join("home"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        let report: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            report["isolation"]["remote"][0]["inventory"],
+            if configured { "configured" } else { "missing" }
+        );
+        assert_eq!(report["isolation"]["runtime_checks"], "not_run");
+        assert!(
+            !text.contains("private-alias")
+                && !text.contains("hidden-capability")
+                && !text.contains("owner@target")
+        );
+        assert!(!root.join("db").exists());
+        assert!(!root.join("home/.codex").exists());
+    }
+}

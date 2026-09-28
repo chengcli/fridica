@@ -77,6 +77,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             "state",
             "github",
             "attention",
+            "isolation",
         ],
         "top level",
     )?;
@@ -220,6 +221,11 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         default: parent.default_machine.clone(),
     };
     registry.validate()?;
+    let mut isolation: super::isolation::Settings = decode(root.get("isolation"))?;
+    for path in &mut isolation.private_files {
+        *path = resolve_path(path, base, &context.home)?;
+    }
+    isolation.validate(&registry)?;
     let config = Config {
         owner,
         slack,
@@ -233,6 +239,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         },
         github,
         attention,
+        isolation,
         path,
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };
@@ -443,6 +450,11 @@ fn protect(config: &Config, context: &LoadContext) -> Result<()> {
             continue;
         }
         for workspace in &machine.workspaces {
+            for path in &config.isolation.private_files {
+                if within(path, &workspace.path, context)? {
+                    bail!("isolation.private_files must be outside every local workspace");
+                }
+            }
             if within(&config.state.path, &workspace.path, context)? {
                 bail!(
                     "state.path must be outside workspace {}:{}",
