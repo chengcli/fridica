@@ -255,13 +255,23 @@ impl Gh {
         clock: Arc<dyn Clock>,
         options: Options,
     ) -> Result<Self, Failure> {
+        Self::with_environment(config, store, clock, options, std::env::vars_os())
+    }
+    /// Explicit owner environment snapshot for deterministic daemon construction.
+    pub fn with_environment(
+        config: &Config,
+        store: Store,
+        clock: Arc<dyn Clock>,
+        options: Options,
+        inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> Result<Self, Failure> {
         if options.program.as_os_str().is_empty()
             || options.timeout.is_zero()
             || options.timeout > Duration::from_secs(30)
         {
             return Err(Failure::Invalid);
         }
-        let (env, secrets) = environment(std::env::vars_os(), &config.github.token_env);
+        let (env, secrets) = environment(inherited, &config.github.token_env);
         Ok(Self {
             store,
             clock,

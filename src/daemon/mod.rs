@@ -1,5 +1,6 @@
 //! Experimental daemon composition. Active execution remains gated until the
 //! full runtime parity and worker MCP isolation requirements are implemented.
+pub mod composition;
 use crate::{
     config::Config,
     control::{
@@ -15,11 +16,8 @@ use crate::{
     },
     slack::{socket, web::WebClient},
     store::Store,
-    threads::{
-        runtime::{Adapters, Runtime},
-        service::{self, Failure, Lifecycle},
-    },
-    workers::protocol::{Factory, NoJobIo, Worker, WorkerSpec},
+    threads::service::{self, Failure, Lifecycle},
+    workers::protocol::{Factory, Worker, WorkerSpec},
 };
 use anyhow::{bail, Result};
 use serde_json::Value;
@@ -152,18 +150,13 @@ pub async fn observe(
         credentials.user,
         Duration::from_secs(30),
     )?);
-    let runtime = Runtime::start(
-        store,
+    let runtime = composition::start(
         config.clone(),
-        Adapters {
-            parent: Arc::new(Disabled),
-            delivery: web,
-            workers: Arc::new(Disabled),
-            job_io: Arc::new(NoJobIo),
-        },
+        store,
+        web,
         clock,
         Arc::new(RandomIds),
-        true,
+        composition::Mode::ObserveOnly,
     )
     .await?;
     let service = runtime.slack_service(

@@ -92,7 +92,7 @@ struct Cache {
     items: VecDeque<(String, f64, Value)>,
     paused_until: f64,
 }
-pub struct Links<A: Api> {
+pub struct Links<A: Api + ?Sized> {
     api: Arc<A>,
     store: Store,
     clock: Arc<dyn Clock>,
@@ -100,7 +100,7 @@ pub struct Links<A: Api> {
     retry_delay: Duration,
     cache: Mutex<Cache>,
 }
-impl<A: Api> Links<A> {
+impl<A: Api + ?Sized> Links<A> {
     pub fn new(
         api: Arc<A>,
         store: Store,
@@ -318,7 +318,7 @@ fn optional<T>(value: Result<T, Failure>) -> Result<Option<T>, Failure> {
         other => Ok(other.ok()),
     }
 }
-impl<A: Api> Reader for Links<A> {
+impl<A: Api + ?Sized> Reader for Links<A> {
     fn linked(&self, texts: Vec<String>) -> AdapterFuture<'_, Result<Vec<Value>, Failure>> {
         Box::pin(async move {
             futures_util::future::try_join_all(
