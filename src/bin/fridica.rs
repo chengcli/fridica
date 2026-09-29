@@ -45,6 +45,15 @@ enum Command {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Check configuration, tokens, backend sign-in and protocols without model requests.
+    Doctor {
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=120))]
+        timeout: u64,
+    },
     /// Test worker isolation on one explicit local/SSH target without a backend.
     DoctorIsolation {
         #[arg(long)]
@@ -155,6 +164,35 @@ async fn main() -> Result<()> {
                     "isolation": config.isolation.summary(&config.machines),
                 }))?
             );
+        }
+        Command::Doctor {
+            config,
+            json,
+            timeout,
+        } => {
+            let context = fridica::config::LoadContext::current()?;
+            let path = fridica::config::setup::path(config.as_deref(), &context)?;
+            let report = with_shutdown(|stop| {
+                fridica::doctor::checks::run(
+                    &path,
+                    &context,
+                    std::env::vars_os().collect(),
+                    std::time::Duration::from_secs(timeout),
+                    stop,
+                )
+            })
+            .await?;
+            println!(
+                "{}",
+                if json {
+                    serde_json::to_string_pretty(&report)?
+                } else {
+                    report.text()
+                }
+            );
+            if !report.passed() {
+                anyhow::bail!("doctor checks did not pass");
+            }
         }
         Command::DoctorIsolation {
             config,
