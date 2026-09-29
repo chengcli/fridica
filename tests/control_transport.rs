@@ -581,3 +581,177 @@ async fn obligations_cli_sends_bounded_explicit_backfill_or_owner_close_requests
     assert_eq!(echo.calls.load(Ordering::SeqCst), before);
     server.close().await.unwrap();
 }
+
+async fn bounded_cli(args: Vec<String>) -> fridica::exec::process::Completed {
+    let mut argv = vec![env!("CARGO_BIN_EXE_fridica").into()];
+    argv.extend(args);
+    fridica::exec::process::run_once(
+        fridica::exec::process::Launch {
+            argv,
+            cwd: None,
+            env: std::collections::BTreeMap::new(),
+        },
+        vec![],
+        Duration::from_secs(5),
+        32 * 1024,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn frozen_cli_commands_preserve_requests_and_authenticated_identity() {
+    let f = Fixture::new();
+    let echo = Arc::new(Echo::default());
+    let server = f
+        .bind(echo.clone(), Access::OwnerPeer, Options::default())
+        .await;
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("corpus/control_cli.json")).unwrap();
+    for command in corpus["commands"].as_array().unwrap() {
+        let name = command.as_str().unwrap();
+        let help = bounded_cli(vec![name.into(), "--help".into()]).await;
+        assert_eq!(
+            help.returncode,
+            if name == "dashboard" { 2 } else { 0 },
+            "{name}"
+        );
+    }
+    for case in corpus["cases"].as_array().unwrap() {
+        let mut args: Vec<String> = case["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().into())
+            .collect();
+        args.extend([
+            "--socket".into(),
+            f.config.state.control_socket.to_str().unwrap().into(),
+        ]);
+        let output = bounded_cli(args).await;
+        assert_eq!(
+            output.returncode,
+            case["exit"].as_i64().unwrap() as i32,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut expected = case["request"].clone();
+        // The body cannot confer authority. Authentication replaces Python's actor hint.
+        expected["body"].as_object_mut().unwrap().remove("actor");
+        for key in ["method", "target", "body"] {
+            assert_eq!(actual[key], expected[key], "{}: {key}", case["args"]);
+        }
+        assert_eq!(actual["authority"]["kind"], "owner");
+    }
+    assert_eq!(echo.calls.load(Ordering::SeqCst), 21);
+    assert!(!f.config.state.path.exists());
+    server.close().await.unwrap();
+}
+
+struct Reject;
+impl Backend for Reject {
+    fn request(&self, _: Request, _: Authority) -> AdapterFuture<'_, Response> {
+        Box::pin(async { Response::error(409, "operation_conflict") })
+    }
+}
+
+#[tokio::test]
+async fn cli_exit_codes_distinguish_input_unavailable_and_rejected_controls() {
+    let f = Fixture::new();
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("corpus/control_cli.json")).unwrap();
+    let code = |kind| {
+        corpus["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["kind"] == kind)
+            .unwrap()["exit"]
+            .as_i64()
+            .unwrap() as i32
+    };
+    let args = |values: &[&str]| {
+        let mut args: Vec<String> = values.iter().map(|v| (*v).into()).collect();
+        args.extend([
+            "--socket".into(),
+            f.config.state.control_socket.to_str().unwrap().into(),
+        ]);
+        args
+    };
+    let missing = bounded_cli(args(&["status"])).await;
+    assert_eq!(missing.returncode, code("DaemonUnavailable"));
+    assert!(missing.stdout.is_empty());
+    let server = f
+        .bind(Arc::new(Reject), Access::OwnerPeer, Options::default())
+        .await;
+    let rejected = bounded_cli(args(&["approvals", "approval-1", "once"])).await;
+    assert_eq!(rejected.returncode, code("ControlError"));
+    assert!(rejected.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("operation_conflict"));
+    for invalid in [
+        vec!["threads", "../other", "resume"],
+        vec!["outbox", "0"],
+        vec!["threads", "t", "unknown"],
+    ] {
+        let result = bounded_cli(args(&invalid)).await;
+        assert_eq!(result.returncode, code("ValueError"));
+        assert!(result.stdout.is_empty());
+    }
+    let bad = f._dir.path().join("bad.toml");
+    std::fs::write(&bad, "[owner]\n").unwrap();
+    for command in ["status", "start"] {
+        let mut argv = vec![
+            command.into(),
+            "--config".into(),
+            bad.to_str().unwrap().into(),
+        ];
+        if command == "start" {
+            argv.push("--observe-only".into());
+        }
+        assert_eq!(bounded_cli(argv).await.returncode, code("ValueError"));
+    }
+    assert!(!f.config.state.path.exists());
+    server.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cli_lost_or_invalid_responses_never_retry_or_print_private_content() {
+    for malformed in [false, true] {
+        let f = Fixture::new();
+        std::fs::create_dir_all(f.config.state.control_socket.parent().unwrap()).unwrap();
+        let listener = tokio::net::UnixListener::bind(&f.config.state.control_socket).unwrap();
+        std::fs::set_permissions(
+            &f.config.state.control_socket,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 8192];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            if malformed {
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 14\r\nConnection: close\r\n\r\nprivate-secret").await.unwrap();
+            }
+            drop(stream);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err(),
+                "client retried an uncertain mutation"
+            );
+        });
+        let out = bounded_cli(vec![
+            "threads".into(),
+            "thread".into(),
+            "resume".into(),
+            "--socket".into(),
+            f.config.state.control_socket.to_str().unwrap().into(),
+        ])
+        .await;
+        assert_eq!(out.returncode, 3);
+        assert!(out.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("private-secret"));
+        server.await.unwrap();
+    }
+}

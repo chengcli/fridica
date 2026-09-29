@@ -96,8 +96,17 @@ enum Command {
     },
 }
 #[tokio::main]
-async fn main() -> Result<()> {
-    match Cli::parse().command {
+async fn main() -> std::process::ExitCode {
+    match run(Cli::parse()).await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("fridica: {error}");
+            std::process::ExitCode::from(fridica::cli::exit_code(&error))
+        }
+    }
+}
+async fn run(cli: Cli) -> Result<()> {
+    match cli.command {
         Command::Init { config } => {
             let context = fridica::config::LoadContext::current()?;
             let path = fridica::config::setup::path(config.as_deref(), &context)?;
@@ -126,7 +135,8 @@ async fn main() -> Result<()> {
             }
             let context = fridica::config::LoadContext::current()?;
             let path = config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
-            let config = fridica::config::load(&path, &context)?;
+            let config =
+                fridica::config::load(&path, &context).map_err(fridica::cli::input_error)?;
             if check_ready {
                 let report = with_shutdown(|stop| async move {
                     fridica::doctor::readiness::check(
@@ -145,15 +155,18 @@ async fn main() -> Result<()> {
                 }
             } else {
                 let credentials =
-                    fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())?;
+                    fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())
+                        .map_err(fridica::cli::input_error)?;
                 with_shutdown(|stop| fridica::daemon::observe(config, credentials, stop)).await?;
             }
         }
         Command::Control(command) => {
-            println!("{}", serde_json::to_string_pretty(&command.run().await?)?)
+            let result = command.run().await.map_err(fridica::cli::control_error)?;
+            println!("{}", serde_json::to_string_pretty(&result)?)
         }
         Command::CheckConfig { config } => {
-            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)?;
+            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)
+                .map_err(fridica::cli::input_error)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({

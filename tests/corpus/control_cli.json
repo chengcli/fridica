@@ -1,0 +1,314 @@
+{
+  "provenance": "Frozen v0.3.11 CLI with synthetic config/client; no live services",
+  "commands": [
+    "init",
+    "configure",
+    "doctor",
+    "start",
+    "dashboard",
+    "status",
+    "threads",
+    "workers",
+    "approvals",
+    "machines",
+    "outbox"
+  ],
+  "exceptions": [
+    "Rust omits body.actor and derives authority from the authenticated connection",
+    "Invalid/unsafe identifiers and uncertain responses are rejected without retries"
+  ],
+  "cases": [
+    {
+      "args": [
+        "status"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/status",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "machines"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/machines",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "threads"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/threads",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/threads/TTEAM:CROOM:100.1",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1",
+        "pause"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/threads/TTEAM:CROOM:100.1/pause",
+        "body": {
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1",
+        "resume"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/threads/TTEAM:CROOM:100.1/resume",
+        "body": {
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1",
+        "close"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/threads/TTEAM:CROOM:100.1/close",
+        "body": {
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1",
+        "archive"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/threads/TTEAM:CROOM:100.1/archive",
+        "body": {
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1",
+        "restore"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/threads/TTEAM:CROOM:100.1/restore",
+        "body": {
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "threads",
+        "TTEAM:CROOM:100.1",
+        "clean"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/threads/TTEAM:CROOM:100.1/clean",
+        "body": {
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "workers"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/workers",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "workers",
+        "worker-1"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/workers",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "workers",
+        "worker-1",
+        "interrupt"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/workers/worker-1/interrupt",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "workers",
+        "worker-1",
+        "stop"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/workers/worker-1/stop",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "approvals"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/approvals",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "approvals",
+        "approval-1"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/approvals",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "approvals",
+        "approval-1",
+        "once"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/approvals/approval-1",
+        "body": {
+          "decision": "once",
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "approvals",
+        "approval-1",
+        "session"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/approvals/approval-1",
+        "body": {
+          "decision": "session",
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "approvals",
+        "approval-1",
+        "deny"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/approvals/approval-1",
+        "body": {
+          "decision": "deny",
+          "actor": "UOWNER"
+        }
+      }
+    },
+    {
+      "args": [
+        "outbox"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "GET",
+        "target": "/outbox",
+        "body": {}
+      }
+    },
+    {
+      "args": [
+        "outbox",
+        "1"
+      ],
+      "exit": 0,
+      "request": {
+        "method": "POST",
+        "target": "/outbox/1/retry",
+        "body": {}
+      }
+    }
+  ],
+  "errors": [
+    {
+      "kind": "ValueError",
+      "exit": 2
+    },
+    {
+      "kind": "DaemonUnavailable",
+      "exit": 3
+    },
+    {
+      "kind": "ControlError",
+      "exit": 4
+    }
+  ]
+}
