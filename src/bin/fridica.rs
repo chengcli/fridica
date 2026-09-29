@@ -23,12 +23,12 @@ enum Command {
     /// Initialize fresh v6 state offline; existing legacy databases require migrate.
     InitState {
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
     },
     /// Print a user systemd service; default mode is observe-only. Does not install it.
     ServicePrint {
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         #[arg(long)]
         environment_file: PathBuf,
         #[arg(long)]
@@ -37,7 +37,7 @@ enum Command {
     /// Record the owner's completed deployment checks for this build/config/host.
     DeploymentRecord {
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         #[arg(long)]
         output: PathBuf,
         #[arg(long, required = true)]
@@ -77,7 +77,7 @@ enum Command {
     /// Validate configuration and resolved placement policies without starting adapters.
     CheckConfig {
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
     },
     /// Check configuration, tokens, backend sign-in and protocols without model requests.
     Doctor {
@@ -91,7 +91,7 @@ enum Command {
     /// Test worker isolation on one explicit local/SSH target without a backend.
     DoctorIsolation {
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         #[arg(long)]
         machine: String,
         #[arg(long)]
@@ -104,7 +104,7 @@ enum Command {
         #[arg(long)]
         database: PathBuf,
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         #[arg(long, conflicts_with = "rollback")]
         dry_run: bool,
         #[arg(long)]
@@ -142,6 +142,10 @@ async fn main() -> std::process::ExitCode {
         }
     }
 }
+/// `--config`, or `~/.config/fridica/config.toml` like `init` and `start`.
+fn config_path(config: Option<PathBuf>) -> Result<PathBuf> {
+    fridica::config::setup::path(config.as_deref(), &fridica::config::LoadContext::current()?)
+}
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::BuildInfo => println!(
@@ -149,8 +153,11 @@ async fn run(cli: Cli) -> Result<()> {
             serde_json::to_string_pretty(&fridica::cli::candidate::Build::current())?
         ),
         Command::InitState { config } => {
-            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)
-                .map_err(fridica::cli::input_error)?;
+            let config = fridica::config::load(
+                &config_path(config)?,
+                &fridica::config::LoadContext::current()?,
+            )
+            .map_err(fridica::cli::input_error)?;
             let _store = Store::open(config.state.path.clone()).await?;
             println!("Initialized v6 state at {}", config.state.path.display());
         }
@@ -163,7 +170,7 @@ async fn run(cli: Cli) -> Result<()> {
                 "{}",
                 fridica::cli::candidate::service(
                     &std::env::current_exe()?,
-                    &config,
+                    &config_path(config)?,
                     &environment_file,
                     deployment_record.as_deref()
                 )?
@@ -176,8 +183,11 @@ async fn run(cli: Cli) -> Result<()> {
             recovery_rehearsal: _,
             observe_only_reconciled: _,
         } => {
-            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)
-                .map_err(fridica::cli::input_error)?;
+            let config = fridica::config::load(
+                &config_path(config)?,
+                &fridica::config::LoadContext::current()?,
+            )
+            .map_err(fridica::cli::input_error)?;
             fridica::cli::candidate::write_attestation(
                 &config,
                 &output,
@@ -270,8 +280,11 @@ async fn run(cli: Cli) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?)
         }
         Command::CheckConfig { config } => {
-            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)
-                .map_err(fridica::cli::input_error)?;
+            let config = fridica::config::load(
+                &config_path(config)?,
+                &fridica::config::LoadContext::current()?,
+            )
+            .map_err(fridica::cli::input_error)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -319,7 +332,7 @@ async fn run(cli: Cli) -> Result<()> {
             timeout,
         } => {
             let context = fridica::config::LoadContext::current()?;
-            let config = fridica::config::load(&config, &context)?;
+            let config = fridica::config::load(&config_path(config)?, &context)?;
             let report = fridica::doctor::isolation(
                 &config,
                 &context,
@@ -340,6 +353,7 @@ async fn run(cli: Cli) -> Result<()> {
             dry_run,
             rollback,
         } => {
+            let config = config_path(config)?;
             if rollback {
                 migration::rollback(&database, &config)?;
                 println!("Restored migration backups.");

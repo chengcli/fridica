@@ -260,6 +260,30 @@ fn paths_resolve_symlinks_before_parent_components() {
 }
 
 #[test]
+fn offline_cli_defaults_to_the_home_configuration_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = &dir.path().canonicalize().unwrap();
+    setup(root);
+    let default = root.join("home/.config/fridica/config.toml");
+    std::fs::create_dir_all(default.parent().unwrap()).unwrap();
+    std::fs::write(&default, basic(root)).unwrap();
+    let check = |explicit: bool| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"));
+        command.arg("check-config").env("HOME", root.join("home"));
+        if explicit {
+            command.arg("--config").arg(&default);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["fingerprint"].clone()
+    };
+    assert_eq!(check(false), check(true));
+}
+#[test]
 fn offline_cli_checks_configuration_without_creating_state_or_reading_tokens() {
     let dir = tempfile::Builder::new()
         .prefix("fc-")
