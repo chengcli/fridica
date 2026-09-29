@@ -14,7 +14,6 @@ use crate::{
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::params;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 #[derive(Debug, PartialEq)]
@@ -583,9 +582,10 @@ async fn commit(
         let mut status=request.session["status"].as_str().unwrap_or("new").to_string();
         if decision.reopen_blocked && status=="blocked" {status="complete".into();}
         let mut hash=request.session["last_reply_hash"].as_str().unwrap_or("").to_owned();
+        let repeat=super::replies::repeat_evidence(&tx,&request,&owner)?;
         if let Some(reply)=&decision.reply {
-            let candidate=format!("{:x}",Sha256::digest(reply.text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase().as_bytes()));
-            let explicit=request.trigger["kind"]=="owner_instruction" || request.trigger["message"]["text"].as_str().is_some_and(|s|s.contains(&format!("<@{owner}>")));
+            let candidate=crate::core::policy::reply_hash(&reply.text);
+            let explicit=repeat["allowed"]==true;
             let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty() && reply.details.is_empty() && work.jobs.is_empty() && !is_result && decision.note.kind!=NoteKind::Correction;
             if !duplicate {
                 let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
@@ -644,7 +644,7 @@ async fn commit(
         if let Some(event)=request.trigger["message"]["event_id"].as_str() {tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,event])?;}
         tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
         tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('actor_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs}).to_string()])?;
+        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('actor_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string()])?;
         tx.commit()?;Ok(Step::Committed)
     }).await
 }

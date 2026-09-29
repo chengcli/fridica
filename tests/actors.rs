@@ -966,3 +966,174 @@ async fn suppressing_a_duplicate_blocked_notice_keeps_the_existing_assignment() 
         "Alice"
     );
 }
+
+#[tokio::test]
+async fn repeat_policy_distinguishes_new_asks_peers_failed_and_uncertain_deliveries() {
+    for (sender, text, peer, state, repeat) in [
+        ("UALICE", "thanks, noted", false, "sent", false),
+        ("UALICE", "still green?", false, "sent", true),
+        ("UBOB", "check this too", false, "sent", true),
+        ("UALICE", "paste it again", false, "sent", true),
+        ("UALICE", "don't repost", false, "sent", false),
+        ("UALICE", "hello again", false, "failed", true),
+        ("UALICE", "hello again", false, "ambiguous", false),
+        ("UALICE", "hello again", false, "pending", false),
+        ("UPEER", "still green?", true, "sent", false),
+        ("UPEER", "<@UOWNER> repost", true, "sent", true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(dir.path().join("db")).await.unwrap();
+        intake(&s, 1).await;
+        // Waiting keeps both peer and human follow-ups out of the triage path.
+        let response = json!({"reply":{"text":"Waiting for CI.","status":"waiting"}});
+        let p = Arc::new(Script::new(vec![response.clone(), response]));
+        let a = actor(&s, p.clone());
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+        s.call(move |c| {
+            c.execute("UPDATE outbox SET state=?", [state])?;
+            // Exercise pre-v6 rows whose new trigger_event column is empty too.
+            c.execute("UPDATE outbox SET trigger_event=''", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        intake(&s, 2).await;
+        s.call(move |c| {
+            c.execute("UPDATE messages SET text=?,sender=?,meta_json=? WHERE event_id='e2'", rusqlite::params![text,sender,peer.then(||json!({"owner":"UPEER","session":SESSION,"turn":1,"status":"waiting","kind":"reply"}).to_string())])?;
+            Ok(())
+        }).await.unwrap();
+        assert_eq!(
+            a.step(SESSION.into()).await.unwrap(),
+            Step::Committed,
+            "{sender} {text} {state}"
+        );
+        assert_eq!(
+            scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+            if repeat { "2" } else { "1" },
+            "{sender} {text} {state}"
+        );
+        let evidence: Value = serde_json::from_str(&scalar(&s,"SELECT payload_json FROM replay_events WHERE kind='actor_commit' ORDER BY seq DESC LIMIT 1").await).unwrap();
+        assert_eq!(evidence["reply_repeat"]["allowed"], repeat);
+        assert_eq!(evidence["reply_repeat"]["previous"]["state"], state);
+        assert_eq!(evidence["reply_repeat"]["previous"]["requester"], "UALICE");
+        assert_eq!(p.requests.lock().unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn owner_resume_can_repeat_a_reply_to_an_unaddressed_followup() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    intake(&s, 1).await;
+    let response = json!({"reply":{"text":"Still waiting.","status":"waiting"}});
+    let p = Arc::new(Script::new(vec![response.clone(), response]));
+    let a = actor(&s, p);
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    controls::apply(
+        &s,
+        SESSION.into(),
+        Control::Pause {
+            reason: "Owner review".into(),
+        },
+        Authority::Owner,
+        21.,
+    )
+    .await
+    .unwrap();
+    intake(&s, 2).await;
+    s.call(|c| {
+        c.execute(
+            "UPDATE messages SET text='thanks, noted' WHERE event_id='e2'",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Observed);
+    controls::apply(&s, SESSION.into(), Control::Resume, Authority::Owner, 22.)
+        .await
+        .unwrap();
+    let mut a = a;
+    a.clock = Arc::new(ReplayClock::new(23.));
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "2"
+    );
+}
+
+#[tokio::test]
+async fn unicode_case_equivalent_answers_are_suppressed_and_delivery_is_rechecked_at_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    let p = Arc::new(Script::new(vec![
+        json!({"reply":{"text":"Straße","status":"waiting"}}),
+        json!({"reply":{"text":"STRASSE","status":"waiting"}}),
+    ]));
+    let a = actor(&s, p);
+    for n in 1..=2 {
+        intake(&s, n).await;
+        if n == 2 {
+            s.call(|c| {
+                c.execute(
+                    "UPDATE messages SET text='thanks, noted' WHERE event_id='e2'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    }
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "1"
+    );
+
+    struct FailedWhileDeciding(Store);
+    impl Parent for FailedWhileDeciding {
+        fn decide(&self, _: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>> {
+            Box::pin(async move {
+                // Delivery can settle while the model runs without changing the
+                // thread version. Commit must inspect the new delivery state.
+                self.0
+                    .call(|c| {
+                        c.execute("UPDATE outbox SET state='failed'", [])?;
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+                Ok(json!({"reply":{"text":"STRASSE","status":"waiting"}}))
+            })
+        }
+    }
+    intake(&s, 3).await;
+    s.call(|c| {
+        c.execute(
+            "UPDATE messages SET text='thanks, noted' WHERE event_id='e3'",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let mut updated = actor(&s, Arc::new(FailedWhileDeciding(s.clone())));
+    updated.ids = a.ids.clone();
+    assert_eq!(updated.step(SESSION.into()).await.unwrap(), Step::Committed);
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "2"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT state FROM outbox ORDER BY id LIMIT 1").await,
+        "failed"
+    );
+    let evidence:Value=serde_json::from_str(&scalar(&s,"SELECT payload_json FROM replay_events WHERE kind='actor_commit' ORDER BY seq DESC LIMIT 1").await).unwrap();
+    assert_eq!(evidence["reply_repeat"]["previous"]["state"], "failed");
+    assert_eq!(
+        evidence["reply_repeat"]["reason"],
+        "previous reply definitely failed"
+    );
+}

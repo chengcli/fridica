@@ -119,3 +119,58 @@ pub fn attention_gate(i: &GateInput, new_instruction: bool) -> Verdict {
         previous
     }
 }
+
+/// Frozen reply fingerprints use Unicode case folding and Python whitespace.
+pub fn reply_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use unicode_casefold::UnicodeCaseFold;
+    let folded: String = text.case_fold().collect();
+    let normalized = folded
+        .split(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        String::new()
+    } else {
+        format!("{:x}", Sha256::digest(normalized.as_bytes()))
+    }
+}
+
+/// Rust regex has no lookbehind; check the frozen phrase exclusions against the
+/// prefix of each match instead. Do not broaden ordinary "repeat the test" asks.
+pub fn repost_requested(text: &str, owner: &str) -> bool {
+    use std::sync::LazyLock;
+    static REPOST: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r"(?i)\b(re-?post|repeat (?:it|that|this|your)|(?:post|send|say|paste|share) (?:it|that|this|(?:the|your) [\w-]+(?: [\w-]+)?) again|again,? verbatim|one more time)\b"
+    ).expect("fixed repost expression")
+    });
+    if text.contains(&format!("<@{owner}>")) {
+        return true;
+    }
+    let mut start = 0;
+    while let Some(m) = REPOST.find_at(text, start) {
+        // Only the longest exclusion's suffix matters. Repeated rejected
+        // phrases must not repeatedly allocate/fold the whole message prefix.
+        let suffix: Vec<_> = text[..m.start()].chars().rev().take(11).collect();
+        let prefix = suffix.into_iter().rev().collect::<String>().to_lowercase();
+        if ![
+            "don't ",
+            "don’t ",
+            "do not ",
+            "never ",
+            "ever ",
+            "no need to ",
+            "should ",
+        ]
+        .iter()
+        .any(|excluded| prefix.ends_with(excluded))
+        {
+            return true;
+        }
+        // A rejected outer phrase must not swallow a later overlapping match.
+        start = m.start() + text[m.start()..].chars().next().unwrap().len_utf8();
+    }
+    false
+}

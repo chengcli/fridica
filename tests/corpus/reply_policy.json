@@ -1,0 +1,187 @@
+{
+  "source": "frozen spec/fridica/threads/policy.py",
+  "repost": [
+    {
+      "text": "can you repost that?",
+      "expected": true
+    },
+    {
+      "text": "post your sign-off again",
+      "expected": true
+    },
+    {
+      "text": "one more time please",
+      "expected": true
+    },
+    {
+      "text": "paste it again",
+      "expected": true
+    },
+    {
+      "text": "re-post",
+      "expected": true
+    },
+    {
+      "text": "REPOST",
+      "expected": true
+    },
+    {
+      "text": "again, verbatim",
+      "expected": true
+    },
+    {
+      "text": "again verbatim",
+      "expected": true
+    },
+    {
+      "text": "repeat your answer",
+      "expected": true
+    },
+    {
+      "text": "share the test result again",
+      "expected": true
+    },
+    {
+      "text": "send that again",
+      "expected": true
+    },
+    {
+      "text": "don't repeat that",
+      "expected": false
+    },
+    {
+      "text": "don’t repost",
+      "expected": false
+    },
+    {
+      "text": "don't ever repost",
+      "expected": false
+    },
+    {
+      "text": "do not repost",
+      "expected": false
+    },
+    {
+      "text": "never repost",
+      "expected": false
+    },
+    {
+      "text": "no need to repost",
+      "expected": false
+    },
+    {
+      "text": "we should repeat that run",
+      "expected": false
+    },
+    {
+      "text": "we should repeat the benchmark tomorrow",
+      "expected": false
+    },
+    {
+      "text": "thanks, noted",
+      "expected": false
+    },
+    {
+      "text": "repeat the test",
+      "expected": false
+    },
+    {
+      "text": "don't repost; paste it again",
+      "expected": true
+    },
+    {
+      "text": "<@UOWNER> don't repost",
+      "expected": true
+    },
+    {
+      "text": "<@USOMEONE> thanks",
+      "expected": false
+    },
+    {
+      "text": "prepost",
+      "expected": false
+    },
+    {
+      "text": "reposting",
+      "expected": false
+    },
+    {
+      "text": "DO NOT REPOST",
+      "expected": false
+    },
+    {
+      "text": "send this again",
+      "expected": true
+    },
+    {
+      "text": "say it again",
+      "expected": true
+    },
+    {
+      "text": "repeat that",
+      "expected": true
+    },
+    {
+      "text": "repeat this",
+      "expected": true
+    },
+    {
+      "text": "ONE MORE TIME",
+      "expected": true
+    },
+    {
+      "text": "",
+      "expected": false
+    },
+    {
+      "text": "don't send your repeat that again",
+      "expected": true
+    }
+  ],
+  "hashes": [
+    {
+      "text": "",
+      "expected": ""
+    },
+    {
+      "text": "   ",
+      "expected": ""
+    },
+    {
+      "text": "CI is green.",
+      "expected": "0125dd32a2a92cb39d8957a3c68b0c139859a6b31ce58ca401479ca0830afbf6"
+    },
+    {
+      "text": " CI IS\tGREEN.\n",
+      "expected": "0125dd32a2a92cb39d8957a3c68b0c139859a6b31ce58ca401479ca0830afbf6"
+    },
+    {
+      "text": "Straße",
+      "expected": "16d96952087774fee069b7585d3991b24d90c181c09b2129b4908c35baa7f0c0"
+    },
+    {
+      "text": "STRASSE",
+      "expected": "16d96952087774fee069b7585d3991b24d90c181c09b2129b4908c35baa7f0c0"
+    },
+    {
+      "text": "Σ σ ς",
+      "expected": "b77a6a53128a26b904210e05da893c04400bd8f99db994c2fb4906969dbcce93"
+    },
+    {
+      "text": "İ",
+      "expected": "fbbdb347060082cf4e72cdc5f02679dd809ebf4e6c601933e858d954a65f5e73"
+    },
+    {
+      "text": "a\u001cb\u001dc\u001ed\u001fe",
+      "expected": "52cf9f06f83e0a0a90dc25dcf548c18421244f9520c577672cd27b6618f12134"
+    },
+    {
+      "text": "x y z",
+      "expected": "00d9bf1235b65cc60a23478250f3f8e37b23ca973e7442a4415a28f489b1a0d7"
+    },
+    {
+      "text": "👩‍🔬 done",
+      "expected": "c86ec4cba823dd6850703b5aea659de48acd16e4ad1b72851df2bbd2dee53269"
+    }
+  ]
+}

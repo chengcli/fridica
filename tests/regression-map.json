@@ -1493,19 +1493,21 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/actors.rs",
-      "coverage_scope": "Duplicate replies are suppressed; correction notes permit repeats and acknowledgements advance no-progress streaks without automatic pauses. All legacy repost wording and Unicode hash equivalence remain unverified; Python regression is retained."
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_replies.py::test_an_at_mention_or_repost_request_still_gets_the_same_text",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_replies.py::test_a_correction_and_different_text_are_never_suppressed",
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/actors.rs",
-      "coverage_scope": "Duplicate replies are suppressed; correction notes permit repeats and acknowledgements advance no-progress streaks without automatic pauses. All legacy repost wording and Unicode hash equivalence remain unverified; Python regression is retained."
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_replies.py::test_identical_questions_pause_the_thread_instead_of_repeating",
@@ -1527,22 +1529,30 @@
     {
       "python": "tests/test_replies.py::test_repost_requests_are_recognised_narrowly",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_replies.py::test_an_owner_resume_gets_the_reply_again",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_replies.py::test_someone_else_or_a_question_gets_the_same_answer_again",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_replies.py::test_a_reply_that_never_reached_slack_is_sent_again",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/actors.rs",
+      "coverage_scope": "Actor fixtures cover same-requester suppression, questions/different requesters, explicit reposts and negation, peer follow-ups, owner resumes, corrections, Unicode-equivalent answers, and failed versus ambiguous delivery. Delivery evidence is re-read and recorded at actor commit; legacy rows without trigger_event retain requester lookup. tests/replay.rs compares 34 synthetic repost cases and 11 hashes captured from frozen Python. Ambiguous delivery alone intentionally does not authorize a new reply; new explicit asks remain eligible. Automatic streak pauses remain replaced by signals. Rendering and full concurrent differential parity are separate open work; Python regression retained."
     },
     {
       "python": "tests/test_repo_fetch.py::test_fetched_ref_is_a_local_bare_repo_without_a_push_remote[False]",
