@@ -36,7 +36,7 @@ pub struct Report {
     pub cancelled: bool,
     pub startup_checks_passed: bool,
     pub active_launch_ready: bool,
-    pub remaining_gates: [&'static str; 4],
+    pub remaining_gates: [&'static str; 1],
 }
 
 /// Check all configured worker destinations. Completion of an in-flight probe
@@ -64,12 +64,7 @@ pub async fn check(
         cancelled: *stop.borrow(),
         startup_checks_passed: false,
         active_launch_ready: false,
-        remaining_gates: [
-            "compatibility",
-            "replay_and_recovery",
-            "candidate_packaging",
-            "deployment_validation",
-        ],
+        remaining_gates: ["deployment_validation"],
     };
     if report.cancelled {
         return Ok(report);

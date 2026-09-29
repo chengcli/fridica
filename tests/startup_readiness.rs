@@ -149,7 +149,7 @@ async fn cli_checks_all_backends_without_tokens_state_or_backend_invocation() {
     assert_eq!(report["active_launch_ready"], false);
     assert_eq!(report["targets"].as_array().unwrap().len(), 2);
     assert_eq!(report["config_fingerprint"], f.config.fingerprint);
-    assert_eq!(report["remaining_gates"].as_array().unwrap().len(), 4);
+    assert_eq!(report["remaining_gates"].as_array().unwrap().len(), 1);
     assert!(!String::from_utf8_lossy(&output.stdout).contains(f.root.to_str().unwrap()));
     f.pristine();
     let output = f.cli(&["--observe-only"]).await;
@@ -427,7 +427,7 @@ async fn host_directory_permissions_and_owner_inputs_block_before_target_io() {
 
 // This child entry point exercises production active host wiring under an
 // isolated environment. The parent holds a loopback proxy: no Slack connection
-// can leave the fixture and dummy backends must never execute.
+// can leave the fixture. Backend probes are scripted; model sessions must never start.
 #[tokio::test]
 async fn active_host_fixture_child() {
     let Some(path) = std::env::var_os("FRIDICA_TEST_ACTIVE_CONFIG") else {
@@ -454,11 +454,38 @@ async fn active_host_fixture_child() {
 }
 
 #[tokio::test]
-async fn prepared_active_host_starts_owner_controls_then_drains_without_starting_backends() {
+async fn prepared_active_host_checks_backend_auth_then_drains_without_model_sessions() {
     use fridica::control::client::Client;
     use rustix::process::{kill_process, Pid, Signal};
     use tokio::{io::AsyncReadExt, net::TcpListener};
     let f = Fixture::new();
+    let backend = r#"#!/usr/bin/python3
+import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+if args == ['--help']:
+    print('--input-format --permission-prompts --json-schema --setting-sources --strict-mcp-config --append-system-prompt --session-id dontAsk "auto"')
+elif args == ['auth','status']:
+    print('{"loggedIn":true}')
+elif args == ['exec','--help']:
+    print('--ignore-user-config --ignore-rules --output-schema --ephemeral')
+elif args == ['login','status']:
+    pass
+elif args[:2] == ['app-server','generate-json-schema']:
+    (Path(args[3]) / 'schema.json').write_text('turn/interrupt item/commandExecution/requestApproval outputSchema auto_review')
+else:
+    (Path(__file__).parent.parent / 'backend-started').touch()
+    raise SystemExit(91)
+"#;
+    for name in ["claude", "codex"] {
+        std::fs::write(f.root.join("bin").join(name), backend).unwrap();
+    }
+    for name in ["bwrap", "socat"] {
+        let path = f.root.join("bin").join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
     let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut environment = f.env.clone();
     environment.extend([

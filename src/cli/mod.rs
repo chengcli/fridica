@@ -1,3 +1,5 @@
+pub mod assets;
+pub mod candidate;
 pub mod setup;
 
 /// Preserve the public CLI's distinction between invalid input, an unavailable

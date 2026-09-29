@@ -1,5 +1,5 @@
-//! Experimental daemon composition. Active CLI execution remains gated by
-//! compatibility, replay/recovery, packaging and deployment validation.
+//! Candidate daemon composition. Active CLI execution requires an owner
+//! deployment record and fresh read-only startup diagnostics.
 pub mod composition;
 use crate::{
     config::Config,
@@ -150,7 +150,7 @@ pub async fn observe(
     .await
 }
 
-/// Active host wiring for the candidate. The CLI rollout gate remains closed.
+/// Active host wiring for the candidate; the CLI validates deployment authority.
 /// Each invocation reruns preparation before database recovery or service I/O.
 pub async fn active(
     config: Config,
@@ -172,6 +172,23 @@ pub async fn active(
     }
     if !report.startup_checks_passed {
         bail!("active startup readiness checks did not pass");
+    }
+    let diagnostics = crate::doctor::checks::run(
+        &config.path,
+        &context,
+        environment.clone(),
+        Duration::from_secs(30),
+        stop.clone(),
+    )
+    .await?;
+    if diagnostics.cancelled {
+        return Ok(());
+    }
+    if !diagnostics.passed() {
+        bail!("active startup doctor checks did not pass; run doctor for details");
+    }
+    if crate::config::load(&config.path, &context)?.fingerprint != config.fingerprint {
+        bail!("configuration changed during active startup checks; restart validation");
     }
     // Private housekeeping is provisioned only after read-only checks succeed.
     use std::os::unix::fs::PermissionsExt;

@@ -1,5 +1,5 @@
 # Experimental Fridica v0.4 configuration.
-# Active CLI startup remains gated; fill in your IDs, workspaces and inventories.
+# Services default to observe-only. Active startup requires a deployment record.
 #
 # Fridica is your Slack presence. One parent agent (you) listens in the channels
 # below. Each Slack thread becomes a session, and the parent delegates real work to
@@ -41,7 +41,7 @@ mention_grace = 900
 
 [isolation]
 mcp_inventory_complete = false   # set only after reviewing all local MCP sources
-# private_files = ["~/.config/fridica/credentials.env"]
+# private_files = ["~/.config/fridica/credentials.env", "~/.config/fridica/deployment.json"]
 # settings_files = ["~/.codex/config.toml"]
 # mcp_aliases = ["fridica"]        # all configured Fridica server identities
 # SSH targets need their own [isolation.remote.NAME] inventory; see worker-isolation.md.

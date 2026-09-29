@@ -64,6 +64,32 @@ jobs:
           PYTHONPATH=spec python scripts/capture_slack.py
           git diff --exit-code -- tests/corpus/
 
+  native-candidate:
+    name: Native candidate packaging (Linux x86_64)
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Verify archive failures and stopped-state snapshots
+        run: python -m unittest discover -s tests -p test_candidate_packaging.py -v
+      - name: Reproduce native candidate and test a disposable installation
+        run: python scripts/package_candidate.py --verify-reproducible --smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-candidate-linux-x86_64
+          path: dist/candidate/*
+          if-no-files-found: error
+
   test:
     name: Test (${{ matrix.os }}, Python 3.11)
     runs-on: ${{ matrix.os }}

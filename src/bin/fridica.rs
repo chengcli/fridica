@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Experimental v0.4 observer, controls, migration and offline report tools. The Python launcher remains the production daemon."
+    about = "Experimental v0.4 candidate. Separate from the production Python launcher."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -18,6 +18,35 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Print the candidate version, source fingerprint and native target.
+    BuildInfo,
+    /// Initialize fresh v6 state offline; existing legacy databases require migrate.
+    InitState {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Print a user systemd service; default mode is observe-only. Does not install it.
+    ServicePrint {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        environment_file: PathBuf,
+        #[arg(long)]
+        deployment_record: Option<PathBuf>,
+    },
+    /// Record the owner's completed deployment checks for this build/config/host.
+    DeploymentRecord {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, required = true)]
+        target_conformance: bool,
+        #[arg(long, required = true)]
+        recovery_rehearsal: bool,
+        #[arg(long, required = true)]
+        observe_only_reconciled: bool,
+    },
     /// Create an experimental starter configuration, contract and Slack manifest.
     Init {
         #[arg(long)]
@@ -27,13 +56,18 @@ enum Command {
     Configure(fridica::cli::setup::Configure),
     #[command(flatten)]
     Control(fridica::control::cli::Commands),
-    /// Experimental Slack observer with owner-authenticated local controls.
+    /// Candidate daemon with owner-authenticated local controls.
     Start {
         #[arg(long)]
         config: Option<PathBuf>,
-        /// Required for service startup until the remaining active-launch gates pass.
+        /// Start without model, worker or posting adapters.
         #[arg(long)]
         observe_only: bool,
+        /// Explicit opt-in after deployment checks recorded by the owner.
+        #[arg(long, conflicts_with_all = ["observe_only", "check_ready"], requires = "deployment_record")]
+        active: bool,
+        #[arg(long, requires = "active")]
+        deployment_record: Option<PathBuf>,
         /// Read-only startup preparation; no Slack credentials or state required.
         #[arg(long, conflicts_with = "observe_only")]
         check_ready: bool,
@@ -93,6 +127,9 @@ enum Command {
     Assets {
         #[arg(long)]
         list: bool,
+        /// Export all embedded assets into a new directory.
+        #[arg(long, conflicts_with = "list")]
+        export: Option<PathBuf>,
     },
 }
 #[tokio::main]
@@ -107,6 +144,51 @@ async fn main() -> std::process::ExitCode {
 }
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::BuildInfo => println!(
+            "{}",
+            serde_json::to_string_pretty(&fridica::cli::candidate::Build::current())?
+        ),
+        Command::InitState { config } => {
+            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)
+                .map_err(fridica::cli::input_error)?;
+            let _store = Store::open(config.state.path.clone()).await?;
+            println!("Initialized v6 state at {}", config.state.path.display());
+        }
+        Command::ServicePrint {
+            config,
+            environment_file,
+            deployment_record,
+        } => {
+            print!(
+                "{}",
+                fridica::cli::candidate::service(
+                    &std::env::current_exe()?,
+                    &config,
+                    &environment_file,
+                    deployment_record.as_deref()
+                )?
+            );
+        }
+        Command::DeploymentRecord {
+            config,
+            output,
+            target_conformance: _,
+            recovery_rehearsal: _,
+            observe_only_reconciled: _,
+        } => {
+            let config = fridica::config::load(&config, &fridica::config::LoadContext::current()?)
+                .map_err(fridica::cli::input_error)?;
+            fridica::cli::candidate::write_attestation(
+                &config,
+                &output,
+                fridica::cli::candidate::Build::current(),
+                SystemClock.now(),
+            )?;
+            println!(
+                "Recorded owner deployment attestation at {}",
+                output.display()
+            );
+        }
         Command::Init { config } => {
             let context = fridica::config::LoadContext::current()?;
             let path = fridica::config::setup::path(config.as_deref(), &context)?;
@@ -116,7 +198,7 @@ async fn run(cli: Cli) -> Result<()> {
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Next: fridica configure --detect, then complete workspaces and inventories, run fridica check-config and fridica start --check-ready. Active CLI startup remains gated.");
+            println!("Next: use this executable with the same --config path for configure --detect, check-config and start --check-ready; complete workspaces and inventories first. Services default to observe-only; active startup requires an owner deployment record.");
         }
         Command::Configure(options) => {
             if let Err(error) = options.run(&fridica::config::LoadContext::current()?).await {
@@ -127,11 +209,13 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Start {
             config,
             observe_only,
+            active,
+            deployment_record,
             check_ready,
             timeout,
         } => {
-            if !observe_only && !check_ready {
-                anyhow::bail!("experimental Rust start requires --observe-only; active launch awaits compatibility, replay, packaging and deployment gates; use --check-ready for startup preparation");
+            if !observe_only && !check_ready && !active {
+                anyhow::bail!("experimental Rust start requires --observe-only or explicit --active with --deployment-record; use --check-ready for startup preparation");
             }
             let context = fridica::config::LoadContext::current()?;
             let path = config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
@@ -154,10 +238,31 @@ async fn run(cli: Cli) -> Result<()> {
                     anyhow::bail!("startup readiness checks did not pass");
                 }
             } else {
+                if active {
+                    fridica::cli::candidate::validate(
+                        &config,
+                        &fridica::cli::candidate::Build::current(),
+                        deployment_record.as_deref().unwrap(),
+                    )?;
+                }
                 let credentials =
                     fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())
                         .map_err(fridica::cli::input_error)?;
-                with_shutdown(|stop| fridica::daemon::observe(config, credentials, stop)).await?;
+                if active {
+                    with_shutdown(|stop| {
+                        fridica::daemon::active(
+                            config,
+                            context,
+                            std::env::vars_os().collect(),
+                            credentials,
+                            stop,
+                        )
+                    })
+                    .await?;
+                } else {
+                    with_shutdown(|stop| fridica::daemon::observe(config, credentials, stop))
+                        .await?;
+                }
             }
         }
         Command::Control(command) => {
@@ -259,22 +364,12 @@ async fn run(cli: Cli) -> Result<()> {
             report::export_pending(&store, directory).await?;
             println!("{}", serde_json::to_string_pretty(&data)?);
         }
-        Command::Assets { list: _ } => {
-            use sha2::{Digest, Sha256};
-            let assets: [(&str, &[u8]); 5] = [
-                (
-                    "contract.md",
-                    include_bytes!("../fridica/parent/contract.md"),
-                ),
-                ("repos.toml", include_bytes!("../fridica/parent/repos.toml")),
-                ("template.toml", include_bytes!("../config/template.toml")),
-                ("manifest.yaml", include_bytes!("../../slack/manifest.yaml")),
-                (
-                    "dashboard/index.html",
-                    include_bytes!("../fridica/dashboard/static/index.html"),
-                ),
-            ];
-            for (name, data) in assets {
+        Command::Assets { list: _, export } => {
+            if let Some(path) = export {
+                fridica::cli::assets::export(&path)?;
+            }
+            for (name, data) in fridica::cli::assets::catalog() {
+                use sha2::{Digest, Sha256};
                 println!("{:x}  {name}", Sha256::digest(data));
             }
         }

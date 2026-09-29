@@ -79,7 +79,7 @@ impl Configure {
                 channels: self.channels,
             })?;
         }
-        println!("Updated {}. Complete the workspaces and inventories, then run fridica check-config and fridica start --check-ready. Existing daemons require a restart to use these identity changes.", path.display());
+        println!("Updated {}. Complete the workspaces and inventories, then use this executable with the same --config path for check-config and start --check-ready. Existing daemons require a restart to use these identity changes.", path.display());
         Ok(())
     }
 }
