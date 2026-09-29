@@ -195,6 +195,10 @@ print('isolated')
         config = serde_json::json!(f.config.path),
         socket = serde_json::json!(f.config.state.control_socket)
     );
+    // A descriptor inherited from whatever started the daemon (service manager,
+    // terminal, CI runner) must not reach the backend either.
+    let _inherited = std::fs::File::open("/dev/null").unwrap();
+    rustix::io::fcntl_setfd(&_inherited, rustix::io::FdFlags::empty()).unwrap();
     let result = process::run_once(f.command(&checks), vec![], Duration::from_secs(10), 16384)
         .await
         .unwrap();

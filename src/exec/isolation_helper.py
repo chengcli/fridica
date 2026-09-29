@@ -135,6 +135,15 @@ def main():
     words += ["--chdir", workspace, "--"] + command
     for fd in fds:
         os.set_inheritable(fd, True)
+    # Descriptors inherited from whatever started the daemon (a service manager,
+    # terminal or CI runner) must not reach the backend: keep only stdio and mounts.
+    keep = {0, 1, 2, *fds}
+    for name in os.listdir("/proc/self/fd"):
+        if int(name) not in keep:
+            try:
+                os.close(int(name))
+            except OSError:
+                pass
     if preflight:
         preflight_stage = "namespace"
         print("fridica-isolation:namespace", flush=True)
