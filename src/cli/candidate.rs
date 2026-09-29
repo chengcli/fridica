@@ -113,7 +113,14 @@ pub fn validate(config: &Config, build: &Build, path: &Path) -> Result<()> {
     Ok(())
 }
 pub fn write_attestation(config: &Config, path: &Path, build: Build, now: f64) -> Result<()> {
-    if !path.is_absolute() || !config.isolation.private_files.contains(&path.to_owned()) {
+    // The record does not exist yet; resolve its directory as `validate` and the
+    // configured private_files do (e.g. macOS /var -> /private/var).
+    let listed = path
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok())
+        .zip(path.file_name())
+        .is_some_and(|(parent, name)| config.isolation.private_files.contains(&parent.join(name)));
+    if !path.is_absolute() || !listed {
         bail!("use an absolute deployment record path listed in isolation.private_files");
     }
     let record = attest(config, build, now)?;

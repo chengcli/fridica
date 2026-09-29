@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a deterministic native Linux x86_64 candidate; never install or publish."""
+"""Build a deterministic native Linux x86_64 or macOS arm64 candidate; never install or publish."""
 import argparse
 import gzip
 import hashlib
@@ -17,6 +17,9 @@ import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+# Native (system, machine) -> Rust host triple. Cross-compilation is not supported.
+TARGETS = {("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
+           ("Darwin", "arm64"): "aarch64-apple-darwin"}
 EVIDENCE = ("docs/v0.4-cli-control-compatibility.md", "docs/v0.4-recovery-verification.md",
             "docs/v0.4-regression-accounting.md", "spec/baseline.json")
 
@@ -59,15 +62,41 @@ def archive_bytes(files):
     return gzip.compress(raw.getvalue(), mtime=0)
 
 
+def native_target(system, machine, toolchain):
+    """Return the supported native host triple, or refuse before building."""
+    expected = TARGETS.get((system, machine))
+    if expected is None:
+        raise SystemExit("This candidate recipe supports native Linux x86_64 and macOS arm64 only")
+    if re.search(r"^host: (.+)$", toolchain, re.M)[1] != expected:
+        raise SystemExit(f"native {expected} toolchain required")
+    return expected
+
+
+def linkage(binaries):
+    """Minimum platform and shared libraries of the built binaries."""
+    paths = [binaries / "fridica", binaries / "fridica-overseer"]
+    if platform.system() == "Darwin":
+        loads = subprocess.check_output(["otool", "-l", *paths], text=True)
+        minimum = max(set(re.findall(r"^\s*minos (\S+)$", loads, re.M)),
+                      key=lambda v: tuple(map(int, v.split('.'))))
+        linked = subprocess.check_output(["otool", "-L", *paths], text=True)
+        libraries = {line.split(" (")[0].strip() for line in linked.splitlines() if line.startswith("\t")}
+        return {"macos_minimum": minimum, "shared_libraries": sorted(libraries),
+                "python": "/usr/bin/python3 for helpers; Python 3.11+ (e.g. Homebrew) for isolation "
+                          "bootstrap and packaged operator tools",
+                "confinement": "none locally: local worker isolation requires Linux; backend CLI sandbox applies"}
+    linked = subprocess.check_output(["readelf", "--version-info", *paths], text=True)
+    glibc = max(set(re.findall(r"GLIBC_(\d+\.\d+)", linked)), key=lambda v: tuple(map(int, v.split('.'))))
+    needed = subprocess.check_output(["readelf", "-d", *paths], text=True)
+    return {"glibc_minimum": glibc, "shared_libraries": sorted(set(re.findall(r'Shared library: \[(.+?)\]', needed))),
+            "python": "/usr/bin/python3 (3.11+ for packaged operator tools)"}
+
+
 def build(output, target_dir):
-    if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise SystemExit("This candidate recipe currently supports native Linux x86_64 only")
     identity = sources()
     source_id = digest(canonical(identity))
     toolchain = subprocess.check_output(["rustc", "-vV"], text=True)
-    target = re.search(r"^host: (.+)$", toolchain, re.M)[1]
-    if target != "x86_64-unknown-linux-gnu":
-        raise SystemExit("GNU Linux x86_64 native toolchain required")
+    target = native_target(platform.system(), platform.machine(), toolchain)
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
     environment = dict(os.environ)
     # Pin build-affecting flags; source paths and registry paths cannot enter binaries.
@@ -102,13 +131,9 @@ def build(output, target_dir):
         raise RuntimeError("source changed during build; rebuild the candidate")
     build_info = json.loads(subprocess.check_output([binaries / "fridica", "build-info"]))
     assert build_info == {"version": version, "source_id": source_id, "target": target}
-    linked = subprocess.check_output(["readelf", "--version-info", binaries / "fridica", binaries / "fridica-overseer"], text=True)
-    glibc = max(set(re.findall(r"GLIBC_(\d+\.\d+)", linked)), key=lambda v: tuple(map(int, v.split('.'))))
-    needed = subprocess.check_output(["readelf", "-d", binaries / "fridica", binaries / "fridica-overseer"], text=True)
     manifest = {"format": 1, "build": build_info, "rustc": toolchain,
-                "platform": {"glibc_minimum": glibc, "shared_libraries": sorted(set(re.findall(r'Shared library: \[(.+?)\]', needed))),
-                             "python": "/usr/bin/python3 (3.11+ for packaged operator tools)",
-                             "scope": "native development candidate; no cross-platform wheel certification"},
+                "platform": dict(linkage(binaries),
+                                 scope="native development candidate; no cross-platform wheel certification"),
                 "sources": identity,
                 "files": {name: {"sha256": digest(data), "mode": mode, "size": len(data)}
                           for name, (data, mode) in files.items()}}

@@ -293,7 +293,9 @@ async fn helper_cleans_git_groups_on_timeout_cancellation_and_channel_eof() {
     for mode in ["timeout", "cancel", "eof"] {
         let mut h = Harness::new(mode == "eof");
         h.hang();
-        h.fetcher.timeout = Duration::from_millis(150);
+        // Two interpreter startups (helper and fake git) must fit before the
+        // timeout; macOS needs more than 150 ms. The fake git hangs for 60 s.
+        h.fetcher.timeout = Duration::from_secs(1);
         let request = h.request();
         let launch = h.fetcher.launch(&request).unwrap();
         let root = h.dir.path();

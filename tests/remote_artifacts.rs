@@ -117,14 +117,13 @@ async fn escaping_links_traversal_hardlinks_and_special_files_refuse_before_tran
     std::fs::write(&private, "private-content-must-never-transfer").unwrap();
     std::os::unix::fs::symlink(&private, f.root.join("remote/work/escape.md")).unwrap();
     std::fs::hard_link(&private, f.root.join("remote/work/hard.md")).unwrap();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        f.root.join("remote/work/pipe.md"),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR,
-        0,
-    )
-    .unwrap();
+    // rustix has no mknodat on Apple targets; the utility is portable.
+    assert!(std::process::Command::new("mkfifo")
+        .args(["-m", "400"])
+        .arg(f.root.join("remote/work/pipe.md"))
+        .status()
+        .unwrap()
+        .success());
     for path in [
         "~/private.md",
         "~/work/../private.md",

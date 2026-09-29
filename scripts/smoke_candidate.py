@@ -9,16 +9,22 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import platform
 import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("candidate_install", ROOT / "packaging/install.py")
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
+
+LINUX = platform.system() == "Linux"
+# Operator tools need 3.11+; macOS /usr/bin/python3 is older, so use this interpreter there.
+PYTHON = "/usr/bin/python3" if LINUX else sys.executable
 
 BACKEND = '''#!/usr/bin/python3
 import json, os, sys
@@ -120,8 +126,11 @@ private_files=[{json.dumps(str(record))}]
         assert "--observe-only" in unit and "--active" not in unit and "synthetic" not in unit
         unit_path = root / "fridica-candidate.service"
         unit_path.write_text(unit)
-        run("/usr/bin/systemd-analyze", "verify", unit_path, env=environment, cwd=root)
-        checks.append("generated observe-only systemd unit passes systemd-analyze verify")
+        if LINUX:
+            run("/usr/bin/systemd-analyze", "verify", unit_path, env=environment, cwd=root)
+            checks.append("generated observe-only systemd unit passes systemd-analyze verify")
+        else:
+            checks.append("generated observe-only systemd unit content (systemd-analyze skipped: not Linux)")
 
         def lifecycle(active):
             with socket.socket() as proxy:
@@ -143,7 +152,7 @@ private_files=[{json.dumps(str(record))}]
                         assert status["observe_only"] == (not active)
                         assert "another Fridica process" in command(*args, ok=False)
                         # Snapshot tool must honor the running daemon's lock.
-                        result = subprocess.run(["/usr/bin/python3", installation / "share/state_snapshot.py", "backup", "--database", db, "--config", config, "--output", root / "locked-backup"], env=environment, cwd=root, capture_output=True)
+                        result = subprocess.run([PYTHON, installation / "share/state_snapshot.py", "backup", "--database", db, "--config", config, "--output", root / "locked-backup"], env=environment, cwd=root, capture_output=True)
                         assert result.returncode != 0 and not (root / "locked-backup").exists()
                         child.send_signal(signal.SIGTERM if active else signal.SIGINT)
                         out, err = child.communicate(timeout=10)
@@ -184,7 +193,7 @@ private_files=[{json.dumps(str(record))}]
 
         snapshot = installation / "share/state_snapshot.py"
         def snapshot_command(*args):
-            return run("/usr/bin/python3", snapshot, *args, env=environment, cwd=root)
+            return run(PYTHON, snapshot, *args, env=environment, cwd=root)
         snapshot_command("backup", "--database", db, "--config", config, "--output", root / "snapshot")
         snapshot_command("restore", "--snapshot", root / "snapshot", "--output", root / "recovery")
         with sqlite3.connect(root / "recovery/state.sqlite3") as conn:
@@ -229,6 +238,7 @@ private_files=[{json.dumps(str(record))}]
         checks.append("legacy v5: dry-run, repeated migration, rollback, durable-write refusal and explicit backup restoration")
         result = {"build": manifest["build"], "archive_sha256": expected,
                   "synthetic_config_fingerprint": fingerprint, "passed": checks,
+                  "platform": f"{platform.system()} {platform.machine()}",
                   "deployment_ready": False, "scope": "isolated synthetic candidate packaging rehearsal; no live credentials or Slack"}
         report.write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))

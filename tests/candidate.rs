@@ -44,6 +44,20 @@ fn build() -> Build {
 }
 
 #[test]
+fn deployment_record_path_through_a_symlinked_directory_matches_resolved_private_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let real = temp.path().join("real");
+    fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, temp.path().join("link")).unwrap();
+    let config = fixture(&temp.path().join("link"));
+    let path = temp.path().join("link/deployment.json");
+    candidate::write_attestation(&config, &path, build(), 123.).unwrap();
+    candidate::validate(&config, &build(), &path).unwrap();
+    let unlisted = temp.path().join("link/other.json");
+    assert!(candidate::write_attestation(&config, &unlisted, build(), 123.).is_err());
+}
+
+#[test]
 fn deployment_record_binds_build_config_host_and_explicit_checks() {
     let temp = tempfile::tempdir().unwrap();
     let config = fixture(temp.path());

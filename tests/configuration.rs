@@ -336,7 +336,8 @@ fn remote_machine() -> &'static str {
 #[test]
 fn isolation_inventory_resolves_only_local_paths_and_preserves_source_and_legacy_defaults() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    // Resolved paths are canonical (macOS temp dirs live under /private/var).
+    let root = &dir.path().canonicalize().unwrap();
     setup(root);
     let path = root.join("etc/config.toml");
     let source = format!("{}{}\n# Owner-provisioned, no tokens stored here.\n[isolation]\nprivate_files=['keys/control.key']\nmcp_aliases=['opaque-wrapper']\nmcp_urls=['http://localhost:8123/fridica']\n[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/.local/state/fridica/control.sock','/shared/private/state.db']\n",basic(root),remote_machine());
@@ -451,7 +452,8 @@ fn offline_cli_reports_missing_and_configured_inventory_without_probe_or_private
 #[test]
 fn mcp_source_inventory_resolves_local_files_and_requires_safe_target_paths() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
+    // Resolved paths are canonical (macOS temp dirs live under /private/var).
+    let root = &dir.path().canonicalize().unwrap();
     setup(root);
     let source = format!("{}{}\n[isolation]\nsettings_files=['sources/extra.toml']\nmcp_inventory_complete=true\n[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/sources/managed.json']\nmcp_inventory_complete=true\n", basic(root), remote_machine());
     let config = loader::parse(&source, &root.join("etc/config.toml"), &context(root)).unwrap();
@@ -585,7 +587,7 @@ async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflict
     // Crash after intent but before rename. Startup records not_applied.
     let edit = Prepared::new(&updated, "limits", &json!({"max_jobs":1}), &ctx).unwrap();
     let intent = journal::Intent {
-        path: path.clone(),
+        path: updated.path.clone(),
         before: updated.fingerprint.clone(),
         after: edit.config.fingerprint,
     };

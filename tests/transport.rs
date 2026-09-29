@@ -3,7 +3,7 @@ use fridica::exec::{
     sandbox, shell, ssh,
 };
 use std::{collections::BTreeMap, path::Path, time::Duration};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 fn launch(script: &str, cwd: &Path) -> Launch {
     Launch {
         argv: vec!["sh".into(), "-c".into(), script.into()],
@@ -255,6 +255,7 @@ async fn remote_watchdog_preserves_status_and_cleans_private_fifo() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn remote_channel_eof_and_wrapper_signal_kill_agents_and_tools() {
+    use tokio::io::AsyncWriteExt;
     let dir = tempfile::tempdir().unwrap();
     for stop in ["eof", "signal"] {
         let agent = dir.path().join(format!("agent-{stop}"));
@@ -401,12 +402,12 @@ fn local_artifact_reads_confine_symlinks_types_and_size() {
         assert!(read_file(&path, &roots, 100).is_err());
     }
     assert!(read_file(&root.join("notes.md"), &roots, 3).is_err());
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        root.join("fifo"),
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .unwrap();
+    // rustix has no mkfifoat on Apple targets; the utility is portable.
+    assert!(std::process::Command::new("mkfifo")
+        .arg(root.join("fifo"))
+        .status()
+        .unwrap()
+        .success());
     assert!(read_file(&root.join("fifo"), &roots, 100).is_err());
 }
 #[test]

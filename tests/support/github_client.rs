@@ -208,8 +208,10 @@ async fn gh_errors_malformed_output_and_process_limits_are_truthful() {
         (json!({"hang":true}), Failure::Unavailable),
     ] {
         let h = Harness::new().await;
+        // Leave time for interpreter startup (slow on macOS) but stay below the
+        // script's 0.4 s delay before writing `survived`.
         let timeout = if reply["hang"] == true {
-            Duration::from_millis(100)
+            Duration::from_millis(300)
         } else {
             Duration::from_secs(2)
         };

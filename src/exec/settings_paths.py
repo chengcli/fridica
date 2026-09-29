@@ -22,11 +22,23 @@ def within(value, root):
     return value == root or value.startswith(root.rstrip("/") + "/")
 
 
+def system_path(value):
+    """Follow only macOS's root-owned /etc, /tmp and /var links into /private."""
+    if sys.platform == "darwin":
+        head = value[1:].partition("/")[0]
+        if head in ("etc", "tmp", "var"):
+            info = os.lstat("/" + head)
+            if (stat.S_ISLNK(info.st_mode) and info.st_uid == 0
+                    and os.readlink("/" + head) == "private/" + head):
+                return "/private" + value
+    return value
+
+
 def directory(value, create=False):
     """Never follow even an ancestor symlink or race a path-based mkdir."""
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        for part in value.split("/")[1:]:
+        for part in system_path(value).split("/")[1:]:
             if not part:
                 continue
             if create:

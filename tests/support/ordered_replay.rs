@@ -57,7 +57,11 @@ impl Tape {
         }))
     }
     pub fn bind(&self, root: &str, fingerprint: &str) {
+        // Configuration resolves symlinked temp roots (macOS /var -> /private/var);
+        // replace the longer canonical form first.
+        let canonical = std::fs::canonicalize(root).unwrap();
         *self.bindings.lock().unwrap() = vec![
+            (canonical.to_str().unwrap().into(), "__ROOT__".into()),
             (root.into(), "__ROOT__".into()),
             (fingerprint.into(), "__CONFIG__".into()),
         ];

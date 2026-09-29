@@ -347,6 +347,15 @@ async fn timeout_reaps_descendants_and_removes_schema_scratch_directory() {
             Some("Z")
         );
     }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid.trim()])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&out.stdout);
+        assert!(state.trim().is_empty() || state.trim().starts_with('Z'));
+    }
     fixture.pristine();
 }
 

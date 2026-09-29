@@ -128,6 +128,16 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             snapshot.restore(self.root, self.root / "incomplete")
 
+    def test_native_target_accepts_only_supported_matching_toolchains(self):
+        linux = "rustc 1.88.0\nhost: x86_64-unknown-linux-gnu\n"
+        mac = "rustc 1.88.0\nhost: aarch64-apple-darwin\n"
+        self.assertEqual(packager.native_target("Linux", "x86_64", linux), "x86_64-unknown-linux-gnu")
+        self.assertEqual(packager.native_target("Darwin", "arm64", mac), "aarch64-apple-darwin")
+        for system, machine, toolchain in [("Darwin", "arm64", linux), ("Linux", "x86_64", mac),
+                                           ("Linux", "aarch64", linux), ("Darwin", "x86_64", mac)]:
+            with self.assertRaises(SystemExit):
+                packager.native_target(system, machine, toolchain)
+
 
 if __name__ == "__main__":
     unittest.main()
