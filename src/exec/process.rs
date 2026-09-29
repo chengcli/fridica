@@ -163,14 +163,7 @@ impl Process {
         Ok(())
     }
     fn signal(&self, signal: Signal) -> Result<()> {
-        match kill_process_group(self.group, signal) {
-            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-            Err(rustix::io::Errno::PERM) => match kill_process(self.group, signal) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-                Err(e) => Err(e.into()),
-            },
-            Err(e) => Err(e.into()),
-        }
+        signal_group(self.group, signal, kill_process_group, kill_process)
     }
     pub async fn terminate(&mut self, grace: Duration) -> Result<()> {
         if self.terminated {
@@ -193,6 +186,26 @@ impl Process {
         Ok(())
     }
 }
+
+fn signal_group(
+    group: Pid,
+    signal: Signal,
+    group_signal: impl FnOnce(Pid, Signal) -> rustix::io::Result<()>,
+    leader_signal: impl FnOnce(Pid, Signal) -> rustix::io::Result<()>,
+) -> Result<()> {
+    match group_signal(group, signal) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(rustix::io::Errno::PERM) => match leader_signal(group, signal) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+            Err(e) => Err(e.into()),
+        },
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/support/process_signals.rs"]
+mod signal_tests;
 impl Drop for Process {
     fn drop(&mut self) {
         if !self.terminated {

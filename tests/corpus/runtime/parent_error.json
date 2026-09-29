@@ -1,0 +1,1756 @@
+{
+  "events": [
+    {
+      "at": 20.0,
+      "kind": "call",
+      "payload": {
+        "arguments": {
+          "call": "decide",
+          "errors": [],
+          "github_state": [],
+          "history": [
+            {
+              "attachments": [],
+              "event_id": "e1",
+              "files": [],
+              "meta": null,
+              "sender": "UALICE",
+              "text": "<@UOWNER> run checks",
+              "ts": "100.1"
+            }
+          ],
+          "inbox_id": 1,
+          "linked": [],
+          "obligations": [
+            {
+              "deliveries": [],
+              "disposition": {},
+              "due": 920.0,
+              "id": "obligation-0000000000000001",
+              "kind": "mention",
+              "source": {
+                "event_id": "e1"
+              },
+              "state": "open",
+              "summary": "Owner mentioned"
+            }
+          ],
+          "previous": null,
+          "session": {
+            "channel": "CROOM",
+            "channel_context": [],
+            "context": {},
+            "control": "active",
+            "debriefed_turn": 0,
+            "decisions": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "",
+            "last_unsolicited": null,
+            "machines": [
+              {
+                "backends": [
+                  "codex"
+                ],
+                "busy_jobs": 0,
+                "default_backend": "codex",
+                "fetch_repos": {},
+                "max_jobs": 2,
+                "name": "local",
+                "resources": {},
+                "tags": [],
+                "workspaces": {
+                  "project": "write"
+                }
+              }
+            ],
+            "no_progress": 0,
+            "notes": {
+              "data": {},
+              "revision": 0
+            },
+            "parent_review_required": false,
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "new",
+            "summary": "",
+            "turns": 0,
+            "version": 0,
+            "wait_streak": 0,
+            "work": {
+              "busy": {},
+              "controls": [],
+              "jobs": [],
+              "workers": []
+            },
+            "workspace": "TTEAM"
+          },
+          "trigger": {
+            "kind": "message",
+            "message": {
+              "attachments": [],
+              "event_id": "e1",
+              "files": [],
+              "meta": null,
+              "sender": "UALICE",
+              "text": "<@UOWNER> run checks",
+              "ts": "100.1"
+            },
+            "payload": {},
+            "ref": "e1"
+          }
+        },
+        "id": 1,
+        "operation": "parent.decide"
+      },
+      "seq": 1
+    },
+    {
+      "at": 20.0,
+      "kind": "result",
+      "payload": {
+        "id": 1,
+        "value": {
+          "Err": {
+            "code": "script_exhausted"
+          }
+        }
+      },
+      "seq": 2
+    },
+    {
+      "at": 20.0,
+      "kind": "call",
+      "payload": {
+        "arguments": {
+          "attempt": 1,
+          "id": 1,
+          "post": {
+            "after": "",
+            "blob": null,
+            "channel": "CROOM",
+            "filename": "",
+            "idem_key": "1:reply",
+            "kind": "reply",
+            "meta": {
+              "kind": "reply",
+              "owner": "UOWNER",
+              "session": "TTEAM:CROOM:100.1",
+              "status": "blocked",
+              "turn": 1,
+              "v": 2,
+              "worker": ""
+            },
+            "session_id": "TTEAM:CROOM:100.1",
+            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+            "thread_ts": "100.1"
+          }
+        },
+        "id": 2,
+        "operation": "delivery.send"
+      },
+      "seq": 3
+    },
+    {
+      "at": 20.0,
+      "kind": "result",
+      "payload": {
+        "id": 2,
+        "value": {
+          "outcome": "sent",
+          "reference": "200.1"
+        }
+      },
+      "seq": 4
+    }
+  ],
+  "scenario": "parent_error",
+  "snapshots": [
+    {
+      "checkpoint": "duplicate_intake",
+      "state": {
+        "approvals": [],
+        "artifacts": [],
+        "audit": [],
+        "campaign_evidence": [],
+        "campaign_mirrors": [],
+        "channel_watermarks": [],
+        "cooldowns": [],
+        "health_events": [],
+        "jobs": [],
+        "messages": [
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "e1",
+            "files_json": [],
+            "id": 1,
+            "mentions_owner": 1,
+            "meta_json": null,
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UALICE",
+            "source": "socket",
+            "text": "<@UOWNER> run checks",
+            "thread_ts": null,
+            "ts": "100.1",
+            "verdict": "",
+            "workspace": "TTEAM"
+          }
+        ],
+        "meta": [
+          {
+            "key": "schema_version",
+            "value": "6"
+          },
+          {
+            "key": "durable_generation",
+            "value": "6"
+          }
+        ],
+        "notes": [],
+        "obligation_posts": [],
+        "obligations": [
+          {
+            "created": 20.0,
+            "dedup_key": "mention:TTEAM:CROOM:100.1",
+            "due": 920.0,
+            "id": "obligation-0000000000000001",
+            "kind": "mention",
+            "session_id": "TTEAM:CROOM:100.1",
+            "source_json": {
+              "event_id": "e1"
+            },
+            "state": "open",
+            "state_json": {},
+            "summary": "Owner mentioned",
+            "updated": 20.0
+          }
+        ],
+        "outbox": [],
+        "overseer_exchanges": [],
+        "parent_turns": [],
+        "replay_events": [
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000001",
+              "owner": "UOWNER"
+            },
+            "seq": 1,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000002",
+              "owner": "UOWNER"
+            },
+            "seq": 2,
+            "time": 20.0
+          }
+        ],
+        "reply_reservations": [],
+        "report_exports": [],
+        "report_posts": [],
+        "reports": [],
+        "runtime": [],
+        "thread_inbox": [
+          {
+            "attempts": 0,
+            "created": 20.0,
+            "dedup_key": null,
+            "id": 1,
+            "kind": "message",
+            "not_before": 0.0,
+            "payload_json": {},
+            "ref": "e1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "pending"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "CROOM",
+            "context_json": {},
+            "control": "active",
+            "control_json": {
+              "kind": "active"
+            },
+            "created": 20.0,
+            "debriefed_turn": 0,
+            "decisions_json": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "",
+            "last_unsolicited": 0.0,
+            "no_progress": 0,
+            "pause_reason": "",
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "new",
+            "summary": "",
+            "throttled_until": 0.0,
+            "turns": 0,
+            "updated": 20.0,
+            "version": 0,
+            "wait_streak": 0,
+            "workspace": "TTEAM"
+          }
+        ],
+        "work_items": [],
+        "workers": []
+      }
+    },
+    {
+      "checkpoint": "first_pass",
+      "state": {
+        "approvals": [],
+        "artifacts": [],
+        "audit": [
+          {
+            "action": "notes.write",
+            "actor": "parent",
+            "details_json": {
+              "inbox_id": 1,
+              "revision": 1
+            },
+            "id": 1,
+            "target": "TTEAM:CROOM:100.1",
+            "time": 20.0
+          },
+          {
+            "action": "parent.blocked",
+            "actor": "system",
+            "details_json": {
+              "inbox_id": 1,
+              "reason": "parent_unavailable"
+            },
+            "id": 2,
+            "target": "TTEAM:CROOM:100.1",
+            "time": 20.0
+          }
+        ],
+        "campaign_evidence": [],
+        "campaign_mirrors": [],
+        "channel_watermarks": [],
+        "cooldowns": [],
+        "health_events": [],
+        "jobs": [],
+        "messages": [
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "e1",
+            "files_json": [],
+            "id": 1,
+            "mentions_owner": 1,
+            "meta_json": null,
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UALICE",
+            "source": "socket",
+            "text": "<@UOWNER> run checks",
+            "thread_ts": null,
+            "ts": "100.1",
+            "verdict": "respond: addressed",
+            "workspace": "TTEAM"
+          },
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "self:CROOM:200.1",
+            "files_json": [],
+            "id": 2,
+            "mentions_owner": 0,
+            "meta_json": {
+              "kind": "reply",
+              "owner": "UOWNER",
+              "session": "TTEAM:CROOM:100.1",
+              "status": "blocked",
+              "turn": 1,
+              "v": 2,
+              "worker": ""
+            },
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UOWNER",
+            "source": "self",
+            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+            "thread_ts": "100.1",
+            "ts": "200.1",
+            "verdict": "",
+            "workspace": "TTEAM"
+          }
+        ],
+        "meta": [
+          {
+            "key": "schema_version",
+            "value": "6"
+          },
+          {
+            "key": "durable_generation",
+            "value": "33"
+          }
+        ],
+        "notes": [
+          {
+            "actor": "parent",
+            "created": 20.0,
+            "data_json": {
+              "assignee": "",
+              "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+              "next_step": "Owner review before retrying"
+            },
+            "id": 1,
+            "revision": 1,
+            "session_id": "TTEAM:CROOM:100.1",
+            "source": "1"
+          }
+        ],
+        "obligation_posts": [],
+        "obligations": [
+          {
+            "created": 20.0,
+            "dedup_key": "mention:TTEAM:CROOM:100.1",
+            "due": 920.0,
+            "id": "obligation-0000000000000001",
+            "kind": "mention",
+            "session_id": "TTEAM:CROOM:100.1",
+            "source_json": {
+              "event_id": "e1"
+            },
+            "state": "open",
+            "state_json": {},
+            "summary": "Owner mentioned",
+            "updated": 20.0
+          }
+        ],
+        "outbox": [
+          {
+            "after": "",
+            "answers_json": [],
+            "attempts": 1,
+            "blob": null,
+            "channel": "CROOM",
+            "created": 20.0,
+            "delivered_at": 20.0,
+            "error": "",
+            "filename": "",
+            "id": 1,
+            "idem_key": "1:reply",
+            "kind": "reply",
+            "meta_json": {
+              "kind": "reply",
+              "owner": "UOWNER",
+              "session": "TTEAM:CROOM:100.1",
+              "status": "blocked",
+              "turn": 1,
+              "v": 2,
+              "worker": ""
+            },
+            "retry_at": 0.0,
+            "retry_base": 0,
+            "sent_ts": "200.1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "sent",
+            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+            "thread_ts": "100.1",
+            "trigger_class": "human",
+            "trigger_event": "e1"
+          }
+        ],
+        "overseer_exchanges": [],
+        "parent_turns": [
+          {
+            "action_json": {
+              "asks": [],
+              "context": {
+                "branch": "",
+                "machine": "",
+                "repo": "",
+                "workspace": ""
+              },
+              "decisions": [],
+              "delegations": [],
+              "dispositions": [],
+              "note": {
+                "assignee": "",
+                "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+                "kind": "status",
+                "next_step": "Owner review before retrying",
+                "repo": ""
+              },
+              "reopen_blocked": false,
+              "reply": {
+                "answers": [],
+                "details": "",
+                "discussion": "ongoing",
+                "send": true,
+                "status": "blocked",
+                "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
+              },
+              "summary": "",
+              "worker_control": []
+            },
+            "backend": "adapter",
+            "call": "decide",
+            "context_json": {
+              "call": "decide",
+              "errors": [],
+              "github_state": [],
+              "history": [
+                {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                }
+              ],
+              "inbox_id": 1,
+              "linked": [],
+              "obligations": [
+                {
+                  "deliveries": [],
+                  "disposition": {},
+                  "due": 920.0,
+                  "id": "obligation-0000000000000001",
+                  "kind": "mention",
+                  "source": {
+                    "event_id": "e1"
+                  },
+                  "state": "open",
+                  "summary": "Owner mentioned"
+                }
+              ],
+              "previous": null,
+              "session": {
+                "channel": "CROOM",
+                "channel_context": [],
+                "context": {},
+                "control": "active",
+                "debriefed_turn": 0,
+                "decisions": [],
+                "id": "TTEAM:CROOM:100.1",
+                "last_reply_hash": "",
+                "last_unsolicited": null,
+                "machines": [
+                  {
+                    "backends": [
+                      "codex"
+                    ],
+                    "busy_jobs": 0,
+                    "default_backend": "codex",
+                    "fetch_repos": {},
+                    "max_jobs": 2,
+                    "name": "local",
+                    "resources": {},
+                    "tags": [],
+                    "workspaces": {
+                      "project": "write"
+                    }
+                  }
+                ],
+                "no_progress": 0,
+                "notes": {
+                  "data": {},
+                  "revision": 0
+                },
+                "parent_review_required": false,
+                "reset_at": 0.0,
+                "root_ts": "100.1",
+                "status": "new",
+                "summary": "",
+                "turns": 0,
+                "version": 0,
+                "wait_streak": 0,
+                "work": {
+                  "busy": {},
+                  "controls": [],
+                  "jobs": [],
+                  "workers": []
+                },
+                "workspace": "TTEAM"
+              },
+              "trigger": {
+                "kind": "message",
+                "message": {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                },
+                "payload": {},
+                "ref": "e1"
+              }
+            },
+            "created": 20.0,
+            "error": "parent_unavailable",
+            "id": 1,
+            "inbox_id": 1,
+            "latency_ms": 0,
+            "model": "",
+            "prompt_chars": 0,
+            "response_json": null,
+            "session_id": "TTEAM:CROOM:100.1"
+          }
+        ],
+        "replay_events": [
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000001",
+              "owner": "UOWNER"
+            },
+            "seq": 1,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000002",
+              "owner": "UOWNER"
+            },
+            "seq": 2,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "parent_call",
+            "payload_json": {
+              "call": "decide",
+              "errors": [],
+              "github_state": [],
+              "history": [
+                {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                }
+              ],
+              "inbox_id": 1,
+              "linked": [],
+              "obligations": [
+                {
+                  "deliveries": [],
+                  "disposition": {},
+                  "due": 920.0,
+                  "id": "obligation-0000000000000001",
+                  "kind": "mention",
+                  "source": {
+                    "event_id": "e1"
+                  },
+                  "state": "open",
+                  "summary": "Owner mentioned"
+                }
+              ],
+              "previous": null,
+              "session": {
+                "channel": "CROOM",
+                "channel_context": [],
+                "context": {},
+                "control": "active",
+                "debriefed_turn": 0,
+                "decisions": [],
+                "id": "TTEAM:CROOM:100.1",
+                "last_reply_hash": "",
+                "last_unsolicited": null,
+                "machines": [
+                  {
+                    "backends": [
+                      "codex"
+                    ],
+                    "busy_jobs": 0,
+                    "default_backend": "codex",
+                    "fetch_repos": {},
+                    "max_jobs": 2,
+                    "name": "local",
+                    "resources": {},
+                    "tags": [],
+                    "workspaces": {
+                      "project": "write"
+                    }
+                  }
+                ],
+                "no_progress": 0,
+                "notes": {
+                  "data": {},
+                  "revision": 0
+                },
+                "parent_review_required": false,
+                "reset_at": 0.0,
+                "root_ts": "100.1",
+                "status": "new",
+                "summary": "",
+                "turns": 0,
+                "version": 0,
+                "wait_streak": 0,
+                "work": {
+                  "busy": {},
+                  "controls": [],
+                  "jobs": [],
+                  "workers": []
+                },
+                "workspace": "TTEAM"
+              },
+              "trigger": {
+                "kind": "message",
+                "message": {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                },
+                "payload": {},
+                "ref": "e1"
+              }
+            },
+            "seq": 3,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "parent_result",
+            "payload_json": {
+              "call_id": 3,
+              "error": "parent_unavailable",
+              "failure": {
+                "code": "script_exhausted"
+              },
+              "response": null
+            },
+            "seq": 4,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "actor_commit",
+            "payload_json": {
+              "decision": {
+                "asks": [],
+                "context": {
+                  "branch": "",
+                  "machine": "",
+                  "repo": "",
+                  "workspace": ""
+                },
+                "decisions": [],
+                "delegations": [],
+                "dispositions": [],
+                "note": {
+                  "assignee": "",
+                  "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+                  "kind": "status",
+                  "next_step": "Owner review before retrying",
+                  "repo": ""
+                },
+                "reopen_blocked": false,
+                "reply": {
+                  "answers": [],
+                  "details": "",
+                  "discussion": "ongoing",
+                  "send": true,
+                  "status": "blocked",
+                  "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
+                },
+                "summary": "",
+                "worker_control": []
+              },
+              "inbox_id": 1,
+              "jobs": [],
+              "reply_repeat": {
+                "allowed": true,
+                "previous": null,
+                "reason": "addressed or explicit repost"
+              },
+              "request": {
+                "call": "decide",
+                "errors": [],
+                "github_state": [],
+                "history": [
+                  {
+                    "attachments": [],
+                    "event_id": "e1",
+                    "files": [],
+                    "meta": null,
+                    "sender": "UALICE",
+                    "text": "<@UOWNER> run checks",
+                    "ts": "100.1"
+                  }
+                ],
+                "inbox_id": 1,
+                "linked": [],
+                "obligations": [
+                  {
+                    "deliveries": [],
+                    "disposition": {},
+                    "due": 920.0,
+                    "id": "obligation-0000000000000001",
+                    "kind": "mention",
+                    "source": {
+                      "event_id": "e1"
+                    },
+                    "state": "open",
+                    "summary": "Owner mentioned"
+                  }
+                ],
+                "previous": null,
+                "session": {
+                  "channel": "CROOM",
+                  "channel_context": [],
+                  "context": {},
+                  "control": "active",
+                  "debriefed_turn": 0,
+                  "decisions": [],
+                  "id": "TTEAM:CROOM:100.1",
+                  "last_reply_hash": "",
+                  "last_unsolicited": null,
+                  "machines": [
+                    {
+                      "backends": [
+                        "codex"
+                      ],
+                      "busy_jobs": 0,
+                      "default_backend": "codex",
+                      "fetch_repos": {},
+                      "max_jobs": 2,
+                      "name": "local",
+                      "resources": {},
+                      "tags": [],
+                      "workspaces": {
+                        "project": "write"
+                      }
+                    }
+                  ],
+                  "no_progress": 0,
+                  "notes": {
+                    "data": {},
+                    "revision": 0
+                  },
+                  "parent_review_required": false,
+                  "reset_at": 0.0,
+                  "root_ts": "100.1",
+                  "status": "new",
+                  "summary": "",
+                  "turns": 0,
+                  "version": 0,
+                  "wait_streak": 0,
+                  "work": {
+                    "busy": {},
+                    "controls": [],
+                    "jobs": [],
+                    "workers": []
+                  },
+                  "workspace": "TTEAM"
+                },
+                "trigger": {
+                  "kind": "message",
+                  "message": {
+                    "attachments": [],
+                    "event_id": "e1",
+                    "files": [],
+                    "meta": null,
+                    "sender": "UALICE",
+                    "text": "<@UOWNER> run checks",
+                    "ts": "100.1"
+                  },
+                  "payload": {},
+                  "ref": "e1"
+                }
+              },
+              "workers": []
+            },
+            "seq": 5,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "delivery_call",
+            "payload_json": {
+              "attempt": 1,
+              "id": 1,
+              "post": {
+                "after": "",
+                "blob": null,
+                "channel": "CROOM",
+                "filename": "",
+                "idem_key": "1:reply",
+                "kind": "reply",
+                "meta": {
+                  "kind": "reply",
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "status": "blocked",
+                  "turn": 1,
+                  "v": 2,
+                  "worker": ""
+                },
+                "session_id": "TTEAM:CROOM:100.1",
+                "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+                "thread_ts": "100.1"
+              }
+            },
+            "seq": 6,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "delivery",
+            "payload_json": {
+              "attempt": 1,
+              "outbox_id": 1,
+              "raw_result": {
+                "outcome": "sent",
+                "reference": "200.1"
+              },
+              "result": {
+                "outcome": "sent",
+                "reference": "200.1"
+              }
+            },
+            "seq": 7,
+            "time": 20.0
+          }
+        ],
+        "reply_reservations": [
+          {
+            "id": "reply-0000000000000003",
+            "inbox_id": 1,
+            "outbox_id": 1,
+            "reserved_at": 20.0,
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "sent",
+            "trigger_class": "human"
+          }
+        ],
+        "report_exports": [],
+        "report_posts": [],
+        "reports": [],
+        "runtime": [],
+        "thread_inbox": [
+          {
+            "attempts": 0,
+            "created": 20.0,
+            "dedup_key": null,
+            "id": 1,
+            "kind": "message",
+            "not_before": 0.0,
+            "payload_json": {},
+            "ref": "e1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "done"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "CROOM",
+            "context_json": {},
+            "control": "active",
+            "control_json": {
+              "kind": "active"
+            },
+            "created": 20.0,
+            "debriefed_turn": 0,
+            "decisions_json": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "efff2a83ffa667441084ffd9a37c88a79ce16e1b7637e9f39095b635b367691a",
+            "last_unsolicited": 0.0,
+            "no_progress": 0,
+            "pause_reason": "",
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "blocked",
+            "summary": "",
+            "throttled_until": 0.0,
+            "turns": 1,
+            "updated": 20.0,
+            "version": 1,
+            "wait_streak": 0,
+            "workspace": "TTEAM"
+          }
+        ],
+        "work_items": [],
+        "workers": []
+      }
+    },
+    {
+      "checkpoint": "closed",
+      "state": {
+        "approvals": [],
+        "artifacts": [],
+        "audit": [
+          {
+            "action": "notes.write",
+            "actor": "parent",
+            "details_json": {
+              "inbox_id": 1,
+              "revision": 1
+            },
+            "id": 1,
+            "target": "TTEAM:CROOM:100.1",
+            "time": 20.0
+          },
+          {
+            "action": "parent.blocked",
+            "actor": "system",
+            "details_json": {
+              "inbox_id": 1,
+              "reason": "parent_unavailable"
+            },
+            "id": 2,
+            "target": "TTEAM:CROOM:100.1",
+            "time": 20.0
+          }
+        ],
+        "campaign_evidence": [],
+        "campaign_mirrors": [],
+        "channel_watermarks": [],
+        "cooldowns": [],
+        "health_events": [],
+        "jobs": [],
+        "messages": [
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "e1",
+            "files_json": [],
+            "id": 1,
+            "mentions_owner": 1,
+            "meta_json": null,
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UALICE",
+            "source": "socket",
+            "text": "<@UOWNER> run checks",
+            "thread_ts": null,
+            "ts": "100.1",
+            "verdict": "respond: addressed",
+            "workspace": "TTEAM"
+          },
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "self:CROOM:200.1",
+            "files_json": [],
+            "id": 2,
+            "mentions_owner": 0,
+            "meta_json": {
+              "kind": "reply",
+              "owner": "UOWNER",
+              "session": "TTEAM:CROOM:100.1",
+              "status": "blocked",
+              "turn": 1,
+              "v": 2,
+              "worker": ""
+            },
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UOWNER",
+            "source": "self",
+            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+            "thread_ts": "100.1",
+            "ts": "200.1",
+            "verdict": "",
+            "workspace": "TTEAM"
+          }
+        ],
+        "meta": [
+          {
+            "key": "schema_version",
+            "value": "6"
+          },
+          {
+            "key": "durable_generation",
+            "value": "33"
+          }
+        ],
+        "notes": [
+          {
+            "actor": "parent",
+            "created": 20.0,
+            "data_json": {
+              "assignee": "",
+              "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+              "next_step": "Owner review before retrying"
+            },
+            "id": 1,
+            "revision": 1,
+            "session_id": "TTEAM:CROOM:100.1",
+            "source": "1"
+          }
+        ],
+        "obligation_posts": [],
+        "obligations": [
+          {
+            "created": 20.0,
+            "dedup_key": "mention:TTEAM:CROOM:100.1",
+            "due": 920.0,
+            "id": "obligation-0000000000000001",
+            "kind": "mention",
+            "session_id": "TTEAM:CROOM:100.1",
+            "source_json": {
+              "event_id": "e1"
+            },
+            "state": "open",
+            "state_json": {},
+            "summary": "Owner mentioned",
+            "updated": 20.0
+          }
+        ],
+        "outbox": [
+          {
+            "after": "",
+            "answers_json": [],
+            "attempts": 1,
+            "blob": null,
+            "channel": "CROOM",
+            "created": 20.0,
+            "delivered_at": 20.0,
+            "error": "",
+            "filename": "",
+            "id": 1,
+            "idem_key": "1:reply",
+            "kind": "reply",
+            "meta_json": {
+              "kind": "reply",
+              "owner": "UOWNER",
+              "session": "TTEAM:CROOM:100.1",
+              "status": "blocked",
+              "turn": 1,
+              "v": 2,
+              "worker": ""
+            },
+            "retry_at": 0.0,
+            "retry_base": 0,
+            "sent_ts": "200.1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "sent",
+            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+            "thread_ts": "100.1",
+            "trigger_class": "human",
+            "trigger_event": "e1"
+          }
+        ],
+        "overseer_exchanges": [],
+        "parent_turns": [
+          {
+            "action_json": {
+              "asks": [],
+              "context": {
+                "branch": "",
+                "machine": "",
+                "repo": "",
+                "workspace": ""
+              },
+              "decisions": [],
+              "delegations": [],
+              "dispositions": [],
+              "note": {
+                "assignee": "",
+                "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+                "kind": "status",
+                "next_step": "Owner review before retrying",
+                "repo": ""
+              },
+              "reopen_blocked": false,
+              "reply": {
+                "answers": [],
+                "details": "",
+                "discussion": "ongoing",
+                "send": true,
+                "status": "blocked",
+                "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
+              },
+              "summary": "",
+              "worker_control": []
+            },
+            "backend": "adapter",
+            "call": "decide",
+            "context_json": {
+              "call": "decide",
+              "errors": [],
+              "github_state": [],
+              "history": [
+                {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                }
+              ],
+              "inbox_id": 1,
+              "linked": [],
+              "obligations": [
+                {
+                  "deliveries": [],
+                  "disposition": {},
+                  "due": 920.0,
+                  "id": "obligation-0000000000000001",
+                  "kind": "mention",
+                  "source": {
+                    "event_id": "e1"
+                  },
+                  "state": "open",
+                  "summary": "Owner mentioned"
+                }
+              ],
+              "previous": null,
+              "session": {
+                "channel": "CROOM",
+                "channel_context": [],
+                "context": {},
+                "control": "active",
+                "debriefed_turn": 0,
+                "decisions": [],
+                "id": "TTEAM:CROOM:100.1",
+                "last_reply_hash": "",
+                "last_unsolicited": null,
+                "machines": [
+                  {
+                    "backends": [
+                      "codex"
+                    ],
+                    "busy_jobs": 0,
+                    "default_backend": "codex",
+                    "fetch_repos": {},
+                    "max_jobs": 2,
+                    "name": "local",
+                    "resources": {},
+                    "tags": [],
+                    "workspaces": {
+                      "project": "write"
+                    }
+                  }
+                ],
+                "no_progress": 0,
+                "notes": {
+                  "data": {},
+                  "revision": 0
+                },
+                "parent_review_required": false,
+                "reset_at": 0.0,
+                "root_ts": "100.1",
+                "status": "new",
+                "summary": "",
+                "turns": 0,
+                "version": 0,
+                "wait_streak": 0,
+                "work": {
+                  "busy": {},
+                  "controls": [],
+                  "jobs": [],
+                  "workers": []
+                },
+                "workspace": "TTEAM"
+              },
+              "trigger": {
+                "kind": "message",
+                "message": {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                },
+                "payload": {},
+                "ref": "e1"
+              }
+            },
+            "created": 20.0,
+            "error": "parent_unavailable",
+            "id": 1,
+            "inbox_id": 1,
+            "latency_ms": 0,
+            "model": "",
+            "prompt_chars": 0,
+            "response_json": null,
+            "session_id": "TTEAM:CROOM:100.1"
+          }
+        ],
+        "replay_events": [
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000001",
+              "owner": "UOWNER"
+            },
+            "seq": 1,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000002",
+              "owner": "UOWNER"
+            },
+            "seq": 2,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "parent_call",
+            "payload_json": {
+              "call": "decide",
+              "errors": [],
+              "github_state": [],
+              "history": [
+                {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                }
+              ],
+              "inbox_id": 1,
+              "linked": [],
+              "obligations": [
+                {
+                  "deliveries": [],
+                  "disposition": {},
+                  "due": 920.0,
+                  "id": "obligation-0000000000000001",
+                  "kind": "mention",
+                  "source": {
+                    "event_id": "e1"
+                  },
+                  "state": "open",
+                  "summary": "Owner mentioned"
+                }
+              ],
+              "previous": null,
+              "session": {
+                "channel": "CROOM",
+                "channel_context": [],
+                "context": {},
+                "control": "active",
+                "debriefed_turn": 0,
+                "decisions": [],
+                "id": "TTEAM:CROOM:100.1",
+                "last_reply_hash": "",
+                "last_unsolicited": null,
+                "machines": [
+                  {
+                    "backends": [
+                      "codex"
+                    ],
+                    "busy_jobs": 0,
+                    "default_backend": "codex",
+                    "fetch_repos": {},
+                    "max_jobs": 2,
+                    "name": "local",
+                    "resources": {},
+                    "tags": [],
+                    "workspaces": {
+                      "project": "write"
+                    }
+                  }
+                ],
+                "no_progress": 0,
+                "notes": {
+                  "data": {},
+                  "revision": 0
+                },
+                "parent_review_required": false,
+                "reset_at": 0.0,
+                "root_ts": "100.1",
+                "status": "new",
+                "summary": "",
+                "turns": 0,
+                "version": 0,
+                "wait_streak": 0,
+                "work": {
+                  "busy": {},
+                  "controls": [],
+                  "jobs": [],
+                  "workers": []
+                },
+                "workspace": "TTEAM"
+              },
+              "trigger": {
+                "kind": "message",
+                "message": {
+                  "attachments": [],
+                  "event_id": "e1",
+                  "files": [],
+                  "meta": null,
+                  "sender": "UALICE",
+                  "text": "<@UOWNER> run checks",
+                  "ts": "100.1"
+                },
+                "payload": {},
+                "ref": "e1"
+              }
+            },
+            "seq": 3,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "parent_result",
+            "payload_json": {
+              "call_id": 3,
+              "error": "parent_unavailable",
+              "failure": {
+                "code": "script_exhausted"
+              },
+              "response": null
+            },
+            "seq": 4,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "actor_commit",
+            "payload_json": {
+              "decision": {
+                "asks": [],
+                "context": {
+                  "branch": "",
+                  "machine": "",
+                  "repo": "",
+                  "workspace": ""
+                },
+                "decisions": [],
+                "delegations": [],
+                "dispositions": [],
+                "note": {
+                  "assignee": "",
+                  "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+                  "kind": "status",
+                  "next_step": "Owner review before retrying",
+                  "repo": ""
+                },
+                "reopen_blocked": false,
+                "reply": {
+                  "answers": [],
+                  "details": "",
+                  "discussion": "ongoing",
+                  "send": true,
+                  "status": "blocked",
+                  "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
+                },
+                "summary": "",
+                "worker_control": []
+              },
+              "inbox_id": 1,
+              "jobs": [],
+              "reply_repeat": {
+                "allowed": true,
+                "previous": null,
+                "reason": "addressed or explicit repost"
+              },
+              "request": {
+                "call": "decide",
+                "errors": [],
+                "github_state": [],
+                "history": [
+                  {
+                    "attachments": [],
+                    "event_id": "e1",
+                    "files": [],
+                    "meta": null,
+                    "sender": "UALICE",
+                    "text": "<@UOWNER> run checks",
+                    "ts": "100.1"
+                  }
+                ],
+                "inbox_id": 1,
+                "linked": [],
+                "obligations": [
+                  {
+                    "deliveries": [],
+                    "disposition": {},
+                    "due": 920.0,
+                    "id": "obligation-0000000000000001",
+                    "kind": "mention",
+                    "source": {
+                      "event_id": "e1"
+                    },
+                    "state": "open",
+                    "summary": "Owner mentioned"
+                  }
+                ],
+                "previous": null,
+                "session": {
+                  "channel": "CROOM",
+                  "channel_context": [],
+                  "context": {},
+                  "control": "active",
+                  "debriefed_turn": 0,
+                  "decisions": [],
+                  "id": "TTEAM:CROOM:100.1",
+                  "last_reply_hash": "",
+                  "last_unsolicited": null,
+                  "machines": [
+                    {
+                      "backends": [
+                        "codex"
+                      ],
+                      "busy_jobs": 0,
+                      "default_backend": "codex",
+                      "fetch_repos": {},
+                      "max_jobs": 2,
+                      "name": "local",
+                      "resources": {},
+                      "tags": [],
+                      "workspaces": {
+                        "project": "write"
+                      }
+                    }
+                  ],
+                  "no_progress": 0,
+                  "notes": {
+                    "data": {},
+                    "revision": 0
+                  },
+                  "parent_review_required": false,
+                  "reset_at": 0.0,
+                  "root_ts": "100.1",
+                  "status": "new",
+                  "summary": "",
+                  "turns": 0,
+                  "version": 0,
+                  "wait_streak": 0,
+                  "work": {
+                    "busy": {},
+                    "controls": [],
+                    "jobs": [],
+                    "workers": []
+                  },
+                  "workspace": "TTEAM"
+                },
+                "trigger": {
+                  "kind": "message",
+                  "message": {
+                    "attachments": [],
+                    "event_id": "e1",
+                    "files": [],
+                    "meta": null,
+                    "sender": "UALICE",
+                    "text": "<@UOWNER> run checks",
+                    "ts": "100.1"
+                  },
+                  "payload": {},
+                  "ref": "e1"
+                }
+              },
+              "workers": []
+            },
+            "seq": 5,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "delivery_call",
+            "payload_json": {
+              "attempt": 1,
+              "id": 1,
+              "post": {
+                "after": "",
+                "blob": null,
+                "channel": "CROOM",
+                "filename": "",
+                "idem_key": "1:reply",
+                "kind": "reply",
+                "meta": {
+                  "kind": "reply",
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "status": "blocked",
+                  "turn": 1,
+                  "v": 2,
+                  "worker": ""
+                },
+                "session_id": "TTEAM:CROOM:100.1",
+                "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
+                "thread_ts": "100.1"
+              }
+            },
+            "seq": 6,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "delivery",
+            "payload_json": {
+              "attempt": 1,
+              "outbox_id": 1,
+              "raw_result": {
+                "outcome": "sent",
+                "reference": "200.1"
+              },
+              "result": {
+                "outcome": "sent",
+                "reference": "200.1"
+              }
+            },
+            "seq": 7,
+            "time": 20.0
+          }
+        ],
+        "reply_reservations": [
+          {
+            "id": "reply-0000000000000003",
+            "inbox_id": 1,
+            "outbox_id": 1,
+            "reserved_at": 20.0,
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "sent",
+            "trigger_class": "human"
+          }
+        ],
+        "report_exports": [],
+        "report_posts": [],
+        "reports": [],
+        "runtime": [],
+        "thread_inbox": [
+          {
+            "attempts": 0,
+            "created": 20.0,
+            "dedup_key": null,
+            "id": 1,
+            "kind": "message",
+            "not_before": 0.0,
+            "payload_json": {},
+            "ref": "e1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "done"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "CROOM",
+            "context_json": {},
+            "control": "active",
+            "control_json": {
+              "kind": "active"
+            },
+            "created": 20.0,
+            "debriefed_turn": 0,
+            "decisions_json": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "efff2a83ffa667441084ffd9a37c88a79ce16e1b7637e9f39095b635b367691a",
+            "last_unsolicited": 0.0,
+            "no_progress": 0,
+            "pause_reason": "",
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "blocked",
+            "summary": "",
+            "throttled_until": 0.0,
+            "turns": 1,
+            "updated": 20.0,
+            "version": 1,
+            "wait_streak": 0,
+            "workspace": "TTEAM"
+          }
+        ],
+        "work_items": [],
+        "workers": []
+      }
+    }
+  ]
+}

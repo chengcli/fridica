@@ -3,7 +3,7 @@
 use super::{lock, private_file, schema};
 use crate::config;
 use anyhow::{bail, Context, Result};
-use rusqlite::{backup::Backup, Connection, OpenFlags};
+use rusqlite::{backup::Backup, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -126,6 +126,18 @@ pub fn dry_run(database: &Path, configuration: &Path) -> Result<Plan> {
 }
 
 pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> {
+    migrate_with_checkpoint(database, configuration, now, |_| Ok(()))
+}
+
+fn migrate_with_checkpoint(
+    database: &Path,
+    configuration: &Path,
+    now: f64,
+    mut checkpoint: impl FnMut(&str) -> Result<()>,
+) -> Result<Plan> {
+    if !now.is_finite() {
+        bail!("invalid migration time");
+    }
     let _guard = lock(database)?;
     let database = fs::canonicalize(database)?;
     let configuration = fs::canonicalize(configuration)?;
@@ -143,6 +155,9 @@ pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> 
         }
         if prior.phase == "rolled_back" {
             bail!("archive the completed rollback journal before a new migration");
+        }
+        if !matches!(prior.phase.as_str(), "preparing" | "prepared") {
+            bail!("migration journal is not resumable; finish rollback or restore explicitly");
         }
         prior
     } else {
@@ -169,6 +184,7 @@ pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> 
         atomic_write(&journal_path, &serde_json::to_vec_pretty(&journal)?)?;
         journal
     };
+    checkpoint("intent")?;
     let current_config = fs::read(&configuration)?;
     if digest(&current_config) != journal.config_before
         && current_config != journal.config_after.as_bytes()
@@ -187,20 +203,24 @@ pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> 
         Backup::new(&c, &mut backup)?.run_to_completion(128, Duration::from_millis(1), None)?;
         drop(backup);
         fs::File::open(&backup_path)?.sync_all()?;
+        checkpoint("database_backup")?;
         if !config_backup.exists() {
             atomic_write(&config_backup, &current_config)?;
         }
         if digest(&fs::read(&config_backup)?) != journal.config_before {
             bail!("configuration backup fingerprint mismatch");
         }
+        checkpoint("configuration_backup")?;
         journal.backup_hash = digest(&fs::read(&backup_path)?);
         journal.phase = "prepared".into();
         atomic_write(&journal_path, &serde_json::to_vec_pretty(&journal)?)?;
     }
+    checkpoint("prepared")?;
     if digest(&fs::read(&backup_path)?) != journal.backup_hash {
         bail!("database backup fingerprint mismatch");
     }
     schema::migrate(&mut c)?;
+    checkpoint("schema")?;
     // This transaction is idempotent across interruptions. System resume events
     // and their effects commit together; manual and unrecognized pauses remain.
     let tx = c.transaction()?;
@@ -253,19 +273,61 @@ pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> 
         tx.execute("INSERT INTO meta VALUES('v6_converted','1')", [])?;
     }
     schema::install_mutation_guards(&tx)?;
-    tx.commit()?;
-    atomic_write(&configuration, journal.config_after.as_bytes())?;
-    journal.generation = Some(c.query_row(
+    // Persist the rollback baseline in the conversion transaction, not after
+    // exporting configuration. Recovery must never bless intervening writes.
+    let generation: i64 = tx.query_row(
         "SELECT CAST(value AS INTEGER) FROM meta WHERE key='durable_generation'",
         [],
         |r| r.get(0),
-    )?);
+    )?;
+    let baseline: Option<i64> = tx
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM meta WHERE key='v6_migration_generation'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let baseline = match baseline {
+        Some(baseline) => baseline,
+        None => {
+            if converted && generation != 0 {
+                bail!("durable mutations occurred during interrupted migration");
+            }
+            let baseline = generation + 1;
+            tx.execute(
+                "INSERT INTO meta VALUES('v6_migration_generation',?)",
+                [baseline.to_string()],
+            )?;
+            baseline
+        }
+    };
+    if converted && baseline != generation && generation != 0 {
+        bail!("durable mutations occurred during interrupted migration");
+    }
+    tx.commit()?;
+    checkpoint("conversion")?;
+    config::editor::replace(
+        &configuration,
+        &digest(&current_config),
+        &journal.config_after,
+    )?;
+    checkpoint("configuration_export")?;
+    journal.generation = Some(baseline);
     journal.phase = "complete".into();
     atomic_write(&journal_path, &serde_json::to_vec_pretty(&journal)?)?;
+    checkpoint("complete")?;
     Ok(plan)
 }
 
 pub fn rollback(database: &Path, configuration: &Path) -> Result<()> {
+    rollback_with_checkpoint(database, configuration, |_| Ok(()))
+}
+
+fn rollback_with_checkpoint(
+    database: &Path,
+    configuration: &Path,
+    mut checkpoint: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
     let _guard = lock(database)?;
     let database = fs::canonicalize(database)?;
     let configuration = fs::canonicalize(configuration)?;
@@ -300,12 +362,27 @@ pub fn rollback(database: &Path, configuration: &Path) -> Result<()> {
     }
     journal.phase = "rolling_back".into();
     atomic_write(&journal_path, &serde_json::to_vec_pretty(&journal)?)?;
+    checkpoint("rollback_intent")?;
     let source = read_connection(&backup_path)?;
     Backup::new(&source, &mut c)?
         .run_to_completion(128, Duration::from_millis(1), None)
         .context("restore database backup")?;
-    atomic_write(&configuration, &config_backup)?;
+    checkpoint("rollback_database")?;
+    let before = fs::read(&configuration)?;
+    if before != journal.config_after.as_bytes() && digest(&before) != journal.config_before {
+        bail!("configuration changed during rollback");
+    }
+    config::editor::replace(
+        &configuration,
+        &digest(&before),
+        std::str::from_utf8(&config_backup)?,
+    )?;
+    checkpoint("rollback_configuration")?;
     journal.phase = "rolled_back".into();
     atomic_write(&journal_path, &serde_json::to_vec_pretty(&journal)?)?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/migration_faults.rs"]
+mod tests;

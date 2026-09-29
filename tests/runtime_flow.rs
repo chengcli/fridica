@@ -1,3 +1,5 @@
+#[path = "support/ordered_replay.rs"]
+mod ordered_replay;
 use fridica::{
     attention::Message,
     config::{loader, Config, LoadContext},
@@ -28,6 +30,7 @@ use tokio::sync::Semaphore;
 const SESSION: &str = "TTEAM:CROOM:100.1";
 #[derive(Default)]
 struct ParentScript {
+    tape: Mutex<Option<Arc<ordered_replay::Tape>>>,
     calls: Mutex<Vec<ParentRequest>>,
     responses: Mutex<VecDeque<Value>>,
     gate: Mutex<Option<Arc<Semaphore>>>,
@@ -35,40 +38,58 @@ struct ParentScript {
 impl Parent for ParentScript {
     fn decide(&self, r: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>> {
         Box::pin(async move {
+            let tape = self.tape.lock().unwrap().clone();
+            let call = tape.as_ref().map(|t| t.begin("parent.decide", json!(r)));
             self.calls.lock().unwrap().push(r);
             let gate = self.gate.lock().unwrap().clone();
             if let Some(gate) = gate {
                 gate.acquire().await.unwrap().forget();
             }
-            self.responses
+            let outcome = self
+                .responses
                 .lock()
                 .unwrap()
                 .pop_front()
                 .ok_or(ParentFailure {
                     code: "script_exhausted".into(),
-                })
+                });
+            if let Some(tape) = tape {
+                serde_json::from_value(tape.finish(call.unwrap(), json!(outcome)).await).unwrap()
+            } else {
+                outcome
+            }
         })
     }
 }
 #[derive(Default)]
 struct Sink {
+    tape: Mutex<Option<Arc<ordered_replay::Tape>>>,
     calls: Mutex<Vec<ClaimedPost>>,
     outcomes: Mutex<VecDeque<DeliveryOutcome>>,
 }
 impl Delivery for Sink {
     fn send(&self, p: ClaimedPost) -> AdapterFuture<'_, DeliveryOutcome> {
         Box::pin(async move {
+            let tape = self.tape.lock().unwrap().clone();
+            let call = tape.as_ref().map(|t| t.begin("delivery.send", json!(p)));
             let reference = format!("200.{}", p.id);
             self.calls.lock().unwrap().push(p);
-            self.outcomes
+            let outcome = self
+                .outcomes
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or(DeliveryOutcome::Sent { reference })
+                .unwrap_or(DeliveryOutcome::Sent { reference });
+            if let Some(tape) = tape {
+                serde_json::from_value(tape.finish(call.unwrap(), json!(outcome)).await).unwrap()
+            } else {
+                outcome
+            }
         })
     }
 }
 struct WorkerScript {
+    tape: Mutex<Option<Arc<ordered_replay::Tape>>>,
     calls: Mutex<Vec<RunRequest>>,
     outcomes: Mutex<VecDeque<Result<Outcome, WorkerFailure>>>,
     release: Semaphore,
@@ -79,6 +100,7 @@ struct WorkerScript {
 impl Default for WorkerScript {
     fn default() -> Self {
         Self {
+            tape: Mutex::new(None),
             calls: Mutex::new(vec![]),
             outcomes: Mutex::new(VecDeque::new()),
             release: Semaphore::new(0),
@@ -102,14 +124,23 @@ impl Worker for Fake {
     fn run(
         &self,
         r: RunRequest,
-        _: WorkerRecord,
-        _: Job,
+        worker: WorkerRecord,
+        job: Job,
         _: Arc<dyn ApprovalHandler>,
     ) -> AdapterFuture<'_, Result<Outcome, WorkerFailure>> {
         Box::pin(async move {
+            let tape = self.script.tape.lock().unwrap().clone();
+            let call = tape
+                .as_ref()
+                .map(|t| t.begin("worker.run", json!({"request":r,"worker":worker,"job":job})));
             self.script.calls.lock().unwrap().push(r);
             self.script.release.acquire().await.unwrap().forget();
-            self.script.outcomes.lock().unwrap().pop_front().unwrap_or_else(||Ok(Outcome{result:serde_json::from_value(json!({"status":"done","summary":"Checks passed","report":"Checks passed."})).unwrap(),backend_session_id:"backend-1".into()}))
+            let outcome = self.script.outcomes.lock().unwrap().pop_front().unwrap_or_else(||Ok(Outcome{result:serde_json::from_value(json!({"status":"done","summary":"Checks passed","report":"Checks passed."})).unwrap(),backend_session_id:"backend-1".into()}));
+            if let Some(tape) = tape {
+                serde_json::from_value(tape.finish(call.unwrap(), json!(outcome)).await).unwrap()
+            } else {
+                outcome
+            }
         })
     }
     fn interrupt(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
@@ -156,6 +187,7 @@ struct Harness {
     worker: Arc<WorkerScript>,
     sink: Arc<Sink>,
     runtime: Arc<Runtime<ParentScript, Sink>>,
+    ids: Arc<SequenceIds>,
 }
 impl Harness {
     async fn new(responses: Vec<Value>, observe: bool) -> Self {
@@ -202,6 +234,7 @@ path="{}"
         parent.responses.lock().unwrap().extend(responses);
         let worker = Arc::new(WorkerScript::default());
         let sink = Arc::new(Sink::default());
+        let ids = Arc::new(SequenceIds::default());
         let runtime = Runtime::start(
             store.clone(),
             config.clone(),
@@ -212,7 +245,7 @@ path="{}"
                 job_io,
             },
             clock.clone(),
-            Arc::new(SequenceIds::default()),
+            ids.clone(),
             observe,
         )
         .await
@@ -238,6 +271,7 @@ path="{}"
             worker,
             sink,
             runtime: Arc::new(runtime),
+            ids,
         }
     }
     async fn intake(&self, peer: bool) {
@@ -605,6 +639,7 @@ async fn restart_recovers_unconsumed_results_and_uncertain_sends_without_duplica
             worker,
             sink,
             runtime,
+            ids: _,
         } = h;
         drop(runtime);
         drop(store);
@@ -1839,6 +1874,7 @@ async fn worker_stop_intents_recover_after_runtime_restart_before_restore() {
             worker,
             sink,
             runtime,
+            ids: _,
         } = h;
         drop(runtime);
         drop(store);
@@ -1876,6 +1912,7 @@ async fn worker_stop_intents_recover_after_runtime_restart_before_restore() {
             worker,
             sink,
             runtime: Arc::new(runtime),
+            ids: Arc::new(SequenceIds::default()),
         };
         assert!(h
             .runtime
@@ -3071,4 +3108,402 @@ async fn configuration_changes_keep_running_jobs_and_observers_inert() {
     assert!(observer.parent.calls.lock().unwrap().is_empty());
     assert!(observer.worker.calls.lock().unwrap().is_empty());
     assert!(observer.sink.calls.lock().unwrap().is_empty());
+}
+
+async fn replay_checkpoint(h: &Harness, tape: &ordered_replay::Tape, name: &str) -> Value {
+    json!({"checkpoint":name,"state":tape.normalize(ordered_replay::snapshot(&h.store).await)})
+}
+
+impl Harness {
+    async fn restart(self) -> Self {
+        self.runtime.close().await.unwrap();
+        let Self {
+            dir,
+            store,
+            config,
+            clock,
+            parent,
+            worker,
+            sink,
+            runtime,
+            ids,
+        } = self;
+        drop(runtime);
+        drop(store);
+        let store = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match Store::open(dir.path().join("db")).await {
+                    Ok(store) => break store,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(1)).await,
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let runtime = Runtime::start(
+            store.clone(),
+            config.clone(),
+            Adapters {
+                parent: parent.clone(),
+                delivery: sink.clone(),
+                workers: Arc::new(Fakes(worker.clone())),
+                job_io: Arc::new(NoJobIo),
+            },
+            clock.clone(),
+            ids.clone(),
+            false,
+        )
+        .await
+        .unwrap();
+        Self {
+            dir,
+            store,
+            config,
+            clock,
+            parent,
+            worker,
+            sink,
+            runtime: Arc::new(runtime),
+            ids,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ReplayJobIo {
+    tape: Mutex<Option<Arc<ordered_replay::Tape>>>,
+}
+impl JobIo for ReplayJobIo {
+    fn prepare(
+        &self,
+        spec: WorkerSpec,
+        job: Job,
+    ) -> AdapterFuture<'_, Result<String, WorkerFailure>> {
+        Box::pin(async move {
+            let tape = self.tape.lock().unwrap().clone().unwrap();
+            let call = tape.begin("context.prepare", json!({"spec":spec,"job":job}));
+            let snapshot: Result<String, WorkerFailure> =
+                Ok("\nExternal context: synthetic head abc123; required checks passed.\n".into());
+            serde_json::from_value(tape.finish(call, json!(snapshot)).await).unwrap()
+        })
+    }
+    fn collect(
+        &self,
+        spec: WorkerSpec,
+        artifacts: Vec<ArtifactRef>,
+    ) -> AdapterFuture<'_, Result<Vec<CollectedArtifact>, WorkerFailure>> {
+        Box::pin(async move {
+            let tape = self.tape.lock().unwrap().clone().unwrap();
+            let call = tape.begin(
+                "context.artifacts",
+                json!({"spec":spec,"artifacts":artifacts}),
+            );
+            let result = NoJobIo.collect(spec, artifacts).await;
+            serde_json::from_value(tape.finish(call, json!(result)).await).unwrap()
+        })
+    }
+}
+
+async fn complete_runtime_capture(
+    scenario: &str,
+    rows: Option<Vec<ordered_replay::Event>>,
+) -> Value {
+    let replaying = rows.is_some();
+    let responses = if replaying || scenario == "parent_error" {
+        vec![]
+    } else {
+        vec![delegate()]
+    };
+    let io = Arc::new(ReplayJobIo::default());
+    let mut h = Harness::with_io(responses, scenario == "observe", io.clone()).await;
+    let tape = if let Some(rows) = rows {
+        ordered_replay::Tape::replay(rows, h.clock.clone()).unwrap()
+    } else {
+        ordered_replay::Tape::record(h.clock.clone())
+    };
+    tape.bind(h.dir.path().to_str().unwrap(), &h.config.fingerprint);
+    *io.tape.lock().unwrap() = Some(tape.clone());
+    *h.parent.tape.lock().unwrap() = Some(tape.clone());
+    *h.worker.tape.lock().unwrap() = Some(tape.clone());
+    *h.sink.tape.lock().unwrap() = Some(tape.clone());
+    if !replaying {
+        if scenario == "ambiguous" {
+            h.sink.outcomes.lock().unwrap().extend([
+                DeliveryOutcome::Sent {
+                    reference: "200.1".into(),
+                },
+                DeliveryOutcome::Ambiguous {
+                    code: "connection_lost_after_write".into(),
+                },
+            ]);
+        }
+        if scenario == "rate_limit" {
+            h.sink
+                .outcomes
+                .lock()
+                .unwrap()
+                .push_back(DeliveryOutcome::RateLimited { retry_after: 30. });
+        }
+        if scenario == "retry" {
+            h.worker
+                .outcomes
+                .lock()
+                .unwrap()
+                .push_back(Err(WorkerFailure {
+                    kind: Failure::Execution,
+                    code: "remote_disconnected".into(),
+                    backend_session_id: "same-session".into(),
+                }));
+        }
+    }
+    let mut snapshots = vec![];
+    h.intake(false).await; // Includes duplicate intake with the same event identity.
+    snapshots.push(replay_checkpoint(&h, &tape, "duplicate_intake").await);
+    let first = h.runtime.pass().await.unwrap();
+    if first.started > 0 {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while h.worker.calls.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    snapshots.push(replay_checkpoint(&h, &tape, "first_pass").await);
+    if scenario == "owner_pause" {
+        h.runtime
+            .control(
+                SESSION.into(),
+                Control::Pause {
+                    reason: "Owner requests a review".into(),
+                },
+                Authority::Owner,
+            )
+            .await
+            .unwrap();
+        snapshots.push(replay_checkpoint(&h, &tape, "owner_pause").await);
+    }
+    if scenario == "retry" {
+        h.worker.release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while h.scalar("SELECT status FROM jobs").await != "queued" {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        snapshots.push(replay_checkpoint(&h, &tape, "retry_queued").await);
+        h.clock.set(21.);
+        assert_eq!(h.runtime.pass().await.unwrap().started, 1);
+    }
+    if first.started > 0 {
+        h.finish(1, 1).await;
+        h.clock.set(22.);
+        if scenario == "restart_result" || scenario == "restart_sending" {
+            if scenario == "restart_sending" {
+                let actor = fridica::threads::actor::Actor {
+                    store: h.store.clone(),
+                    config: Some(h.config.clone()),
+                    parent: h.parent.clone(),
+                    clock: h.clock.clone(),
+                    ids: h.ids.clone(),
+                    owner: "UOWNER".into(),
+                    limits: h.config.attention.clone(),
+                    observe_only: false,
+                    parent_timeout: Duration::from_secs(1),
+                };
+                actor.step(SESSION.into()).await.unwrap();
+                assert!(fridica::store::outbox::claim(&h.store, 22.)
+                    .await
+                    .unwrap()
+                    .is_some());
+            }
+            snapshots.push(replay_checkpoint(&h, &tape, "before_restart").await);
+            h = h.restart().await;
+            snapshots.push(replay_checkpoint(&h, &tape, "after_restart").await);
+        }
+        h.runtime.pass().await.unwrap();
+        snapshots.push(replay_checkpoint(&h, &tape, "completion").await);
+        if scenario == "owner_pause" {
+            assert!(h
+                .runtime
+                .control(SESSION.into(), Control::Resume, Authority::System)
+                .await
+                .is_err());
+            h.runtime
+                .control(SESSION.into(), Control::Resume, Authority::Owner)
+                .await
+                .unwrap();
+            h.runtime.pass().await.unwrap();
+            snapshots.push(replay_checkpoint(&h, &tape, "owner_resume").await);
+        }
+        if scenario == "rate_limit" {
+            h.clock.set(51.);
+            h.runtime.pass().await.unwrap();
+            snapshots.push(replay_checkpoint(&h, &tape, "delivery_due").await);
+        }
+        h.runtime.pass().await.unwrap();
+        snapshots.push(replay_checkpoint(&h, &tape, "no_duplicate_effects").await);
+    }
+    h.runtime.close().await.unwrap();
+    snapshots.push(replay_checkpoint(&h, &tape, "closed").await);
+    json!({"scenario":scenario,"events":tape.rows(),"snapshots":snapshots})
+}
+
+#[tokio::test]
+async fn complete_ordered_runtime_tapes_replay_every_durable_column_without_exclusions() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/runtime");
+    for scenario in [
+        "success",
+        "ambiguous",
+        "rate_limit",
+        "retry",
+        "owner_pause",
+        "parent_error",
+        "observe",
+        "restart_result",
+        "restart_sending",
+    ] {
+        let captured = complete_runtime_capture(scenario, None).await;
+        let path = root.join(format!("{scenario}.json"));
+        if std::env::var_os("FRIDICA_CAPTURE_REPLAY").is_some() {
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_string_pretty(&captured).unwrap() + "\n",
+            )
+            .unwrap();
+        }
+        let expected: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(captured, expected, "capture changed: {scenario}");
+        let replayed = complete_runtime_capture(
+            scenario,
+            Some(serde_json::from_value(expected["events"].clone()).unwrap()),
+        )
+        .await;
+        assert_eq!(replayed, expected, "replay differs: {scenario}");
+    }
+}
+
+#[tokio::test]
+async fn ordered_tape_rejects_incomplete_or_malformed_captures_and_enforces_completion_order() {
+    let clock = Arc::new(ReplayClock::new(10.));
+    let record = ordered_replay::Tape::record(clock.clone());
+    let slow = record.begin("context.read", json!({"ref":"head"}));
+    let fast = record.begin("worker.run", json!({"job":"one"}));
+    record
+        .finish(fast, json!({"Err":{"kind":"cancelled"}}))
+        .await;
+    clock.set(11.);
+    record
+        .finish(slow, json!({"Ok":{"context":"complete snapshot"}}))
+        .await;
+    let rows = record.rows();
+    let replay = ordered_replay::Tape::replay(rows.clone(), clock).unwrap();
+    let a = replay.begin("context.read", json!({"ref":"head"}));
+    let b = replay.begin("worker.run", json!({"job":"one"}));
+    // Poll the slow completion first; the tape must still deliver the fast one first.
+    let (a, b) = tokio::join!(replay.finish(a, Value::Null), replay.finish(b, Value::Null));
+    assert_eq!(a["Ok"]["context"], "complete snapshot");
+    assert_eq!(b["Err"]["kind"], "cancelled");
+    replay.rows();
+    for n in [1, 2, 3] {
+        assert!(ordered_replay::validate(&rows[..n]).is_err());
+    }
+    let mut bad = rows.clone();
+    bad[0].seq = 9;
+    assert!(ordered_replay::validate(&bad).is_err());
+    let mut bad = rows.clone();
+    bad[2].payload["id"] = json!(999);
+    assert!(ordered_replay::validate(&bad).is_err());
+    let mut bad = rows;
+    bad[1].payload["id"] = json!(1);
+    assert!(ordered_replay::validate(&bad).is_err());
+}
+
+#[tokio::test]
+async fn restarted_throttling_and_concurrent_passes_preserve_owner_controls_and_deliver_once() {
+    let mut h = Harness::new(vec![delegate(), json!({})], false).await;
+    h.intake(true).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    // Fill the other five peer slots with confirmed historical reservations.
+    h.store.call(|c|{for n in 0..5{
+        c.execute("INSERT INTO thread_inbox(session_id,kind,created,state) VALUES(?,'message',20,'done')",[SESSION])?;let inbox=c.last_insert_rowid();
+        c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,text,created,state,delivered_at) VALUES(?,?,'reply','CROOM','100.1','historical',20,'sent',20)",rusqlite::params![format!("historic-{n}"),SESSION])?;
+        let post=c.last_insert_rowid();
+        c.execute("INSERT INTO reply_reservations(id,session_id,inbox_id,outbox_id,trigger_class,reserved_at,state) VALUES(?,?,?,?,'peer',20,'sent')",rusqlite::params![format!("occupied-{n}"),SESSION,inbox,post])?;
+    }Ok(())}).await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT state FROM thread_inbox WHERE kind='worker_result'")
+            .await,
+        "pending"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(reported AS TEXT) FROM jobs").await,
+        "0"
+    );
+    assert_eq!(h.sink.calls.lock().unwrap().len(), 1);
+    h = h.restart().await;
+    assert_eq!(
+        h.scalar("SELECT state FROM thread_inbox WHERE kind='worker_result'")
+            .await,
+        "pending"
+    );
+    h.runtime
+        .control(
+            SESSION.into(),
+            Control::Instruct {
+                text: "Keep this request visible".into(),
+            },
+            Authority::Owner,
+        )
+        .await
+        .unwrap();
+    // First pass encounters the rate-limited result; the next can process the
+    // owner instruction despite the earlier result's durable deferral.
+    h.runtime.pass().await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.parent.calls.lock().unwrap()[1].trigger["kind"],
+        "owner_instruction"
+    );
+    h.clock.set(3621.);
+    let mut passes = vec![];
+    for _ in 0..12 {
+        let runtime = h.runtime.clone();
+        passes.push(tokio::spawn(async move { runtime.pass().await.unwrap() }));
+    }
+    for pass in passes {
+        pass.await.unwrap();
+    }
+    assert_eq!(h.worker.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        h.sink
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.post.kind == "report")
+            .count(),
+        1
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM reply_reservations WHERE state='reserved'")
+            .await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT state FROM obligations WHERE kind='mention'")
+            .await,
+        "answered"
+    );
+    assert_eq!(
+        h.scalar("SELECT trigger_class FROM outbox WHERE kind='report'")
+            .await,
+        "peer"
+    );
+    h.runtime.close().await.unwrap();
 }

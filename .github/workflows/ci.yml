@@ -39,7 +39,7 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          cargo test --locked --all-targets -- --test-threads=2
           python scripts/verify_baseline.py
           PYTHONPATH=spec python scripts/capture_gates.py
           python -m pip install "aiohttp>=3.10,<4" "slack-sdk>=3.33,<4"

@@ -7,7 +7,7 @@ root=pathlib.Path(__file__).parent
 spec=json.loads((root/'response').read_text())
 if spec.get('stubborn'): signal.signal(signal.SIGTERM, signal.SIG_IGN)
 with (root/'calls').open('a') as log:
-    log.write(json.dumps({'argv':sys.argv[1:],'cwd':os.getcwd(),'env':dict(os.environ)})+'\n')
+    log.write(json.dumps({'pid':os.getpid(),'argv':sys.argv[1:],'cwd':os.getcwd(),'env':dict(os.environ)})+'\n')
 if spec.get('stubborn'): time.sleep(600)
 if spec.get('hang'):
     time.sleep(0.4)
@@ -343,32 +343,45 @@ async fn gh_permit_is_not_reused_until_cancelled_process_cleanup_finishes() {
     tasks.push(tokio::spawn(async move { first.get(request()).await }));
     tokio::time::timeout(Duration::from_secs(2), async {
         while h.calls().is_empty() {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
     .unwrap();
-    for _ in 0..4 {
+    for _ in 0..3 {
         let gh = gh.clone();
         tasks.push(tokio::spawn(async move { gh.get(request()).await }));
     }
     tokio::time::timeout(Duration::from_secs(2), async {
         while h.calls().len() < 4 {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
     .unwrap();
+    let pid = rustix::process::Pid::from_raw(h.calls()[0]["pid"].as_i64().unwrap() as i32).unwrap();
+    // Observe the resource being tested directly. Starting a fifth gh request
+    // also waits for SQLite intent fsync and interpreter startup; neither is a
+    // cleanup acknowledgement and either may lag after the permit is released.
+    let permits = gh.permits.clone();
+    let waiting = tokio::spawn(async move { permits.acquire_owned().await.unwrap() });
     tasks[0].abort();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(h.calls().len(), 4);
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while h.calls().len() < 5 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    assert!(
+        !waiting.is_finished(),
+        "permit returned before stubborn process cleanup"
+    );
+    let permit = tokio::time::timeout(Duration::from_secs(3), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH),
+        "leader must be reaped before permit reuse"
+    );
+    drop(permit);
     for task in &tasks {
         task.abort();
     }
@@ -377,7 +390,7 @@ async fn gh_permit_is_not_reused_until_cancelled_process_cleanup_finishes() {
     }
     tokio::time::timeout(Duration::from_secs(3), async {
         while gh.permits.available_permits() != 4 {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
@@ -403,4 +416,79 @@ fn gh_redaction_handles_dense_token_prefixes_and_proxy_credentials() {
         ),
         "[redacted] [redacted]"
     );
+}
+
+#[tokio::test]
+async fn next_request_recording_can_stall_after_cancelled_process_cleanup_has_finished() {
+    let h = Harness::new().await;
+    h.response(json!({"stubborn":true}));
+    let mut client = h.gh(Duration::from_secs(8));
+    client.permits = Arc::new(tokio::sync::Semaphore::new(1));
+    let gh = Arc::new(client);
+    let first = gh.clone();
+    let first = tokio::spawn(async move { first.get(request()).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.calls().is_empty() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = rustix::process::Pid::from_raw(h.calls()[0]["pid"].as_i64().unwrap() as i32).unwrap();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let store = h.store.clone();
+    let blocker = tokio::spawn(async move {
+        store
+            .call(move |_| {
+                entered.send(()).unwrap();
+                blocked.recv_timeout(Duration::from_secs(10))?;
+                Ok(())
+            })
+            .await
+            .unwrap()
+    });
+    ready.await.unwrap();
+    let permits = gh.permits.clone();
+    let waiting = tokio::spawn(async move { permits.acquire_owned().await.unwrap() });
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    let permit = tokio::time::timeout(Duration::from_secs(3), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    );
+    drop(permit);
+    let next = gh.clone();
+    let next = tokio::spawn(async move { next.get(request()).await });
+    // Reproduce the old witness timing out even though cleanup is proven done.
+    assert!(tokio::time::timeout(Duration::from_secs(3), async {
+        while h.calls().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .is_err());
+    assert!(!next.is_finished());
+    release.send(()).unwrap();
+    blocker.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while h.calls().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    next.abort();
+    assert!(next.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while gh.permits.available_permits() != 1 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
