@@ -19,6 +19,7 @@ jobs:
     name: Rust foundation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
@@ -35,6 +36,17 @@ jobs:
       - name: Install Linux confinement test prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Allow bubblewrap user namespaces (Ubuntu 24.04 AppArmor)
+        if: runner.os == 'Linux'
+        # Same profile as the README's Linux sandbox setup; it applies to bwrap only.
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' '' \
+              'profile bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' \
+              '  include if exists <local/bwrap>' '}' | sudo tee /etc/apparmor.d/bwrap > /dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          fi
+          bwrap --unshare-user --ro-bind / / -- /bin/true
       - name: Formatting, layering, migrations and replay
         run: |
           cargo fmt --all --check
