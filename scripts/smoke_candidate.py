@@ -77,7 +77,7 @@ def smoke(archive, expected, report):
         assert config.stat().st_mode & 0o777 == 0o600
         command("configure", "--config", config, "--owner-id", "UOWNER", "--workspace-id", "TTEAM", "--channel-id", "CROOM")
         # Complete target and inventory with synthetic deployment inputs.
-        record = root / "private/deployment.json"
+        credentials = root / "private/credentials.env"
         config.write_text(f'''# installed smoke fixture
 [owner]
 slack_user="UOWNER"
@@ -99,7 +99,7 @@ control_socket="control.sock"
 enabled=false
 [isolation]
 mcp_inventory_complete=true
-private_files=[{json.dumps(str(record))}]
+private_files=[{json.dumps(str(credentials))}]
 ''')
         fake = root / "bin/claude"
         fake.write_text(BACKEND)
@@ -110,7 +110,6 @@ private_files=[{json.dumps(str(record))}]
             path.chmod(0o700)
         fingerprint = json.loads(command("check-config", "--config", config))["fingerprint"]
         assert "requires --observe-only" in command("start", "--config", config, ok=False)
-        assert "deployment record" in command("start", "--active", "--deployment-record", record, "--config", config, ok=False)
         assert not (root / "private/state.sqlite3").exists()
         ready = json.loads(command("start", "--check-ready", "--config", config))
         assert ready["startup_checks_passed"] and not ready["active_launch_ready"]
@@ -140,7 +139,7 @@ private_files=[{json.dumps(str(record))}]
                 environment["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy.getsockname()[1]}"
                 environment["NO_PROXY"] = ""
                 args = ["start", "--config", str(config)]
-                args += ["--active", "--deployment-record", str(record)] if active else ["--observe-only"]
+                args += ["--active"] if active else ["--observe-only"]
                 child = subprocess.Popen([binary, *args], env=environment, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 try:
                     connection, _ = proxy.accept()
@@ -169,27 +168,19 @@ private_files=[{json.dumps(str(record))}]
 
         lifecycle(False)
         checks.append("installed observer: status, exclusive lock, snapshot refusal, SIGINT drain; no jobs/posts")
-        command("deployment-record", "--config", config, "--output", record,
-                "--target-conformance", "--recovery-rehearsal", "--observe-only-reconciled")
-        # Synthetic attestation only in disposable fixture; never presented as deployment evidence.
         before = config.read_text()
-        config.write_text(before + "\n# changed\n")
-        assert "does not match" in command("start", "--active", "--deployment-record", record, "--config", config, ok=False)
-        config.write_text(before)
-        original_record = record.read_bytes()
         fake.unlink()
-        assert "readiness checks did not pass" in command("start", "--active", "--deployment-record", record, "--config", config, ok=False)
+        assert "readiness checks did not pass" in command("start", "--active", "--config", config, ok=False)
         fake.write_text(BACKEND.replace("'loggedIn': True", "'loggedIn': False"))
         fake.chmod(0o700)
-        assert "doctor checks did not pass" in command("start", "--active", "--deployment-record", record, "--config", config, ok=False)
+        assert "doctor checks did not pass" in command("start", "--active", "--config", config, ok=False)
         fake.write_text(BACKEND.replace("print(json.dumps({'loggedIn': True}))",
             f"open({str(config)!r}, 'a').write('\\n# changed during probes\\n'); print(json.dumps({{'loggedIn': True}}))"))
-        assert "configuration changed" in command("start", "--active", "--deployment-record", record, "--config", config, ok=False)
+        assert "configuration changed" in command("start", "--active", "--config", config, ok=False)
         config.write_text(before)
         fake.write_text(BACKEND)
         lifecycle(True)
-        assert record.read_bytes() == original_record
-        checks.append("active opt-in validates attestation/config, reruns readiness/auth, serves controls and drains SIGTERM with Slack held locally")
+        checks.append("active opt-in reruns readiness/auth, refuses config changes during probes, serves controls and drains SIGTERM with Slack held locally")
 
         snapshot = installation / "share/state_snapshot.py"
         def snapshot_command(*args):

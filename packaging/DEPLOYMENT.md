@@ -1,4 +1,4 @@
-# Candidate deployment record
+# Candidate deployment checklist
 
 Fill this on the intended deployment host. This checkout has no installed Slack
 daemon. Packaging smoke uses synthetic identities and local adapters and cannot
@@ -35,7 +35,7 @@ Historical production corpus remains absent and is a later release prerequisite.
 Dashboard serving/redesign, campaign live trial, cross-platform wheels and public
 publishing are not covered by candidate packaging.
 
-## Deployment checks before owner attestation
+## Deployment checks before active operation
 
 - Verify artifact identity and platform requirements; keep existing Python launcher.
 - For every enabled target: real backend auth/protocol doctor, SSH disconnect and
@@ -46,10 +46,10 @@ publishing are not covered by candidate packaging.
 - Start observe-only with intended Slack workspace/channel; reconcile catch-up,
   persisted mentions, owner pauses, outbox ambiguity and unexpected state. Stop.
 - Confirm recovery choice and operator stop/status/log commands.
-- Record checks with `deployment-record`, then explicitly opt into active operation.
+- Explicitly opt into active operation with `start --active`.
 - Run one week of ordinary live attention and inspect obligations, throttling,
   delivery, cancellation and restart behavior before widening scope.
 
-Only the owner creates the deployment record. Successful synthetic tests do not
+Only the owner decides to go active. Successful synthetic tests do not
 substitute for these live checks. Campaigns, channel posting and desktop control
 remain opt-in; human-only merges and owner-only resume rules still apply.

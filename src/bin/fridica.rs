@@ -31,21 +31,9 @@ enum Command {
         config: Option<PathBuf>,
         #[arg(long)]
         environment_file: PathBuf,
+        /// Print an active unit instead of the observe-only default.
         #[arg(long)]
-        deployment_record: Option<PathBuf>,
-    },
-    /// Record the owner's completed deployment checks for this build/config/host.
-    DeploymentRecord {
-        #[arg(long)]
-        config: Option<PathBuf>,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long, required = true)]
-        target_conformance: bool,
-        #[arg(long, required = true)]
-        recovery_rehearsal: bool,
-        #[arg(long, required = true)]
-        observe_only_reconciled: bool,
+        active: bool,
     },
     /// Create an experimental starter configuration, contract and Slack manifest.
     Init {
@@ -63,11 +51,9 @@ enum Command {
         /// Start without model, worker or posting adapters.
         #[arg(long)]
         observe_only: bool,
-        /// Explicit opt-in after deployment checks recorded by the owner.
-        #[arg(long, conflicts_with_all = ["observe_only", "check_ready"], requires = "deployment_record")]
+        /// Explicit opt-in: reply, delegate and post. Readiness and doctor rerun first.
+        #[arg(long, conflicts_with_all = ["observe_only", "check_ready"])]
         active: bool,
-        #[arg(long, requires = "active")]
-        deployment_record: Option<PathBuf>,
         /// Read-only startup preparation; no Slack credentials or state required.
         #[arg(long, conflicts_with = "observe_only")]
         check_ready: bool,
@@ -164,7 +150,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::ServicePrint {
             config,
             environment_file,
-            deployment_record,
+            active,
         } => {
             print!(
                 "{}",
@@ -172,31 +158,8 @@ async fn run(cli: Cli) -> Result<()> {
                     &std::env::current_exe()?,
                     &config_path(config)?,
                     &environment_file,
-                    deployment_record.as_deref()
+                    active
                 )?
-            );
-        }
-        Command::DeploymentRecord {
-            config,
-            output,
-            target_conformance: _,
-            recovery_rehearsal: _,
-            observe_only_reconciled: _,
-        } => {
-            let config = fridica::config::load(
-                &config_path(config)?,
-                &fridica::config::LoadContext::current()?,
-            )
-            .map_err(fridica::cli::input_error)?;
-            fridica::cli::candidate::write_attestation(
-                &config,
-                &output,
-                fridica::cli::candidate::Build::current(),
-                SystemClock.now(),
-            )?;
-            println!(
-                "Recorded owner deployment attestation at {}",
-                output.display()
             );
         }
         Command::Init { config } => {
@@ -208,7 +171,7 @@ async fn run(cli: Cli) -> Result<()> {
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Next: use this executable with the same --config path for configure --detect, check-config and start --check-ready; complete workspaces and inventories first. Services default to observe-only; active startup requires an owner deployment record.");
+            println!("Next: use this executable with the same --config path for configure --detect, check-config and start --check-ready; complete workspaces and inventories first. Services default to observe-only; start --active opts in explicitly.");
         }
         Command::Configure(options) => {
             if let Err(error) = options.run(&fridica::config::LoadContext::current()?).await {
@@ -220,12 +183,11 @@ async fn run(cli: Cli) -> Result<()> {
             config,
             observe_only,
             active,
-            deployment_record,
             check_ready,
             timeout,
         } => {
             if !observe_only && !check_ready && !active {
-                anyhow::bail!("experimental Rust start requires --observe-only or explicit --active with --deployment-record; use --check-ready for startup preparation");
+                anyhow::bail!("experimental Rust start requires --observe-only or explicit --active; use --check-ready for startup preparation");
             }
             let context = fridica::config::LoadContext::current()?;
             let path = config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
@@ -248,13 +210,6 @@ async fn run(cli: Cli) -> Result<()> {
                     anyhow::bail!("startup readiness checks did not pass");
                 }
             } else {
-                if active {
-                    fridica::cli::candidate::validate(
-                        &config,
-                        &fridica::cli::candidate::Build::current(),
-                        deployment_record.as_deref().unwrap(),
-                    )?;
-                }
                 let credentials =
                     fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())
                         .map_err(fridica::cli::input_error)?;

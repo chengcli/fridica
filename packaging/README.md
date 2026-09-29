@@ -55,8 +55,7 @@ configured Slack credentials; it is unnecessary for an offline rehearsal.
 `init-state` creates a fresh v6 database without credentials or network calls;
 legacy schemas require explicit migration. `check-config` returns the config
 fingerprint. Record it with `build-info` in the deployment checklist. Add the
-credentials file and deployment-record path to `isolation.private_files` **before**
-finishing configuration. Complete private-file and MCP inventories for every
+credentials file to `isolation.private_files` **before** finishing configuration. Complete private-file and MCP inventories for every
 enabled execution target; unrestricted workers remain within the trusted-owner
 model. No automatic SSH agent forwarding is introduced.
 
@@ -91,26 +90,18 @@ children on forced service termination. For foreground startup, load credentials
 in the environment and run `start --observe-only --config ...`; stop with Ctrl-C.
 No worker-process survival across daemon restarts is promised.
 
-## Active opt-in after deployment validation
+## Active opt-in
 
-Complete `DEPLOYMENT.md` first. An owner record asserts that target conformance,
-recovery rehearsal and observe-only reconciliation passed. It is an explicit
-owner attestation, not automatic proof of a live trial. Do not create it merely
-because checkout tests or synthetic packaging smoke passed.
+Work through `DEPLOYMENT.md` first. Active operation replies, delegates and posts
+in Slack, so it is an explicit flag:
 
 ```sh
-/absolute/install/bin/fridica-candidate deployment-record --config /private/fridica/config.toml --output /private/fridica/deployment.json --target-conformance --recovery-rehearsal --observe-only-reconciled
-/absolute/install/bin/fridica-candidate start --active --config /private/fridica/config.toml --deployment-record /private/fridica/deployment.json
+/absolute/install/bin/fridica-candidate start --active --config /private/fridica/config.toml
 ```
 
-The record must be private, owned by the service user, listed in
-`isolation.private_files`, and match this build, executable SHA-256, config fingerprint and OS hostname.
-Active startup validates it before reading credentials or opening state, then
-reruns readiness and doctor. A bare `start` refuses to run. For an active unit,
-regenerate `service-print` with `--deployment-record /private/fridica/deployment.json`.
-Changes to the binary, config (including runtime edits) or host require renewed
-validation and a new record before the next active start. Archive the previous
-record elsewhere; the writer never overwrites one. Start with one channel/target;
+Active startup reruns readiness and doctor before reading credentials or opening
+state, and refuses a config that changes during those probes. A bare `start`
+refuses to run. For an active unit, pass `--active` to `service-print`. Start with one channel/target;
 keep campaign actions, channel report posting and MCP controls disabled until
 separately enabled and verified.
 
@@ -157,5 +148,5 @@ new config and make **all** relative paths absolute. Validate that pair with the
 matching runtime; a restored v5 DB needs the retained Python environment or an
 explicit v6 migration. Review missed/delivered work before resuming: recovery loses
 writes since the snapshot and external Slack/GitHub effects are not undone.
-Generate a fresh owner deployment record for active operation. Do not reuse a
+Do not reuse a
 migration journal from another DB path or copy WAL/SHM files over live SQLite.
