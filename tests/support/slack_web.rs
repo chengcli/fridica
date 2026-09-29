@@ -449,15 +449,33 @@ async fn uploads_send_bytes_without_credentials_and_require_matching_confirmatio
     {
         let calls = h.server.calls.lock().unwrap();
         assert_eq!(calls.len(), 5);
+        // Slack reads upload arguments only from form fields, not a JSON body.
+        let form = |index: usize| -> std::collections::BTreeMap<String, String> {
+            assert!(calls[index]
+                .headers
+                .contains("application/x-www-form-urlencoded"));
+            let body = String::from_utf8(calls[index].body.clone()).unwrap();
+            Url::parse(&format!("http://form/?{body}"))
+                .unwrap()
+                .query_pairs()
+                .into_owned()
+                .collect()
+        };
         assert_eq!(calls[2].path, "/api/files.getUploadURLExternal");
+        assert_eq!(
+            form(2),
+            [("filename", "report.md"), ("length", "5")]
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .into()
+        );
         assert!(!calls[3].headers.contains("authorization"));
         assert_eq!(calls[3].body, b"hello");
         assert_eq!(calls[4].path, "/api/files.completeUploadExternal");
-        let body: Value = serde_json::from_slice(&calls[4].body).unwrap();
-        assert_eq!(
-            body,
-            json!({"channel_id":"CROOM","thread_ts":"100.1","files":[{"id":"F123","title":"report.md"}]})
-        );
+        let fields = form(4);
+        assert_eq!(fields["channel_id"], "CROOM");
+        assert_eq!(fields["thread_ts"], "100.1");
+        let files: Value = serde_json::from_str(&fields["files"]).unwrap();
+        assert_eq!(files, json!([{"id":"F123","title":"report.md"}]));
     }
     let ledger = h.ledger().await;
     assert!(!ledger.contains("private-upload-capability"));

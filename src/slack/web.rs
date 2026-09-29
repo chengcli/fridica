@@ -378,6 +378,23 @@ impl WebClient {
             .map_err(|_| Failure::Configuration)?;
         let request = match api {
             Api::Channel | Api::History | Api::Replies => self.client.get(url).query(&body),
+            // Slack reads these arguments only from form fields, not a JSON body;
+            // nested values such as `files` are sent as JSON strings.
+            Api::UploadUrl | Api::CompleteUpload => {
+                let fields: Vec<(String, String)> = body
+                    .as_object()
+                    .ok_or(Failure::Configuration)?
+                    .iter()
+                    .map(|(key, value)| {
+                        let value = match value {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        };
+                        (key.clone(), value)
+                    })
+                    .collect();
+                self.client.post(url).form(&fields)
+            }
             _ => self.client.post(url).json(&body),
         }
         .header(AUTHORIZATION, self.authorization.clone());
