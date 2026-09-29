@@ -9,3 +9,4 @@ dist/
 tokens*
 target/
 *.pdf
+credentials.env
