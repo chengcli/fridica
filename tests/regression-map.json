@@ -1085,7 +1085,9 @@
     {
       "python": "tests/test_parent_agent.py::test_reply_only",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent_compatibility.rs",
+      "coverage_scope": "Details-only and blank replies, ordered overflow uploads, waiting requester addressing and confirmed-delivery obligation closure. Raw text/details over 40,000 characters are rejected instead of unbounded text/silent details truncation. Frozen rendering projections are in tests/replay.rs; full action parity remains open."
     },
     {
       "python": "tests/test_parent_agent.py::test_fan_out_to_two_machines_and_follow_up_to_an_existing_worker",
@@ -1109,7 +1111,9 @@
     {
       "python": "tests/test_parent_agent.py::test_problems_are_reported_for_repair",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent_compatibility.rs",
+      "coverage_scope": "Invalid decisions receive one repair with the full prior response. Failed repair rejects every proposed effect atomically and settles with a blocked notice, unlike Python partial salvage; pending asks remain unresolved. Recording faults cannot acknowledge or post effects."
     },
     {
       "python": "tests/test_parent_agent.py::test_limits_and_channel_policy",
@@ -1126,12 +1130,16 @@
     {
       "python": "tests/test_parent_agent.py::test_decide_repairs_once_then_drops",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent_compatibility.rs",
+      "coverage_scope": "One repair is preserved. Atomic rejection after failed repair is an explicit exception to Python partial salvage: jobs, controls, context and answers cannot be partially applied. Both responses, a blocked fallback and its audit commit together; full action parity remains open."
     },
     {
       "python": "tests/test_parent_agent.py::test_failures",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent_compatibility.rs",
+      "coverage_scope": "Additional related coverage: tests/actors.rs. Ordinary parent unavailability/timeout settles with the frozen blocked text without a model retry. Durable review holds survive restart, preserve pending due work and keep asks open; explicit successful interactions clear the hold. Owner pause, observe-only, quota, owner closure and rollback are covered. Context/evidence recording failures still use failed-inbox recovery without posting; full daemon replay remains open."
     },
     {
       "python": "tests/test_parent_agent.py::test_debrief_and_worker_instructions",
@@ -1143,7 +1151,9 @@
     {
       "python": "tests/test_parent_agent.py::test_decide_prompt_carries_data_not_instructions",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent.rs",
+      "coverage_scope": "Additional related coverage: tests/parent_compatibility.rs. Existing untrusted-data prompt boundaries plus initial same-workspace/channel context: ten prior top-level messages under the frozen 4,000-character soft budget (newest retained even if oversized). Triage/debrief omit it; repair retains the original snapshot despite concurrent channel intake. No attachment contents are loaded from channel context. Full prompt/action parity remains open."
     },
     {
       "python": "tests/test_parent_llm.py::test_claude_call_is_tool_less_and_stateless",
@@ -1799,7 +1809,7 @@
       "status": "retained",
       "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
       "related_rust_coverage": "tests/links.rs",
-      "coverage_scope": "Frozen permalink, fetch selection and linked-context projections with explicit ASCII/length/page-limit hardening exceptions. Parent fake-CLI and HTTP fault coverage in tests/parent.rs and tests/support/slack_web.rs verifies scoped fixed routes, durable repair snapshots, shared preparation deadlines and owner-pause/observe-only gates. Other render helpers and full daemon/CLI parity remain open; the Python regression is retained."
+      "coverage_scope": "Additional related coverage: tests/replay.rs, tests/parent_compatibility.rs. Frozen permalink, fetch selection and linked-context projections retain documented hardening exceptions. Seventy-two synthetic frozen reply-rendering projections compare details pointers, overflow, protected mentions, Unicode boundaries and waiting requester prefixes exactly. Actor fixtures verify ordered upload dependencies and confirmed-delivery answer closure. General split_message behavior and full daemon parity remain unverified; Python regression is retained."
     },
     {
       "python": "tests/test_slack.py::test_egress_maps_errors[response0-RateLimited]",
@@ -1897,7 +1907,9 @@
     {
       "python": "tests/test_store.py::test_channel_recent_and_latest_unanswered",
       "status": "retained",
-      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference."
+      "reason": "The production Python module remains active until full Rust daemon differential replay passes; this regression stays executable in the frozen reference.",
+      "related_rust_coverage": "tests/parent_compatibility.rs",
+      "coverage_scope": "Initial channel context selects prior top-level roots in chronological order, scoped to workspace/channel, with the frozen ten-root and soft text-budget rules. Latest-unanswered storage behavior and full store parity are not established by these tests."
     },
     {
       "python": "tests/test_store.py::test_workers_jobs_and_results_round_trip",

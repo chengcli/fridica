@@ -285,7 +285,7 @@ async fn blocked_notice_cannot_answer_but_new_instruction_can_reopen() {
 }
 
 #[tokio::test]
-async fn waiting_streak_creates_signal_without_pausing_and_failed_turns_release_capacity() {
+async fn waiting_streak_creates_signal_without_pausing_and_parent_failure_settles_blocked() {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open(dir.path().join("db")).await.unwrap();
     let p = Arc::new(Script::new(
@@ -308,14 +308,19 @@ async fn waiting_streak_creates_signal_without_pausing_and_failed_turns_release_
         "1"
     );
     intake(&s, 4).await;
-    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Failed);
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
     assert_eq!(
         scalar(&s, "SELECT state FROM reply_reservations WHERE inbox_id=4").await,
-        "released"
+        "reserved"
     );
     assert_eq!(
         scalar(&s, "SELECT state FROM thread_inbox WHERE id=4").await,
-        "pending"
+        "done"
+    );
+    assert_eq!(scalar(&s, "SELECT status FROM threads").await, "blocked");
+    assert_eq!(
+        scalar(&s, "SELECT state FROM obligations WHERE id='o4'").await,
+        "open"
     );
 }
 
@@ -473,25 +478,31 @@ async fn cancelled_actor_recovers_its_claim_and_reuses_reserved_capacity() {
 }
 
 #[tokio::test]
-async fn parent_timeout_is_durable_and_failure_signals_do_not_recurse() {
+async fn parent_timeout_settles_blocked_and_due_events_do_not_retry_the_model() {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open(dir.path().join("db")).await.unwrap();
     intake(&s, 1).await;
     let mut a = actor(&s, Arc::new(HangingParent(tokio::sync::Notify::new())));
     a.parent_timeout = Duration::from_millis(1);
-    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Failed);
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
     assert_eq!(scalar(&s, "SELECT json_extract(payload_json,'$.error') FROM replay_events WHERE kind='parent_result'").await, "parent_timeout");
-    assert_eq!(attention::sweep(&s, 20.).await.unwrap(), 1);
-    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Failed);
+    assert_eq!(scalar(&s, "SELECT state FROM obligations").await, "open");
+    assert_eq!(attention::sweep(&s, 1000.).await.unwrap(), 1);
+    a.clock = Arc::new(ReplayClock::new(1000.));
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Observed);
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM parent_turns").await,
+        "1"
+    );
     assert_eq!(
         scalar(
             &s,
             "SELECT CAST(count(*) AS TEXT) FROM obligations WHERE kind='signal'"
         )
         .await,
-        "1"
+        "0"
     );
-    assert_eq!(attention::sweep(&s, 20.).await.unwrap(), 0);
+    assert_eq!(attention::sweep(&s, 1000.).await.unwrap(), 0);
 }
 
 struct GatedParent {
@@ -985,7 +996,8 @@ async fn repeat_policy_distinguishes_new_asks_peers_failed_and_uncertain_deliver
         let s = Store::open(dir.path().join("db")).await.unwrap();
         intake(&s, 1).await;
         // Waiting keeps both peer and human follow-ups out of the triage path.
-        let response = json!({"reply":{"text":"Waiting for CI.","status":"waiting"}});
+        let response =
+            json!({"reply":{"text":"<@UALICE> <@UPEER> Waiting for CI.","status":"waiting"}});
         let p = Arc::new(Script::new(vec![response.clone(), response]));
         let a = actor(&s, p.clone());
         assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);

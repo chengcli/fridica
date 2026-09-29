@@ -11,7 +11,7 @@ use crate::{
     },
     store::{work, Store},
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -158,6 +158,16 @@ impl<P: Parent> Actor<P> {
                 )
                 .await;
             }
+            if request.session["parent_review_required"] == true {
+                return settle(
+                    &self.store,
+                    id,
+                    &request,
+                    "observe: parent failure needs owner review".into(),
+                    Some(self.clock.now() + 60.),
+                )
+                .await;
+            }
         }
         let mut turn = request.session["turns"]
             .as_u64()
@@ -297,9 +307,13 @@ impl<P: Parent> Actor<P> {
             request.call = if round == 0 { "decide" } else { "repair" }.into();
             let (raw, call) = self.call(&request).await?;
             let now = self.clock.now();
-            let raw = raw.ok_or_else(|| anyhow!("parent call failed"))?;
             calls.push(call);
-            match validate(&raw, &request, now, reply_limit).and_then(|d| {
+            let Some(raw) = raw else {
+                calls.last_mut().unwrap()["settlement_error"] = json!("parent_unavailable");
+                result = Some(super::failure::blocked(false));
+                break;
+            };
+            match validate(&raw, &request, now).and_then(|d| {
                 super::delegation::prepare(&d, &request, self.config.as_deref(), None)?;
                 Ok(d)
             }) {
@@ -310,6 +324,11 @@ impl<P: Parent> Actor<P> {
                 Err(error) => {
                     request.previous = Some(raw);
                     request.errors = vec![error.to_string()];
+                    if round == 1 {
+                        calls.last_mut().unwrap()["settlement_error"] =
+                            json!("parent_invalid_after_repair");
+                        result = Some(super::failure::blocked(true));
+                    }
                 }
             }
         }
@@ -333,6 +352,7 @@ impl<P: Parent> Actor<P> {
             &self.owner,
             self.clock.now(),
             self.limits.streak_signal,
+            reply_limit,
             if unsolicited {
                 self.config.as_ref().map(|c| c.slack.cooldown)
             } else {
@@ -375,6 +395,12 @@ impl<P: Parent> Actor<P> {
             .await?;
         let call =
             json!({"request":request,"response":raw,"error":error,"failure":failure,"created":now});
+        if failure
+            .as_ref()
+            .is_some_and(super::failure::prevents_effects)
+        {
+            bail!("parent evidence recording or context boundary failed");
+        }
         Ok((raw, call))
     }
 }
@@ -399,6 +425,14 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
         let obligations:Vec<String>=tx.prepare("SELECT json_object('id',id,'kind',kind,'summary',summary,'due',due,'state',state,'disposition',json(state_json),'source',json(source_json),'deliveries',json((SELECT COALESCE(json_group_array(json_object('id',p.outbox_id,'state',o.state,'error',o.error)), '[]') FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id))) FROM obligations WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery') ORDER BY created,id")?
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let mut session_data:Value=serde_json::from_str(&data)?;
+        let review:bool=tx.query_row("SELECT COALESCE((SELECT error IN ('parent_unavailable','parent_invalid_after_repair') FROM parent_turns WHERE session_id=? AND call IN ('decide','repair') ORDER BY id DESC LIMIT 1),0)",[&session],|r|r.get(0))?;
+        session_data["parent_review_required"]=json!(review);
+        if session_data["turns"] == 0 {
+            let recent:Vec<String>=tx.prepare("SELECT json_object('event_id',event_id,'ts',ts,'sender',sender,'text',text,'files',json(files_json),'from_agent',json(meta_json)) FROM messages WHERE workspace=? AND channel=? AND ts=root_ts AND CAST(ts AS REAL)<CAST(? AS REAL) ORDER BY CAST(ts AS REAL) DESC,id DESC LIMIT 10")?
+                .query_map(params![session_data["workspace"].as_str(),session_data["channel"].as_str(),session_data["root_ts"].as_str()],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let recent:Vec<Value>=recent.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?;
+            session_data["channel_context"]=json!(crate::parent::context::bounded(&recent,4000));
+        }
         let (revision, notes)=super::effects::notes(&tx,&session)?;
         session_data["notes"]=json!({"revision":revision,"data":notes});
         let (decisions,debriefed):(String,i64)=tx.query_row("SELECT decisions_json,debriefed_turn FROM threads WHERE id=?",[&session],|r|Ok((r.get(0)?,r.get(1)?)))?;
@@ -418,15 +452,26 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
     }).await
 }
 
-fn validate(
-    raw: &Value,
-    request: &ParentRequest,
-    now: f64,
-    reply_limit: usize,
-) -> Result<Decision> {
+fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> {
     let mut decision: Decision =
         serde_json::from_value(raw.clone()).context("invalid parent response schema")?;
     super::effects::validate(&mut decision)?;
+    if let Some(reply) = &mut decision.reply {
+        reply.text = reply
+            .text
+            .trim_matches(crate::core::render::whitespace)
+            .to_owned();
+        reply.details = reply
+            .details
+            .trim_matches(crate::core::render::whitespace)
+            .to_owned();
+        if !matches!(reply.status, ReplyStatus::Complete) {
+            reply.discussion = crate::core::parent::Discussion::Ongoing;
+        }
+        if reply.text.is_empty() && reply.details.is_empty() {
+            reply.send = false;
+        }
+    }
     if decision.reply.as_ref().is_some_and(|r| !r.send) {
         if decision
             .reply
@@ -451,10 +496,7 @@ fn validate(
         {
             bail!("reopening a blocked discussion requires an explicit decision");
         }
-        if reply.text.trim().is_empty()
-            || reply.text.chars().count() > reply_limit
-            || reply.details.chars().count() > 40000
-        {
+        if reply.text.chars().count() > 40000 || reply.details.chars().count() > 40000 {
             bail!("reply or details exceed configured bounds");
         }
         if (matches!(reply.status, ReplyStatus::Blocked)
@@ -544,7 +586,7 @@ async fn commit(
     id: i64,
     session: String,
     request: ParentRequest,
-    decision: Decision,
+    mut decision: Decision,
     work: super::delegation::Work,
     calls: Vec<Value>,
     verdict: String,
@@ -552,6 +594,7 @@ async fn commit(
     owner: &str,
     now: f64,
     signal: usize,
+    reply_limit: usize,
     cooldown: Option<f64>,
 ) -> Result<Step> {
     let owner = owner.to_owned();
@@ -583,6 +626,7 @@ async fn commit(
         if decision.reopen_blocked && status=="blocked" {status="complete".into();}
         let mut hash=request.session["last_reply_hash"].as_str().unwrap_or("").to_owned();
         let repeat=super::replies::repeat_evidence(&tx,&request,&owner)?;
+        if let Some(reply)=&mut decision.reply {super::replies::render(&tx,&request,&owner,reply,reply_limit)?;}
         if let Some(reply)=&decision.reply {
             let candidate=crate::core::policy::reply_hash(&reply.text);
             let explicit=repeat["allowed"]==true;
@@ -634,8 +678,12 @@ async fn commit(
                 params![key,session,key,json!({"inbox_id":id}).to_string(),now,now,now])?;
         }
         for call in calls {
-            tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,created) VALUES(?,?,'adapter',?,?,?,?,?)",
-                params![session,id,call["request"]["call"].as_str(),serde_json::to_string(&decision)?,call["response"].to_string(),call["request"].to_string(),call["created"].as_f64()])?;
+            let error=call["settlement_error"].as_str().unwrap_or("");
+            tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,?,?,?,?,?)",
+                params![session,id,call["request"]["call"].as_str(),serde_json::to_string(&decision)?,call["response"].to_string(),call["request"].to_string(),error,call["created"].as_f64()])?;
+            if !error.is_empty() {
+                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.blocked',?,?)",params![now,session,json!({"inbox_id":id,"reason":error}).to_string()])?;
+            }
         }
         tx.execute("UPDATE threads SET status=?,turns=CASE WHEN EXISTS(SELECT 1 FROM outbox WHERE idem_key=?) THEN MAX(turns,?) ELSE turns END,
             wait_streak=?,no_progress=?,last_reply_hash=?,summary=CASE WHEN ?='' THEN summary ELSE ? END,updated=?,version=version+1 WHERE id=?",

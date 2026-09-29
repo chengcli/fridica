@@ -55,3 +55,36 @@ pub(super) fn repeat_evidence(
         json!({"allowed":allowed,"reason":reason,"previous":last.map(|(id,state,sender)|json!({"id":id,"state":state,"requester":sender}))}),
     )
 }
+
+pub(super) fn render(
+    c: &Connection,
+    request: &ParentRequest,
+    owner: &str,
+    reply: &mut crate::core::parent::Reply,
+    limit: usize,
+) -> Result<()> {
+    let session = request.session["id"].as_str().unwrap_or("");
+    let messages: Vec<(String,String)> = c.prepare("SELECT sender,text FROM messages WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL) DESC LIMIT 100")?
+        .query_map([session],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let people = crate::core::render::participants(owner, messages);
+    let requester = if request.trigger["kind"] == "owner_instruction"
+        || request.trigger["origin"]["class"] == "owner"
+    {
+        owner.to_owned()
+    } else if let Some(sender) = request.trigger["message"]["sender"].as_str() {
+        sender.to_owned()
+    } else if let Some(event) = request.trigger["origin"]["event_id"].as_str() {
+        c.query_row("SELECT sender FROM messages WHERE event_id=? AND workspace||':'||channel||':'||root_ts=?",[event,session],|r|r.get(0)).optional()?.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    (reply.text, reply.details) = crate::core::render::reply(
+        &reply.text,
+        &reply.details,
+        matches!(reply.status, crate::core::parent::ReplyStatus::Waiting),
+        &requester,
+        &people,
+        limit,
+    );
+    Ok(())
+}

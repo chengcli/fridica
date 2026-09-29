@@ -3,6 +3,7 @@ pub mod delivery;
 pub mod ids;
 pub mod parent;
 pub mod policy;
+pub mod render;
 pub mod time;
 pub mod worker;
 
