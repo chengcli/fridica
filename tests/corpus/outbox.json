@@ -1,0 +1,1880 @@
+{
+  "baseline": "v0.3.11",
+  "scope": [
+    "outbox",
+    "history",
+    "calls"
+  ],
+  "fixtures": [
+    {
+      "name": "ordered_reply_upload",
+      "posts": [
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        },
+        {
+          "idem_key": "file",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "upload",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "",
+          "meta": null,
+          "filename": "result.txt",
+          "after": "a",
+          "blob": [
+            114,
+            101,
+            115,
+            117,
+            108,
+            116
+          ]
+        },
+        {
+          "idem_key": "b",
+          "session_id": "TTEAM:CROOM:100.2",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.2",
+          "text": "b",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.2",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        }
+      ],
+      "outcomes": [],
+      "snapshots": [
+        {
+          "at": 2.0,
+          "sent": 3,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              },
+              {
+                "idem_key": "file",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "F1"
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000002"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "a",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000002",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "upload",
+                "channel": "CROOM",
+                "thread_ts": "100.1",
+                "blob": [
+                  114,
+                  101,
+                  115,
+                  117,
+                  108,
+                  116
+                ],
+                "filename": "result.txt"
+              }
+            ]
+          }
+        },
+        {
+          "at": 3.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              },
+              {
+                "idem_key": "file",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "F1"
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000002"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "a",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000002",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "upload",
+                "channel": "CROOM",
+                "thread_ts": "100.1",
+                "blob": [
+                  114,
+                  101,
+                  115,
+                  117,
+                  108,
+                  116
+                ],
+                "filename": "result.txt"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "rate_limit_independent_thread",
+      "posts": [
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        },
+        {
+          "idem_key": "file",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "upload",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "",
+          "meta": null,
+          "filename": "result.txt",
+          "after": "a",
+          "blob": [
+            114,
+            101,
+            115,
+            117,
+            108,
+            116
+          ]
+        },
+        {
+          "idem_key": "b",
+          "session_id": "TTEAM:CROOM:100.2",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.2",
+          "text": "b",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.2",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        }
+      ],
+      "outcomes": [
+        {
+          "outcome": "rate_limited",
+          "retry_after": 15.0
+        }
+      ],
+      "snapshots": [
+        {
+          "at": 2.0,
+          "sent": 1,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "pending",
+                "attempts": 1,
+                "retry_at": 17.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "pending",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 16.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "pending",
+                "attempts": 1,
+                "retry_at": 17.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "pending",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 17.0,
+          "sent": 2,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "sent",
+                "attempts": 2,
+                "retry_at": 17.0,
+                "sent_ts": "200.000002"
+              },
+              {
+                "idem_key": "file",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "F1"
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000002",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "a",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "upload",
+                "channel": "CROOM",
+                "thread_ts": "100.1",
+                "blob": [
+                  114,
+                  101,
+                  115,
+                  117,
+                  108,
+                  116
+                ],
+                "filename": "result.txt"
+              }
+            ]
+          }
+        },
+        {
+          "at": 18.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "sent",
+                "attempts": 2,
+                "retry_at": 17.0,
+                "sent_ts": "200.000002"
+              },
+              {
+                "idem_key": "file",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "F1"
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000002",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "a",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "upload",
+                "channel": "CROOM",
+                "thread_ts": "100.1",
+                "blob": [
+                  114,
+                  101,
+                  115,
+                  117,
+                  108,
+                  116
+                ],
+                "filename": "result.txt"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "ambiguous_with_dependent",
+      "posts": [
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        },
+        {
+          "idem_key": "file",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "upload",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "",
+          "meta": null,
+          "filename": "result.txt",
+          "after": "a",
+          "blob": [
+            114,
+            101,
+            115,
+            117,
+            108,
+            116
+          ]
+        },
+        {
+          "idem_key": "independent",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "independent",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        }
+      ],
+      "outcomes": [
+        {
+          "outcome": "ambiguous",
+          "code": "disconnected"
+        }
+      ],
+      "snapshots": [
+        {
+          "at": 2.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "ambiguous",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "blocked",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "independent",
+                "state": "pending",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 3.0,
+          "sent": 1,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "ambiguous",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "blocked",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "independent",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "independent",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "independent",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 4.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "ambiguous",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "blocked",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "independent",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "independent",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "independent",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "rejected_with_independent_thread",
+      "posts": [
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        },
+        {
+          "idem_key": "file",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "upload",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "",
+          "meta": null,
+          "filename": "result.txt",
+          "after": "a",
+          "blob": [
+            114,
+            101,
+            115,
+            117,
+            108,
+            116
+          ]
+        },
+        {
+          "idem_key": "b",
+          "session_id": "TTEAM:CROOM:100.2",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.2",
+          "text": "b",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.2",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        }
+      ],
+      "outcomes": [
+        {
+          "outcome": "rejected",
+          "code": "missing_scope"
+        }
+      ],
+      "snapshots": [
+        {
+          "at": 2.0,
+          "sent": 1,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "failed",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "blocked",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 3.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "failed",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "file",
+                "state": "blocked",
+                "attempts": 0,
+                "retry_at": 0.0,
+                "sent_ts": ""
+              },
+              {
+                "idem_key": "b",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.2",
+                "thread_ts": "100.2",
+                "sender": "UOWNER",
+                "text": "b",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "b",
+                "thread_ts": "100.2",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.2",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "exhausted_rate_limit",
+      "posts": [
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        }
+      ],
+      "outcomes": [
+        {
+          "outcome": "rate_limited",
+          "retry_after": 1.0
+        },
+        {
+          "outcome": "rate_limited",
+          "retry_after": 1.0
+        },
+        {
+          "outcome": "rate_limited",
+          "retry_after": 1.0
+        },
+        {
+          "outcome": "rate_limited",
+          "retry_after": 1.0
+        },
+        {
+          "outcome": "rate_limited",
+          "retry_after": 1.0
+        }
+      ],
+      "snapshots": [
+        {
+          "at": 1.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "pending",
+                "attempts": 1,
+                "retry_at": 2.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 2.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "pending",
+                "attempts": 2,
+                "retry_at": 3.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 3.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "pending",
+                "attempts": 3,
+                "retry_at": 4.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 4.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "pending",
+                "attempts": 4,
+                "retry_at": 5.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 5.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "failed",
+                "attempts": 5,
+                "retry_at": 5.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        },
+        {
+          "at": 10.0,
+          "sent": 0,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "failed",
+                "attempts": 5,
+                "retry_at": 5.0,
+                "sent_ts": ""
+              }
+            ],
+            "history": [],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              },
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "duplicate_enqueue",
+      "posts": [
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        },
+        {
+          "idem_key": "a",
+          "session_id": "TTEAM:CROOM:100.1",
+          "kind": "reply",
+          "channel": "CROOM",
+          "thread_ts": "100.1",
+          "text": "a",
+          "meta": {
+            "owner": "UOWNER",
+            "session": "TTEAM:CROOM:100.1",
+            "turn": 1,
+            "status": "complete",
+            "kind": "reply",
+            "worker": "",
+            "v": 2
+          },
+          "filename": "",
+          "after": "",
+          "blob": null
+        }
+      ],
+      "outcomes": [],
+      "snapshots": [
+        {
+          "at": 2.0,
+          "sent": 1,
+          "expected": {
+            "outbox": [
+              {
+                "idem_key": "a",
+                "state": "sent",
+                "attempts": 1,
+                "retry_at": 0.0,
+                "sent_ts": "200.000001"
+              }
+            ],
+            "history": [
+              {
+                "workspace": "TTEAM",
+                "channel": "CROOM",
+                "ts": "200.000001",
+                "root_ts": "100.1",
+                "thread_ts": "100.1",
+                "sender": "UOWNER",
+                "text": "a",
+                "source": "self",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ],
+            "calls": [
+              {
+                "kind": "post",
+                "channel": "CROOM",
+                "text": "a",
+                "thread_ts": "100.1",
+                "meta": {
+                  "owner": "UOWNER",
+                  "session": "TTEAM:CROOM:100.1",
+                  "turn": 1,
+                  "status": "complete",
+                  "kind": "reply",
+                  "worker": "",
+                  "v": 2
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

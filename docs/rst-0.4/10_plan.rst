@@ -3,6 +3,16 @@
 Migration, testing and rollout
 ==============================
 
+.. note::
+
+   This chapter is the historical proposal, not the current deployment checklist.
+   The `active launch plan <../v0.4-active-launch-plan.md>`_ and
+   `implementation status <../v0.4-implementation-status.md>`_ supersede its rollout
+   order and setup assumptions. In particular, development does not require an
+   installed Slack daemon, fresh installations do not migrate an old database,
+   and campaign operations use existing owner gh/SSH credentials rather than new
+   tokens, deploy keys or fabricated reviewer identities.
+
 .. _migration:
 
 Phases

@@ -15,6 +15,93 @@ permissions:
   contents: read
 
 jobs:
+  rust:
+    name: Rust foundation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Linux confinement test prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Allow bubblewrap user namespaces (Ubuntu 24.04 AppArmor)
+        if: runner.os == 'Linux'
+        # Same profile as the README's Linux sandbox setup; it applies to bwrap only.
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
+            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' '' \
+              'profile bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' \
+              '  include if exists <local/bwrap>' '}' | sudo tee /etc/apparmor.d/bwrap > /dev/null
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          fi
+          bwrap --unshare-user --ro-bind / / -- /bin/true
+      - name: Formatting, layering, migrations and replay
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets -- --test-threads=2
+          python scripts/verify_baseline.py
+          PYTHONPATH=spec python scripts/capture_gates.py
+          python -m pip install "aiohttp>=3.10,<4" "slack-sdk>=3.33,<4" "tomlkit>=0.13,<1"
+          PYTHONPATH=spec python scripts/capture_outbox.py
+          PYTHONPATH=spec python scripts/capture_config.py
+          PYTHONPATH=spec python scripts/capture_placement.py
+          PYTHONPATH=spec python scripts/capture_supervisor.py
+          PYTHONPATH=spec python scripts/capture_transport.py
+          PYTHONPATH=spec python scripts/capture_workers.py
+          PYTHONPATH=spec python scripts/capture_approval_instructions.py
+          PYTHONPATH=spec python scripts/capture_fetch.py
+          PYTHONPATH=spec python scripts/capture_flow.py
+          PYTHONPATH=spec python scripts/capture_parent.py
+          PYTHONPATH=spec python scripts/capture_attachments.py
+          PYTHONPATH=spec python scripts/capture_links.py
+          PYTHONPATH=spec python scripts/capture_github.py
+          PYTHONPATH=spec python scripts/capture_control.py
+          PYTHONPATH=spec python scripts/capture_control_cli.py
+          PYTHONPATH=spec python scripts/capture_reply_policy.py
+          PYTHONPATH=spec python scripts/capture_reply_rendering.py
+          PYTHONPATH=spec python scripts/capture_thread_lifecycle.py
+          PYTHONPATH=spec python scripts/capture_slack.py
+          git diff --exit-code -- tests/corpus/
+
+  native-candidate:
+    name: Native candidate packaging (Linux x86_64)
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Verify archive failures and stopped-state snapshots
+        run: python -m unittest discover -s tests -p test_candidate_packaging.py -v
+      - name: Reproduce native candidate and test a disposable installation
+        run: python scripts/package_candidate.py --verify-reproducible --smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-candidate-linux-x86_64
+          path: dist/candidate/*
+          if-no-files-found: error
+
   test:
     name: Test (${{ matrix.os }}, Python 3.11)
     runs-on: ${{ matrix.os }}

@@ -25,8 +25,9 @@ class ParentUnavailable(RuntimeError):
 
 
 class ParentAgent:
-    def __init__(self, config: Config, llm: StructuredLLM | None = None):
+    def __init__(self, config: Config, llm: StructuredLLM | None = None, *, monotonic=time.monotonic):
         self.config = config
+        self.monotonic = monotonic
         self.llm = llm or make_llm(config.parent.backend, model=config.parent.model,
                                    reasoning_effort=config.parent.reasoning_effort, timeout=config.parent.timeout,
                                    excluded_env=config.secret_env())
@@ -39,7 +40,7 @@ class ParentAgent:
 
     async def _call(self, name: str, prompt: str, schema: dict, *, model: str = "", ledger: list | None = None) -> dict:
         """One LLM call; its bookkeeping (for parent_turns rows) is appended to ``ledger``."""
-        started = time.monotonic()
+        started = self.monotonic()
         record = {"call": name, "backend": self.llm.backend, "model": model or self.config.parent.model,
                   "prompt_chars": len(prompt), "error": ""}
         try:
@@ -48,7 +49,7 @@ class ParentAgent:
             record["error"] = f"{type(error).__name__}: {error}"[:500]
             raise
         finally:
-            record["latency_ms"] = int((time.monotonic() - started) * 1000)
+            record["latency_ms"] = int((self.monotonic() - started) * 1000)
             if ledger is not None:
                 ledger.append(record)
 

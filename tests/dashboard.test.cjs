@@ -64,3 +64,18 @@ test("access view does not imply Codex enforces a domain list", () => {
     "Codex: full network; Claude: github.com");
   assert.strictEqual(app.networkSummary({ backends: ["codex"] }, { network: [] }), "Network off");
 });
+
+test("settings omit removed loop limits while retaining Python compatibility", () => {
+  const parent = { backend: "claude", model: "", triage_model: "", reasoning_effort: "" };
+  const limits = { max_jobs: 4, max_workers_per_thread: 4, max_delegations_per_turn: 3, job_timeout: 60, worker_idle: 30 };
+  const inputs = (nodes) => nodes.flatMap((node) => !(node instanceof Node) ? [] : [
+    ...(node.tag === "input" ? [node.attributes.id] : []), ...inputs(node.children),
+  ]);
+  const rust = inputs(app.settingsView({ config: { parent, limits } }));
+  assert(rust.includes("max_jobs"));
+  assert(!rust.includes("max_wait_replies"));
+  assert(!rust.includes("max_no_progress"));
+  const python = inputs(app.settingsView({ config: { parent, limits: { ...limits, max_wait_replies: 3, max_no_progress: 3 } } }));
+  assert(python.includes("max_wait_replies"));
+  assert(python.includes("max_no_progress"));
+});

@@ -7,4 +7,6 @@ dist/
 *.sqlite3*
 .env
 tokens*
+target/
 *.pdf
+credentials.env

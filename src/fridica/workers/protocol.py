@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from ..core.models import WorkerResult
+from ..core.ids import Identifiers
 from ..machines.registry import Machine, Workspace
 
 ALLOW_ONCE = "once"
@@ -49,6 +50,7 @@ class WorkerSpec:
     idle_timeout: float = 1800.0
     excluded_env: tuple[str, ...] = ()
     slot: int = 0
+    ids: Identifiers = field(default_factory=Identifiers, compare=False, repr=False)
 
     @property
     def create_cwd(self) -> bool:

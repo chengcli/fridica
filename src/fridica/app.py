@@ -18,6 +18,7 @@ from .config.schema import Config
 from .control.api import serve as serve_control
 from .core.bus import Bus
 from .core.clock import Clock
+from .core.ids import Identifiers
 from .core.errors import ConfigError
 from .core.models import Message, WorkerRecord
 from .parent.agent import ParentAgent
@@ -33,10 +34,12 @@ HEARTBEAT = 5.0
 
 class Daemon:
     def __init__(self, config: Config, slack: SlackAPI, *, store: Store | None = None, parent: ParentAgent | None = None,
-                 factory=default_factory, clock: Clock | None = None, observe_only: bool = False, github=None):
+                 factory=default_factory, clock: Clock | None = None, observe_only: bool = False, github=None,
+                 ids: Identifiers | None = None):
         self.config = config
         self.slack = slack
         self.clock = clock or Clock()
+        self.ids = ids or Identifiers()
         self.observe_only = observe_only
         self.github = github
         """A GitHubLinks for following pull request and issue links; None turns the feature off (tests, no network)."""
@@ -45,9 +48,9 @@ class Daemon:
         self.bus = Bus()
         self._own_parent = parent is None
         self.parent = parent or ParentAgent(config)
-        self.broker = ApprovalBroker(config, self.store, clock=self.clock)
+        self.broker = ApprovalBroker(config, self.store, clock=self.clock, ids=self.ids)
         self.supervisor = Supervisor(config, self.store, self.bus, instructions=self.worker_instructions,
-                                     approvals=self.broker, factory=factory, clock=self.clock)
+                                     approvals=self.broker, factory=factory, clock=self.clock, ids=self.ids)
         self.dispatcher = OutboxDispatcher(self.store, slack, self.bus, owner=config.owner.slack_user, clock=self.clock)
         self.threads = ThreadManager(self)
         self.bus.on_thread(self.threads.notify)

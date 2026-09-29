@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 import logging
-import uuid
+from ..core.ids import Identifiers
 
 from ..config.schema import Config
 from ..core.bus import Bus
@@ -23,6 +23,7 @@ from ..core.models import Job, WorkerRecord
 from ..exec.transport import make_transport
 from ..store import Store
 from .artifacts import collect
+from .fetch import fetch_repo
 from .protocol import DENY, ApprovalRequest, Worker, WorkerFactory, WorkerSpec
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,14 @@ class Running:
     resume: str = ""
     stopping: bool = False
     interrupted: bool = False
+    fetching: bool = False
     finished: bool = False
 
 
 class Supervisor:
     def __init__(self, config: Config, store: Store, bus: Bus, *, instructions: Callable[[WorkerRecord], str],
                  approvals: ApprovalGate | None = None, factory: WorkerFactory = default_factory,
-                 clock: Clock | None = None):
+                 clock: Clock | None = None, ids: Identifiers | None = None):
         self.config = config
         self.store = store
         self.bus = bus
@@ -64,6 +66,7 @@ class Supervisor:
         self.approvals = approvals or ApprovalGate()
         self.factory = factory
         self.clock = clock or Clock()
+        self.ids = ids or Identifiers()
         self.live: dict[str, Worker] = {}
         self.running: dict[str, Running] = {}
         self._closing: set[asyncio.Task] = set()
@@ -177,14 +180,14 @@ class Supervisor:
                           instructions=self.instructions(record), model="", reasoning_effort="",
                           job_timeout=self.config.limits.job_timeout, idle_timeout=self.config.limits.worker_idle,
                           excluded_env=self.config.secret_env(),
-                          slot=record.slot)
+                          slot=record.slot, ids=self.ids)
 
     def _worker(self, record: WorkerRecord) -> Worker:
         worker = self.live.get(record.id)
         spec = self.spec(record)
-        if worker is not None and (worker.spec.workspace.path, worker.spec.machine.resources) != (
-                spec.workspace.path, spec.machine.resources):
-            # Its slot or the configuration changed: start a process with the new directory and GPUs.
+        if worker is not None and (worker.spec.workspace, worker.spec.machine.resources) != (
+                spec.workspace, spec.machine.resources):
+            # Restart when the workspace policy changes, including a revoked grant.
             self._close_later(self.live.pop(record.id))
             worker = None
         if worker is None:
@@ -202,7 +205,20 @@ class Supervisor:
             async def on_approval(request: ApprovalRequest) -> str:
                 return await self.approvals.request(worker=record, job=job, request=request)
 
-            outcome = await worker.run(frame(job, record), resume=state.resume, on_approval=on_approval)
+            brief = frame(job, record)
+            if job.fetch_repo:
+                state.fetching = True
+                try:
+                    transport = make_transport(worker.spec.machine, excluded_env=worker.spec.excluded_env)
+                    path, sha = await fetch_repo(transport, worker.spec.workspace.path, worker.spec.workspace.policy,
+                                                 job.fetch_repo, job.fetch_ref, job.id, create=worker.spec.create_cwd)
+                finally:
+                    state.fetching = False
+                self.store.audit.record("policy", "repo.fetch", self.clock.now(), target=job.id,
+                                        details={"repo": job.fetch_repo, "ref": job.fetch_ref, "commit": sha})
+                brief += (f"\n\nFridica fetched {job.fetch_repo} {job.fetch_ref} at {sha} into the bare repository "
+                          f"{path}. Inspect it locally; this does not grant network or push access.")
+            outcome = await worker.run(brief, resume=state.resume, on_approval=on_approval)
             artifacts = []
             if outcome.result.artifacts:
                 transport = make_transport(worker.spec.machine, excluded_env=worker.spec.excluded_env)
@@ -214,7 +230,11 @@ class Supervisor:
         except asyncio.CancelledError:
             if state.stopping:
                 self._finish(job, record, "cancelled", error="stopped", stop=True, state=state)
-            raise
+                raise
+            if state.interrupted:
+                self._finish(job, record, "interrupted", error="interrupted during repository fetch", state=state)
+            else:
+                raise
         except Exception as error:
             status = "interrupted" if state.interrupted or state.stopping else "failed"
             retire = retire or state.stopping
@@ -240,7 +260,7 @@ class Supervisor:
                 worker_status = "stopped" if stop else "idle"
                 self.store.workers.record_result(record.id, result, session, worker_status, now)
             for item in artifacts:
-                self.store.artifacts.add(uuid.uuid4().hex, job, record.machine, item.ref, data=item.data,
+                self.store.artifacts.add(self.ids.hex("artifact"), job, record.machine, item.ref, data=item.data,
                                          error=item.error)
             self.store.inbox.add(job.session_id, "worker_result", now, ref=job.id)
         self.bus.thread(job.session_id)
@@ -258,6 +278,9 @@ class Supervisor:
         if running is None or worker is None:
             return False
         running.interrupted = True
+        if running.fetching:
+            running.task.cancel()
+            return True
         await worker.interrupt()
         return True
 

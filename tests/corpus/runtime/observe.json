@@ -1,0 +1,495 @@
+{
+  "events": [],
+  "scenario": "observe",
+  "snapshots": [
+    {
+      "checkpoint": "duplicate_intake",
+      "state": {
+        "approvals": [],
+        "artifacts": [],
+        "audit": [],
+        "campaign_evidence": [],
+        "campaign_mirrors": [],
+        "channel_watermarks": [],
+        "cooldowns": [],
+        "health_events": [],
+        "jobs": [],
+        "messages": [
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "e1",
+            "files_json": [],
+            "id": 1,
+            "mentions_owner": 1,
+            "meta_json": null,
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UALICE",
+            "source": "socket",
+            "text": "<@UOWNER> run checks",
+            "thread_ts": null,
+            "ts": "100.1",
+            "verdict": "",
+            "workspace": "TTEAM"
+          }
+        ],
+        "meta": [
+          {
+            "key": "schema_version",
+            "value": "6"
+          },
+          {
+            "key": "durable_generation",
+            "value": "6"
+          }
+        ],
+        "notes": [],
+        "obligation_posts": [],
+        "obligations": [
+          {
+            "created": 20.0,
+            "dedup_key": "mention:TTEAM:CROOM:100.1",
+            "due": 920.0,
+            "id": "obligation-0000000000000001",
+            "kind": "mention",
+            "session_id": "TTEAM:CROOM:100.1",
+            "source_json": {
+              "event_id": "e1"
+            },
+            "state": "open",
+            "state_json": {},
+            "summary": "Owner mentioned",
+            "updated": 20.0
+          }
+        ],
+        "outbox": [],
+        "overseer_exchanges": [],
+        "parent_turns": [],
+        "replay_events": [
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000001",
+              "owner": "UOWNER"
+            },
+            "seq": 1,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000002",
+              "owner": "UOWNER"
+            },
+            "seq": 2,
+            "time": 20.0
+          }
+        ],
+        "reply_reservations": [],
+        "report_exports": [],
+        "report_posts": [],
+        "reports": [],
+        "runtime": [],
+        "thread_inbox": [
+          {
+            "attempts": 0,
+            "created": 20.0,
+            "dedup_key": null,
+            "id": 1,
+            "kind": "message",
+            "not_before": 0.0,
+            "payload_json": {},
+            "ref": "e1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "pending"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "CROOM",
+            "context_json": {},
+            "control": "active",
+            "control_json": {
+              "kind": "active"
+            },
+            "created": 20.0,
+            "debriefed_turn": 0,
+            "decisions_json": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "",
+            "last_unsolicited": 0.0,
+            "no_progress": 0,
+            "pause_reason": "",
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "new",
+            "summary": "",
+            "throttled_until": 0.0,
+            "turns": 0,
+            "updated": 20.0,
+            "version": 0,
+            "wait_streak": 0,
+            "workspace": "TTEAM"
+          }
+        ],
+        "work_items": [],
+        "workers": []
+      }
+    },
+    {
+      "checkpoint": "first_pass",
+      "state": {
+        "approvals": [],
+        "artifacts": [],
+        "audit": [],
+        "campaign_evidence": [],
+        "campaign_mirrors": [],
+        "channel_watermarks": [],
+        "cooldowns": [],
+        "health_events": [],
+        "jobs": [],
+        "messages": [
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "e1",
+            "files_json": [],
+            "id": 1,
+            "mentions_owner": 1,
+            "meta_json": null,
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UALICE",
+            "source": "socket",
+            "text": "<@UOWNER> run checks",
+            "thread_ts": null,
+            "ts": "100.1",
+            "verdict": "observe: observe-only mode",
+            "workspace": "TTEAM"
+          }
+        ],
+        "meta": [
+          {
+            "key": "schema_version",
+            "value": "6"
+          },
+          {
+            "key": "durable_generation",
+            "value": "9"
+          }
+        ],
+        "notes": [],
+        "obligation_posts": [],
+        "obligations": [
+          {
+            "created": 20.0,
+            "dedup_key": "mention:TTEAM:CROOM:100.1",
+            "due": 920.0,
+            "id": "obligation-0000000000000001",
+            "kind": "mention",
+            "session_id": "TTEAM:CROOM:100.1",
+            "source_json": {
+              "event_id": "e1"
+            },
+            "state": "open",
+            "state_json": {},
+            "summary": "Owner mentioned",
+            "updated": 20.0
+          }
+        ],
+        "outbox": [],
+        "overseer_exchanges": [],
+        "parent_turns": [],
+        "replay_events": [
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000001",
+              "owner": "UOWNER"
+            },
+            "seq": 1,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000002",
+              "owner": "UOWNER"
+            },
+            "seq": 2,
+            "time": 20.0
+          }
+        ],
+        "reply_reservations": [],
+        "report_exports": [],
+        "report_posts": [],
+        "reports": [],
+        "runtime": [],
+        "thread_inbox": [
+          {
+            "attempts": 0,
+            "created": 20.0,
+            "dedup_key": null,
+            "id": 1,
+            "kind": "message",
+            "not_before": 0.0,
+            "payload_json": {},
+            "ref": "e1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "done"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "CROOM",
+            "context_json": {},
+            "control": "active",
+            "control_json": {
+              "kind": "active"
+            },
+            "created": 20.0,
+            "debriefed_turn": 0,
+            "decisions_json": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "",
+            "last_unsolicited": 0.0,
+            "no_progress": 0,
+            "pause_reason": "",
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "new",
+            "summary": "",
+            "throttled_until": 0.0,
+            "turns": 0,
+            "updated": 20.0,
+            "version": 0,
+            "wait_streak": 0,
+            "workspace": "TTEAM"
+          }
+        ],
+        "work_items": [],
+        "workers": []
+      }
+    },
+    {
+      "checkpoint": "closed",
+      "state": {
+        "approvals": [],
+        "artifacts": [],
+        "audit": [],
+        "campaign_evidence": [],
+        "campaign_mirrors": [],
+        "channel_watermarks": [],
+        "cooldowns": [],
+        "health_events": [],
+        "jobs": [],
+        "messages": [
+          {
+            "attachments_json": [],
+            "channel": "CROOM",
+            "event_id": "e1",
+            "files_json": [],
+            "id": 1,
+            "mentions_owner": 1,
+            "meta_json": null,
+            "received_at": 20.0,
+            "root_ts": "100.1",
+            "sender": "UALICE",
+            "source": "socket",
+            "text": "<@UOWNER> run checks",
+            "thread_ts": null,
+            "ts": "100.1",
+            "verdict": "observe: observe-only mode",
+            "workspace": "TTEAM"
+          }
+        ],
+        "meta": [
+          {
+            "key": "schema_version",
+            "value": "6"
+          },
+          {
+            "key": "durable_generation",
+            "value": "9"
+          }
+        ],
+        "notes": [],
+        "obligation_posts": [],
+        "obligations": [
+          {
+            "created": 20.0,
+            "dedup_key": "mention:TTEAM:CROOM:100.1",
+            "due": 920.0,
+            "id": "obligation-0000000000000001",
+            "kind": "mention",
+            "session_id": "TTEAM:CROOM:100.1",
+            "source_json": {
+              "event_id": "e1"
+            },
+            "state": "open",
+            "state_json": {},
+            "summary": "Owner mentioned",
+            "updated": 20.0
+          }
+        ],
+        "outbox": [],
+        "overseer_exchanges": [],
+        "parent_turns": [],
+        "replay_events": [
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000001",
+              "owner": "UOWNER"
+            },
+            "seq": 1,
+            "time": 20.0
+          },
+          {
+            "complete": 1,
+            "kind": "intake",
+            "payload_json": {
+              "grace": 900.0,
+              "message": {
+                "attachments": [],
+                "channel": "CROOM",
+                "event_id": "e1",
+                "meta": null,
+                "sender": "UALICE",
+                "source": "socket",
+                "text": "<@UOWNER> run checks",
+                "thread_ts": null,
+                "ts": "100.1",
+                "workspace": "TTEAM"
+              },
+              "obligation_id": "obligation-0000000000000002",
+              "owner": "UOWNER"
+            },
+            "seq": 2,
+            "time": 20.0
+          }
+        ],
+        "reply_reservations": [],
+        "report_exports": [],
+        "report_posts": [],
+        "reports": [],
+        "runtime": [],
+        "thread_inbox": [
+          {
+            "attempts": 0,
+            "created": 20.0,
+            "dedup_key": null,
+            "id": 1,
+            "kind": "message",
+            "not_before": 0.0,
+            "payload_json": {},
+            "ref": "e1",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "done"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "CROOM",
+            "context_json": {},
+            "control": "active",
+            "control_json": {
+              "kind": "active"
+            },
+            "created": 20.0,
+            "debriefed_turn": 0,
+            "decisions_json": [],
+            "id": "TTEAM:CROOM:100.1",
+            "last_reply_hash": "",
+            "last_unsolicited": 0.0,
+            "no_progress": 0,
+            "pause_reason": "",
+            "reset_at": 0.0,
+            "root_ts": "100.1",
+            "status": "new",
+            "summary": "",
+            "throttled_until": 0.0,
+            "turns": 0,
+            "updated": 20.0,
+            "version": 0,
+            "wait_streak": 0,
+            "workspace": "TTEAM"
+          }
+        ],
+        "work_items": [],
+        "workers": []
+      }
+    }
+  ]
+}

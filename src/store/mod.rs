@@ -1,0 +1,144 @@
+//! One bounded queue and one dedicated SQLite thread; callers never share a connection.
+pub mod approvals;
+pub mod configuration;
+pub mod diagnostics;
+pub mod fetch;
+pub mod migration;
+pub mod outbox;
+pub mod schema;
+pub mod work;
+pub mod worker_controls;
+
+use anyhow::{anyhow, Context, Result};
+use fs2::FileExt;
+use rusqlite::Connection;
+use std::{
+    fs::{File, OpenOptions},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use tokio::sync::{mpsc, oneshot};
+
+type Request = Box<dyn FnOnce(&mut Connection) + Send>;
+
+pub fn lock(path: &Path) -> Result<File> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let path = canonical.as_path();
+    if let Some(parent) = path.parent() {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(parent)?;
+    }
+    let file = private_file(&path.with_extension("lock"))?;
+    file.try_lock_exclusive()
+        .context("another Fridica process holds the state database")?;
+    Ok(file)
+}
+
+pub fn private_file(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
+}
+
+#[derive(Clone)]
+pub struct Store {
+    sender: mpsc::Sender<Request>,
+}
+impl Store {
+    /// Existing databases must be explicitly migrated with backups first.
+    pub async fn open(path: PathBuf) -> Result<Self> {
+        Self::open_kind(path, false).await
+    }
+
+    pub async fn open_overseer(path: PathBuf) -> Result<Self> {
+        Self::open_kind(path, true).await
+    }
+
+    async fn open_kind(path: PathBuf, overseer: bool) -> Result<Self> {
+        let (sender, mut receiver) = mpsc::channel::<Request>(128);
+        let (ready, wait) = oneshot::channel();
+        std::thread::Builder::new()
+            .name("fridica-sqlite".into())
+            .spawn(move || {
+                let opened = (|| -> Result<_> {
+                    let path = std::fs::canonicalize(&path).unwrap_or(path);
+                    let guard = lock(&path)?;
+                    if !overseer {
+                        migration::check_ready(&path)?;
+                    }
+                    private_file(&path)?;
+                    let mut c = Connection::open(&path)?;
+                    c.busy_timeout(Duration::from_secs(5))?;
+                    let version = schema::version(&c)?;
+                    if overseer {
+                        schema::overseer(&mut c)?;
+                    } else if version == 0 {
+                        schema::migrate(&mut c)?;
+                        schema::install_mutation_guards(&c)?;
+                    } else if version != schema::VERSION {
+                        anyhow::bail!("schema v{version}: run fridica migrate first");
+                    }
+                    c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+                    Ok((c, guard))
+                })();
+                match opened {
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                    }
+                    Ok((mut connection, _guard)) => {
+                        if ready.send(Ok(())).is_err() {
+                            return;
+                        }
+                        while let Some(request) = receiver.blocking_recv() {
+                            request(&mut connection);
+                        }
+                    }
+                }
+            })?;
+        wait.await
+            .context("database thread stopped during startup")??;
+        Ok(Self { sender })
+    }
+
+    pub async fn call<T, F>(&self, function: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
+    {
+        let (reply, wait) = oneshot::channel();
+        self.sender
+            .send(Box::new(move |connection| {
+                // A panicking adapter cannot silently kill the only database thread.
+                let mut result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| function(connection)))
+                        .unwrap_or_else(|_| Err(anyhow!("database operation panicked")));
+                if !connection.is_autocommit() {
+                    let _ = connection.execute_batch("ROLLBACK");
+                    result = Err(anyhow!(
+                        "database operation left an uncommitted transaction"
+                    ));
+                }
+                let _ = reply.send(result);
+            }))
+            .await
+            .map_err(|_| anyhow!("database thread stopped"))?;
+        wait.await.context("database request cancelled")?
+    }
+}

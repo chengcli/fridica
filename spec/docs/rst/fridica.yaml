@@ -1,0 +1,165 @@
+pageSetup:
+  size: letter
+  margin-top: 2cm
+  margin-bottom: 2cm
+  margin-left: 2.2cm
+  margin-right: 2.2cm
+  margin-gutter: 0cm
+  spacing-header: 5mm
+  spacing-footer: 5mm
+  firstTemplate: coverPage
+
+pageTemplates:
+  coverPage:
+    frames: [[0cm, 0cm, 100%, 100%]]
+    showHeader: false
+    showFooter: false
+  mainPage:
+    frames: [[0cm, 0cm, 100%, 100%]]
+    showHeader: true
+    showFooter: true
+
+fontsAlias:
+  stdFont: Helvetica
+  stdBold: Helvetica-Bold
+  stdItalic: Helvetica-Oblique
+  stdBoldItalic: Helvetica-BoldOblique
+  stdMono: Courier
+  stdMonoBold: Courier-Bold
+  stdMonoItalic: Courier-Oblique
+  stdMonoBoldItalic: Courier-BoldOblique
+  stdSans: Helvetica
+  stdSansBold: Helvetica-Bold
+
+linkColor: "#1f3a70"
+
+styles:
+  base:
+    fontName: stdFont
+    fontSize: 10
+    leading: 13.5
+  normal:
+    parent: base
+  bodytext:
+    parent: normal
+    spaceAfter: 6
+    alignment: TA_JUSTIFY
+  title:
+    parent: heading
+    fontName: stdBold
+    fontSize: 26
+    leading: 32
+    alignment: TA_LEFT
+    textColor: "#1f3a70"
+    spaceBefore: 110
+    spaceAfter: 6
+  subtitle:
+    parent: title
+    fontSize: 14
+    leading: 18
+    textColor: "#4a5568"
+    spaceBefore: 0
+    spaceAfter: 30
+  heading:
+    parent: normal
+    fontName: stdBold
+    keepWithNext: true
+    textColor: "#1f3a70"
+  heading1:
+    parent: heading
+    fontSize: 17
+    leading: 21
+    spaceBefore: 26
+    spaceAfter: 8
+  heading2:
+    parent: heading
+    fontSize: 13
+    leading: 16
+    spaceBefore: 10
+    spaceAfter: 5
+  heading3:
+    parent: heading
+    fontSize: 11
+    leading: 14
+    spaceBefore: 8
+    spaceAfter: 3
+  heading4:
+    parent: heading
+    fontSize: 10
+    spaceBefore: 6
+    spaceAfter: 2
+  literal:
+    parent: normal
+    fontName: stdMono
+    fontSize: 9
+  code:
+    parent: literal
+    fontSize: 8.5
+    leading: 10.5
+    backColor: "#f3f5f8"
+    borderColor: "#d5dbe3"
+    borderWidth: 0.5
+    borderPadding: 6
+    spaceBefore: 4
+    spaceAfter: 8
+  table:
+    spaceBefore: 4
+    spaceAfter: 10
+    commands: [[VALIGN, [0, 0], [-1, -1], TOP], [INNERGRID, [0, 0], [-1, -1], 0.25, "#d5dbe3"],
+               [BOX, [0, 0], [-1, -1], 0.6, "#9aa5b5"], [ROWBACKGROUNDS, [0, 1], [-1, -1], [white, "#f7f9fc"]],
+               [TOPPADDING, [0, 0], [-1, -1], 2], [BOTTOMPADDING, [0, 0], [-1, -1], 2]]
+  table-title:
+    parent: heading4
+    textColor: "#4a5568"
+    keepWithNext: true
+    spaceBefore: 6
+  table-heading:
+    parent: normal
+    fontName: stdBold
+    fontSize: 8.5
+    leading: 10.5
+    backColor: "#e3e9f2"
+    alignment: TA_LEFT
+  table-body:
+    parent: normal
+    fontSize: 8.5
+    leading: 10.5
+  figure:
+    alignment: TA_CENTER
+    spaceBefore: 6
+    spaceAfter: 6
+  figure-caption:
+    parent: bodytext
+    fontName: stdItalic
+    fontSize: 8.5
+    leading: 11
+    alignment: TA_LEFT
+    textColor: "#4a5568"
+  toc:
+    parent: normal
+  toc1:
+    parent: toc
+    fontName: stdBold
+    spaceBefore: 4
+  toc2:
+    parent: toc
+    leftIndent: 16
+  toc3:
+    parent: toc
+    leftIndent: 32
+    fontSize: 9
+  admonition:
+    parent: bodytext
+    backColor: "#f3f5f8"
+    borderColor: "#1f3a70"
+    borderWidth: 0.6
+    borderPadding: [6, 8, 6, 8]
+  admonition-title:
+    parent: heading4
+  abstract:
+    parent: bodytext
+    leftIndent: 28
+    rightIndent: 28
+  field-list:
+    parent: normal
+    colWidths: [90, null]

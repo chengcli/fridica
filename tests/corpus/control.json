@@ -1,0 +1,990 @@
+{
+  "cases": [
+    {
+      "expected": [
+        {
+          "context": {
+            "backend": "",
+            "branch": "",
+            "machine": "",
+            "repo": "",
+            "workspace": ""
+          },
+          "control": "active",
+          "created": 21.0,
+          "debriefed_turn": 0,
+          "decisions": [],
+          "id": "recent",
+          "key": {
+            "channel": "CROOM",
+            "root_ts": "110.1",
+            "workspace": "TTEAM"
+          },
+          "last_reply_hash": "",
+          "last_unsolicited": 0.0,
+          "no_progress": 0,
+          "pause_reason": "",
+          "reset_at": 0.0,
+          "status": "new",
+          "summary": "",
+          "turns": 0,
+          "updated": 22.0,
+          "version": 0,
+          "wait_streak": 0
+        }
+      ],
+      "target": "/threads?limit=1"
+    },
+    {
+      "expected": [
+        {
+          "context": {
+            "backend": "",
+            "branch": "",
+            "machine": "",
+            "repo": "",
+            "workspace": ""
+          },
+          "control": "paused",
+          "created": 1.0,
+          "debriefed_turn": 0,
+          "decisions": [],
+          "id": "old",
+          "key": {
+            "channel": "CROOM",
+            "root_ts": "90.1",
+            "workspace": "TTEAM"
+          },
+          "last_reply_hash": "",
+          "last_unsolicited": 0.0,
+          "no_progress": 0,
+          "pause_reason": "Owner pause",
+          "reset_at": 0.0,
+          "status": "new",
+          "summary": "",
+          "turns": 0,
+          "updated": 2.0,
+          "version": 0,
+          "wait_streak": 0
+        }
+      ],
+      "target": "/threads?control=paused"
+    },
+    {
+      "expected": [
+        {
+          "context": {
+            "backend": "",
+            "branch": "",
+            "machine": "",
+            "repo": "owner/repo",
+            "workspace": ""
+          },
+          "control": "active",
+          "created": 10.0,
+          "debriefed_turn": 0,
+          "decisions": [
+            "Run checks"
+          ],
+          "id": "TTEAM:CROOM:100.1",
+          "key": {
+            "channel": "CROOM",
+            "root_ts": "100.1",
+            "workspace": "TTEAM"
+          },
+          "last_reply_hash": "",
+          "last_unsolicited": 0.0,
+          "no_progress": 0,
+          "pause_reason": "",
+          "reset_at": 0.0,
+          "status": "blocked",
+          "summary": "",
+          "turns": 0,
+          "updated": 20.0,
+          "version": 0,
+          "wait_streak": 0
+        },
+        {
+          "context": {
+            "backend": "",
+            "branch": "",
+            "machine": "",
+            "repo": "",
+            "workspace": ""
+          },
+          "control": "paused",
+          "created": 1.0,
+          "debriefed_turn": 0,
+          "decisions": [],
+          "id": "old",
+          "key": {
+            "channel": "CROOM",
+            "root_ts": "90.1",
+            "workspace": "TTEAM"
+          },
+          "last_reply_hash": "",
+          "last_unsolicited": 0.0,
+          "no_progress": 0,
+          "pause_reason": "Owner pause",
+          "reset_at": 0.0,
+          "status": "new",
+          "summary": "",
+          "turns": 0,
+          "updated": 2.0,
+          "version": 0,
+          "wait_streak": 0
+        }
+      ],
+      "target": "/attention/threads?limit=1"
+    },
+    {
+      "expected": [
+        {
+          "backend": "codex",
+          "backend_session_id": "",
+          "created": 2.0,
+          "ephemeral": true,
+          "id": "worker-2",
+          "last_result": {
+            "artifacts": [],
+            "changes": [
+              {
+                "change": "modified",
+                "note": "",
+                "path": "a.py"
+              }
+            ],
+            "machine_state": {
+              "branch": "",
+              "commit": "",
+              "dirty": false,
+              "notes": ""
+            },
+            "question": "",
+            "report": "",
+            "status": "done",
+            "summary": "Finished",
+            "unresolved": [],
+            "validation": []
+          },
+          "machine": "local",
+          "process": "stopped",
+          "role": "general",
+          "session_id": "TTEAM:CROOM:100.1",
+          "slot": 0,
+          "status": "idle",
+          "summary": "",
+          "updated": 22.0,
+          "workspace": "project"
+        },
+        {
+          "backend": "codex",
+          "backend_session_id": "",
+          "created": 1.0,
+          "ephemeral": false,
+          "id": "worker-1",
+          "last_result": {
+            "artifacts": [],
+            "changes": [
+              {
+                "change": "modified",
+                "note": "",
+                "path": "a.py"
+              }
+            ],
+            "machine_state": {
+              "branch": "",
+              "commit": "",
+              "dirty": false,
+              "notes": ""
+            },
+            "question": "",
+            "report": "",
+            "status": "done",
+            "summary": "Finished",
+            "unresolved": [],
+            "validation": []
+          },
+          "machine": "local",
+          "process": "busy",
+          "role": "general",
+          "session_id": "TTEAM:CROOM:100.1",
+          "slot": 0,
+          "status": "running",
+          "summary": "",
+          "updated": 21.0,
+          "workspace": "project"
+        }
+      ],
+      "target": "/workers"
+    },
+    {
+      "expected": [
+        {
+          "attempt": 0,
+          "brief": "Previously started",
+          "deliverable": "report",
+          "error": "",
+          "fetch_ref": "",
+          "fetch_repo": "",
+          "finished_at": 0.0,
+          "id": "job-4",
+          "inbox_id": null,
+          "join_group": "",
+          "queued_at": 4.0,
+          "reported": false,
+          "result": null,
+          "session_id": "TTEAM:CROOM:100.1",
+          "started_at": -1.0,
+          "status": "running",
+          "worker_id": "worker-2"
+        },
+        {
+          "attempt": 0,
+          "brief": "Run checks",
+          "deliverable": "report",
+          "error": "",
+          "fetch_ref": "",
+          "fetch_repo": "",
+          "finished_at": 0.0,
+          "id": "job-1",
+          "inbox_id": null,
+          "join_group": "",
+          "queued_at": 1.0,
+          "reported": false,
+          "result": {
+            "artifacts": [],
+            "changes": [],
+            "machine_state": {
+              "branch": "",
+              "commit": "",
+              "dirty": false,
+              "notes": ""
+            },
+            "question": "",
+            "report": "",
+            "status": "done",
+            "summary": "Finished",
+            "unresolved": [],
+            "validation": []
+          },
+          "session_id": "TTEAM:CROOM:100.1",
+          "started_at": 0.0,
+          "status": "running",
+          "worker_id": "worker-1"
+        },
+        {
+          "attempt": 0,
+          "brief": "Run checks",
+          "deliverable": "report",
+          "error": "",
+          "fetch_ref": "",
+          "fetch_repo": "",
+          "finished_at": 0.0,
+          "id": "job-2",
+          "inbox_id": null,
+          "join_group": "",
+          "queued_at": 2.0,
+          "reported": false,
+          "result": {
+            "artifacts": [],
+            "changes": [],
+            "machine_state": {
+              "branch": "",
+              "commit": "",
+              "dirty": false,
+              "notes": ""
+            },
+            "question": "",
+            "report": "",
+            "status": "done",
+            "summary": "Finished",
+            "unresolved": [],
+            "validation": []
+          },
+          "session_id": "TTEAM:CROOM:100.1",
+          "started_at": 0.0,
+          "status": "queued",
+          "worker_id": "worker-2"
+        },
+        {
+          "attempt": 0,
+          "brief": "Follow up",
+          "deliverable": "report",
+          "error": "",
+          "fetch_ref": "",
+          "fetch_repo": "",
+          "finished_at": 0.0,
+          "id": "job-3",
+          "inbox_id": null,
+          "join_group": "",
+          "queued_at": 3.0,
+          "reported": false,
+          "result": null,
+          "session_id": "TTEAM:CROOM:100.1",
+          "started_at": 0.0,
+          "status": "queued",
+          "worker_id": "worker-1"
+        }
+      ],
+      "target": "/jobs"
+    },
+    {
+      "expected": [
+        {
+          "backend_request_id": "",
+          "created": 21.0,
+          "decided_at": 0.0,
+          "decided_by": "",
+          "detail": {},
+          "expires_at": 300.0,
+          "id": "approval-2",
+          "job_id": "job-4",
+          "kind": "exec",
+          "scope": "once",
+          "session_id": "TTEAM:CROOM:100.1",
+          "status": "pending",
+          "summary": "Second command",
+          "worker_id": "worker-2"
+        },
+        {
+          "backend_request_id": "",
+          "created": 20.0,
+          "decided_at": 0.0,
+          "decided_by": "",
+          "detail": {
+            "command": "echo ok"
+          },
+          "expires_at": 300.0,
+          "id": "approval-1",
+          "job_id": "job-1",
+          "kind": "exec",
+          "scope": "once",
+          "session_id": "TTEAM:CROOM:100.1",
+          "status": "pending",
+          "summary": "Run command",
+          "worker_id": "worker-1"
+        }
+      ],
+      "target": "/approvals"
+    },
+    {
+      "expected": [
+        {
+          "after": "",
+          "attempts": 0,
+          "channel": "CROOM",
+          "error": "",
+          "filename": "",
+          "has_file": true,
+          "id": 2,
+          "idem_key": "post-2",
+          "kind": "upload",
+          "meta": null,
+          "retry_at": 0.0,
+          "sent_ts": "",
+          "session_id": "TTEAM:CROOM:100.1",
+          "state": "ambiguous",
+          "text": "Report",
+          "thread_ts": "100.1"
+        },
+        {
+          "after": "",
+          "attempts": 0,
+          "channel": "CROOM",
+          "error": "",
+          "filename": "",
+          "has_file": false,
+          "id": 1,
+          "idem_key": "post-1",
+          "kind": "reply",
+          "meta": null,
+          "retry_at": 0.0,
+          "sent_ts": "",
+          "session_id": "TTEAM:CROOM:100.1",
+          "state": "failed",
+          "text": "Hello",
+          "thread_ts": "100.1"
+        }
+      ],
+      "target": "/outbox"
+    },
+    {
+      "expected": [
+        {
+          "action": "thread.pause",
+          "actor": "owner",
+          "details": {
+            "reason": "Review"
+          },
+          "target": "TTEAM:CROOM:100.1",
+          "time": 20.0
+        }
+      ],
+      "target": "/activity"
+    },
+    {
+      "expected": {
+        "instructions": [
+          {
+            "created": 20.0,
+            "id": 1,
+            "state": "pending",
+            "text": "Continue"
+          }
+        ],
+        "jobs": [
+          {
+            "attempt": 0,
+            "brief": "Run checks",
+            "deliverable": "report",
+            "error": "",
+            "fetch_ref": "",
+            "fetch_repo": "",
+            "finished_at": 0.0,
+            "id": "job-1",
+            "inbox_id": null,
+            "join_group": "",
+            "queued_at": 1.0,
+            "reported": false,
+            "result": {
+              "artifacts": [],
+              "changes": [],
+              "machine_state": {
+                "branch": "",
+                "commit": "",
+                "dirty": false,
+                "notes": ""
+              },
+              "question": "",
+              "report": "",
+              "status": "done",
+              "summary": "Finished",
+              "unresolved": [],
+              "validation": []
+            },
+            "session_id": "TTEAM:CROOM:100.1",
+            "started_at": 0.0,
+            "status": "running",
+            "worker_id": "worker-1"
+          },
+          {
+            "attempt": 0,
+            "brief": "Follow up",
+            "deliverable": "report",
+            "error": "",
+            "fetch_ref": "",
+            "fetch_repo": "",
+            "finished_at": 0.0,
+            "id": "job-3",
+            "inbox_id": null,
+            "join_group": "",
+            "queued_at": 3.0,
+            "reported": false,
+            "result": null,
+            "session_id": "TTEAM:CROOM:100.1",
+            "started_at": 0.0,
+            "status": "queued",
+            "worker_id": "worker-1"
+          },
+          {
+            "attempt": 0,
+            "brief": "Run checks",
+            "deliverable": "report",
+            "error": "",
+            "fetch_ref": "",
+            "fetch_repo": "",
+            "finished_at": 0.0,
+            "id": "job-2",
+            "inbox_id": null,
+            "join_group": "",
+            "queued_at": 2.0,
+            "reported": false,
+            "result": {
+              "artifacts": [],
+              "changes": [],
+              "machine_state": {
+                "branch": "",
+                "commit": "",
+                "dirty": false,
+                "notes": ""
+              },
+              "question": "",
+              "report": "",
+              "status": "done",
+              "summary": "Finished",
+              "unresolved": [],
+              "validation": []
+            },
+            "session_id": "TTEAM:CROOM:100.1",
+            "started_at": 0.0,
+            "status": "queued",
+            "worker_id": "worker-2"
+          },
+          {
+            "attempt": 0,
+            "brief": "Previously started",
+            "deliverable": "report",
+            "error": "",
+            "fetch_ref": "",
+            "fetch_repo": "",
+            "finished_at": 0.0,
+            "id": "job-4",
+            "inbox_id": null,
+            "join_group": "",
+            "queued_at": 4.0,
+            "reported": false,
+            "result": null,
+            "session_id": "TTEAM:CROOM:100.1",
+            "started_at": -1.0,
+            "status": "running",
+            "worker_id": "worker-2"
+          }
+        ],
+        "messages": [
+          {
+            "event_id": "event-1",
+            "generated": false,
+            "meta": null,
+            "sender": "UASKER",
+            "source": "socket",
+            "text": "Message 1",
+            "thread_ts": null,
+            "ts": "100.1"
+          },
+          {
+            "event_id": "event-2",
+            "generated": false,
+            "meta": null,
+            "sender": "UOWNER",
+            "source": "self",
+            "text": "Message 2",
+            "thread_ts": "100.1",
+            "ts": "100.2"
+          },
+          {
+            "event_id": "event-3",
+            "generated": true,
+            "meta": {
+              "kind": "reply",
+              "owner": "UOWNER",
+              "session": "",
+              "status": "complete",
+              "turn": 1,
+              "v": 2,
+              "worker": ""
+            },
+            "sender": "UOWNER",
+            "source": "self",
+            "text": "Message 3",
+            "thread_ts": "100.1",
+            "ts": "100.3"
+          }
+        ],
+        "notes": {
+          "data": {
+            "summary": "Progress"
+          },
+          "revision": 1
+        },
+        "outbox": [
+          {
+            "after": "",
+            "attempts": 0,
+            "channel": "CROOM",
+            "error": "",
+            "filename": "",
+            "has_file": false,
+            "id": 1,
+            "idem_key": "post-1",
+            "kind": "reply",
+            "meta": null,
+            "retry_at": 0.0,
+            "sent_ts": "",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "failed",
+            "text": "Hello",
+            "thread_ts": "100.1"
+          },
+          {
+            "after": "",
+            "attempts": 0,
+            "channel": "CROOM",
+            "error": "",
+            "filename": "",
+            "has_file": true,
+            "id": 2,
+            "idem_key": "post-2",
+            "kind": "upload",
+            "meta": null,
+            "retry_at": 0.0,
+            "sent_ts": "",
+            "session_id": "TTEAM:CROOM:100.1",
+            "state": "ambiguous",
+            "text": "Report",
+            "thread_ts": "100.1"
+          }
+        ],
+        "session": {
+          "context": {
+            "backend": "",
+            "branch": "",
+            "machine": "",
+            "repo": "owner/repo",
+            "workspace": ""
+          },
+          "control": "active",
+          "created": 10.0,
+          "debriefed_turn": 0,
+          "decisions": [
+            "Run checks"
+          ],
+          "id": "TTEAM:CROOM:100.1",
+          "key": {
+            "channel": "CROOM",
+            "root_ts": "100.1",
+            "workspace": "TTEAM"
+          },
+          "last_reply_hash": "",
+          "last_unsolicited": 0.0,
+          "no_progress": 0,
+          "pause_reason": "",
+          "reset_at": 0.0,
+          "status": "blocked",
+          "summary": "",
+          "turns": 0,
+          "updated": 20.0,
+          "version": 0,
+          "wait_streak": 0
+        },
+        "workers": [
+          {
+            "backend": "codex",
+            "backend_session_id": "",
+            "created": 1.0,
+            "ephemeral": false,
+            "id": "worker-1",
+            "last_result": {
+              "artifacts": [],
+              "changes": [
+                {
+                  "change": "modified",
+                  "note": "",
+                  "path": "a.py"
+                }
+              ],
+              "machine_state": {
+                "branch": "",
+                "commit": "",
+                "dirty": false,
+                "notes": ""
+              },
+              "question": "",
+              "report": "",
+              "status": "done",
+              "summary": "Finished",
+              "unresolved": [],
+              "validation": []
+            },
+            "machine": "local",
+            "process": "busy",
+            "role": "general",
+            "session_id": "TTEAM:CROOM:100.1",
+            "slot": 0,
+            "status": "running",
+            "summary": "",
+            "updated": 21.0,
+            "workspace": "project"
+          },
+          {
+            "backend": "codex",
+            "backend_session_id": "",
+            "created": 2.0,
+            "ephemeral": true,
+            "id": "worker-2",
+            "last_result": {
+              "artifacts": [],
+              "changes": [
+                {
+                  "change": "modified",
+                  "note": "",
+                  "path": "a.py"
+                }
+              ],
+              "machine_state": {
+                "branch": "",
+                "commit": "",
+                "dirty": false,
+                "notes": ""
+              },
+              "question": "",
+              "report": "",
+              "status": "done",
+              "summary": "Finished",
+              "unresolved": [],
+              "validation": []
+            },
+            "machine": "local",
+            "process": "stopped",
+            "role": "general",
+            "session_id": "TTEAM:CROOM:100.1",
+            "slot": 0,
+            "status": "idle",
+            "summary": "",
+            "updated": 22.0,
+            "workspace": "project"
+          }
+        ]
+      },
+      "target": "/threads/TTEAM:CROOM:100.1"
+    }
+  ],
+  "exceptions": [
+    "v6 additive fields",
+    "authority and durable acknowledgements tested separately",
+    "bounded lists except attention selection; deterministic ID tie-breaks"
+  ],
+  "provenance": "Frozen Python v0.3.11 synthetic control views; compare legacy keys only",
+  "seed": [
+    [
+      "INSERT INTO threads (id,workspace,channel,root_ts,created,updated,status,context_json,decisions_json) VALUES (?,?,?,?,?,?,?,?,?)",
+      [
+        "TTEAM:CROOM:100.1",
+        "TTEAM",
+        "CROOM",
+        "100.1",
+        10.0,
+        20.0,
+        "blocked",
+        "{\"repo\":\"owner/repo\"}",
+        "[\"Run checks\"]"
+      ]
+    ],
+    [
+      "INSERT INTO threads (id,workspace,channel,root_ts,created,updated,control,pause_reason) VALUES (?,?,?,?,?,?,?,?)",
+      [
+        "old",
+        "TTEAM",
+        "CROOM",
+        "90.1",
+        1.0,
+        2.0,
+        "paused",
+        "Owner pause"
+      ]
+    ],
+    [
+      "INSERT INTO threads (id,workspace,channel,root_ts,created,updated) VALUES (?,?,?,?,?,?)",
+      [
+        "recent",
+        "TTEAM",
+        "CROOM",
+        "110.1",
+        21.0,
+        22.0
+      ]
+    ],
+    [
+      "INSERT INTO messages (event_id,workspace,channel,root_ts,ts,thread_ts,sender,text,source,meta_json,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "event-1",
+        "TTEAM",
+        "CROOM",
+        "100.1",
+        "100.1",
+        null,
+        "UASKER",
+        "Message 1",
+        "socket",
+        null,
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO messages (event_id,workspace,channel,root_ts,ts,thread_ts,sender,text,source,meta_json,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "event-2",
+        "TTEAM",
+        "CROOM",
+        "100.1",
+        "100.2",
+        "100.1",
+        "UOWNER",
+        "Message 2",
+        "self",
+        null,
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO messages (event_id,workspace,channel,root_ts,ts,thread_ts,sender,text,source,meta_json,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      [
+        "event-3",
+        "TTEAM",
+        "CROOM",
+        "100.1",
+        "100.3",
+        "100.1",
+        "UOWNER",
+        "Message 3",
+        "self",
+        "{\"owner\":\"UOWNER\",\"kind\":\"reply\",\"status\":\"complete\",\"turn\":1}",
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO workers (id,session_id,machine,workspace,backend,created,updated,status,last_result_json,ephemeral) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [
+        "worker-1",
+        "TTEAM:CROOM:100.1",
+        "local",
+        "project",
+        "codex",
+        1.0,
+        21.0,
+        "running",
+        "{\"status\":\"done\",\"summary\":\"Finished\",\"changes\":[{\"path\":\"a.py\"}]}",
+        0
+      ]
+    ],
+    [
+      "INSERT INTO jobs (id,worker_id,session_id,brief,queued_at,status,result_json) VALUES (?,?,?,?,?,?,?)",
+      [
+        "job-1",
+        "worker-1",
+        "TTEAM:CROOM:100.1",
+        "Run checks",
+        1.0,
+        "running",
+        "{\"status\":\"done\",\"summary\":\"Finished\"}"
+      ]
+    ],
+    [
+      "INSERT INTO workers (id,session_id,machine,workspace,backend,created,updated,status,last_result_json,ephemeral) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [
+        "worker-2",
+        "TTEAM:CROOM:100.1",
+        "local",
+        "project",
+        "codex",
+        2.0,
+        22.0,
+        "idle",
+        "{\"status\":\"done\",\"summary\":\"Finished\",\"changes\":[{\"path\":\"a.py\"}]}",
+        1
+      ]
+    ],
+    [
+      "INSERT INTO jobs (id,worker_id,session_id,brief,queued_at,status,result_json) VALUES (?,?,?,?,?,?,?)",
+      [
+        "job-2",
+        "worker-2",
+        "TTEAM:CROOM:100.1",
+        "Run checks",
+        2.0,
+        "queued",
+        "{\"status\":\"done\",\"summary\":\"Finished\"}"
+      ]
+    ],
+    [
+      "INSERT INTO jobs (id,worker_id,session_id,brief,queued_at,status) VALUES (?,?,?,?,?,?)",
+      [
+        "job-3",
+        "worker-1",
+        "TTEAM:CROOM:100.1",
+        "Follow up",
+        3.0,
+        "queued"
+      ]
+    ],
+    [
+      "INSERT INTO jobs (id,worker_id,session_id,brief,queued_at,status,started_at) VALUES (?,?,?,?,?,?,?)",
+      [
+        "job-4",
+        "worker-2",
+        "TTEAM:CROOM:100.1",
+        "Previously started",
+        4.0,
+        "running",
+        -1.0
+      ]
+    ],
+    [
+      "INSERT INTO approvals (id,worker_id,job_id,session_id,kind,summary,created,expires_at) VALUES (?,?,?,?,?,?,?,?)",
+      [
+        "approval-2",
+        "worker-2",
+        "job-4",
+        "TTEAM:CROOM:100.1",
+        "exec",
+        "Second command",
+        21.0,
+        300.0
+      ]
+    ],
+    [
+      "INSERT INTO approvals (id,worker_id,job_id,session_id,kind,summary,detail_json,created,expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      [
+        "approval-1",
+        "worker-1",
+        "job-1",
+        "TTEAM:CROOM:100.1",
+        "exec",
+        "Run command",
+        "{\"command\":\"echo ok\"}",
+        20.0,
+        300.0
+      ]
+    ],
+    [
+      "INSERT INTO outbox (idem_key,session_id,kind,channel,thread_ts,text,created,state) VALUES (?,?,?,?,?,?,?,?)",
+      [
+        "post-1",
+        "TTEAM:CROOM:100.1",
+        "reply",
+        "CROOM",
+        "100.1",
+        "Hello",
+        20.0,
+        "failed"
+      ]
+    ],
+    [
+      "INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,text,blob,state,created) VALUES('post-2',?,'upload','CROOM','100.1','Report',X'010203','ambiguous',21)",
+      [
+        "TTEAM:CROOM:100.1"
+      ]
+    ],
+    [
+      "INSERT INTO notes (session_id,revision,actor,data_json,source,created) VALUES (?,?,?,?,?,?)",
+      [
+        "TTEAM:CROOM:100.1",
+        1,
+        "UOWNER",
+        "{\"summary\":\"Progress\"}",
+        "control",
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO thread_inbox (session_id,kind,ref,payload_json,created) VALUES (?,?,?,?,?)",
+      [
+        "TTEAM:CROOM:100.1",
+        "owner_instruction",
+        "request-1234",
+        "{\"text\":\"Continue\"}",
+        20.0
+      ]
+    ],
+    [
+      "INSERT INTO audit (time,actor,action,target,details_json) VALUES (?,?,?,?,?)",
+      [
+        20.0,
+        "owner",
+        "thread.pause",
+        "TTEAM:CROOM:100.1",
+        "{\"reason\":\"Review\"}"
+      ]
+    ]
+  ]
+}
