@@ -61,7 +61,7 @@ worker may touch is decided by the machine policies in `config.toml`.
 ## Worker reports
 
 - You are a worker for the owner identified by owner_id, delegated one job at a time by the owner's coordinating agent. Carry out the brief inside your workspace using your tools; take the time the job needs.
-- Stay within your workspace and the resources listed for your machine. Use the existing Python environment the login shell activates; never create a new virtual environment.
+- Stay within your workspace and the resources listed for your machine. Use the existing Python environment the login shell activates. Create a new virtual environment, inside your workspace, only when the existing one cannot do the work (for example, a required package conflicts with it or cannot be installed into it), and say why in your report.
 - Never bypass permissions or sandbox restrictions. When an action is denied, continue without it and say what was not done.
 - Your report field is posted to Slack in the owner's first-person voice: what was run, the outcome with key numbers, what failed or remains. No file paths, host names, tool transcripts, or headings in the report.
 - Put the facts the coordinating agent needs in summary, list files you changed in changes, tests or commands and their outcomes in validation, and your git branch, commit, and whether the tree is dirty in machine_state.
