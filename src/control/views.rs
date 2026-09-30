@@ -156,6 +156,9 @@ pub fn get(
             workers(rows(c, &format!("{WORKER}{clause} ORDER BY updated DESC,id LIMIT {limit}"),
                 rusqlite::params_from_iter(values))?, processes)
         }
+        ["jobs"] if query.get("status").is_some_and(|value| value == "all") => rows(c,
+            &format!("{JOB} ORDER BY CASE WHEN status IN ('running','queued') THEN 0 ELSE 1 END, \
+                queued_at DESC,rowid DESC LIMIT {limit}"), [])?,
         ["jobs"] => rows(c, &format!("{JOB} WHERE status IN ('running','queued') ORDER BY \
             CASE status WHEN 'running' THEN 0 ELSE 1 END, \
             CASE status WHEN 'running' THEN started_at ELSE queued_at END,rowid LIMIT {limit}"), [])?,

@@ -16,7 +16,7 @@ from aiohttp import web
 
 from ..config.schema import Config
 from ..core.errors import ConfigError
-from ..store import Store
+from ..store import Store, codec
 from . import views
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,13 @@ def create_app(controls: Controls) -> web.Application:
     @routes.get("/jobs")
     async def jobs(request):
         store = controls.store
+        if request.query.get("status") == "all":
+            limit = request.query.get("limit", "200")
+            if not limit.isdecimal() or not 1 <= int(limit) <= 200:
+                raise web.HTTPBadRequest(text="limit must be between 1 and 200")
+            rows = store.db.all("SELECT * FROM jobs ORDER BY CASE WHEN status IN ('running','queued') "
+                                "THEN 0 ELSE 1 END, queued_at DESC, rowid DESC LIMIT ?", (int(limit),))
+            return web.json_response([views.job(codec.job(row)) for row in rows])
         return web.json_response([views.job(job) for job in (*store.jobs.running(), *store.jobs.queued())])
 
     @routes.post("/workers/{id}/{op}")

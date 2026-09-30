@@ -212,11 +212,12 @@ def test_dashboard_jobs_lists_active_work_with_thread_links(api):
     store.jobs.finish("j2", "done", 3.0)
 
     async def body(client):
-        return await client.request("GET", "/jobs")
+        return await client.request("GET", "/jobs"), await client.request("GET", "/jobs?status=all&limit=2")
 
-    jobs = with_server(controls, socket, body)
+    jobs, recent = with_server(controls, socket, body)
     assert [(job["id"], job["session_id"], job["brief"]) for job in jobs] == [
         ("j1", session.id, "brief")]
+    assert [job["id"] for job in recent] == ["j1", "j2"]
 
 
 def test_attention_threads_include_paused_and_blocked_outside_recent_page(api):
