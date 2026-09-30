@@ -1,6 +1,7 @@
 //! Candidate daemon composition. Active CLI execution requires an owner
 //! deployment record and fresh read-only startup diagnostics.
 pub mod composition;
+pub mod log;
 pub mod probe;
 use crate::{
     config::Config,
@@ -160,6 +161,11 @@ pub async fn active(
     credentials: Credentials,
     stop: watch::Receiver<bool>,
 ) -> Result<()> {
+    log::line(
+        "INFO",
+        "fridica",
+        "checking machines, backends and credentials",
+    );
     let report = crate::doctor::readiness::check(
         &config,
         &context,
@@ -230,6 +236,8 @@ async fn run(
     }
     let config = Arc::new(config);
     let store = Store::open(config.state.path.clone()).await?;
+    let (finished, following) = watch::channel(false);
+    let follower = tokio::spawn(log::follow(store.clone(), following));
     let clock = Arc::new(SystemClock);
     let web = Arc::new(WebClient::new(
         config.clone(),
@@ -262,6 +270,10 @@ async fn run(
         Access::OwnerPeer,
         Options::default(),
     );
-    service.run_with_lifecycle(stop, controls).await?;
+    let result = service.run_with_lifecycle(stop, controls).await;
+    // Let the log print the final shutdown events before returning.
+    finished.send_replace(true);
+    let _ = follower.await;
+    result?;
     Ok(())
 }

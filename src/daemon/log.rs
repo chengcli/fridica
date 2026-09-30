@@ -1,0 +1,372 @@
+//! Terminal log for `fridica start`. Follows the recorded event log and prints one
+//! line per notable event to stderr, in v0.3's `time LEVEL name: message` form.
+//! It only reads; it never prints message text, briefs, tokens or paths.
+//! `FRIDICA_LOG=off` silences it.
+use crate::store::Store;
+use rusqlite::{Connection, OptionalExtension};
+use serde_json::Value;
+use std::{collections::BTreeMap, time::Duration};
+use tokio::sync::watch;
+
+pub fn enabled() -> bool {
+    std::env::var("FRIDICA_LOG").map_or(true, |v| !matches!(v.as_str(), "off" | "0" | "false"))
+}
+pub fn line(level: &str, name: &str, message: &str) {
+    if enabled() {
+        eprintln!(
+            "{} {level} {name}: {message}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+    }
+}
+
+/// Print events recorded after the call until `finished` turns true, then drain.
+pub async fn follow(store: Store, mut finished: watch::Receiver<bool>) {
+    if !enabled() {
+        return;
+    }
+    let mut seq: i64 = store
+        .call(|c| {
+            Ok(
+                c.query_row("SELECT COALESCE(MAX(seq),0) FROM replay_events", [], |r| {
+                    r.get(0)
+                })?,
+            )
+        })
+        .await
+        .unwrap_or(0);
+    loop {
+        let done = *finished.borrow();
+        let after = seq;
+        if let Ok((last, lines)) = store.call(move |c| read(c, after)).await {
+            seq = last;
+            for (level, name, message) in lines {
+                line(level, name, &message);
+            }
+        }
+        if done {
+            return;
+        }
+        tokio::select! {
+            _ = finished.changed() => {}
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+    }
+}
+
+type Line = (&'static str, &'static str, String);
+
+fn read(c: &mut Connection, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
+    let names: BTreeMap<String, String> = c
+        .query_row(
+            "SELECT value FROM meta WHERE key='slack_channel_names'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default();
+    let rows: Vec<(i64, String, String)> = c
+        .prepare(
+            "SELECT seq,kind,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT 500",
+        )?
+        .query_map([after], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut last = after;
+    let mut lines = vec![];
+    for (seq, kind, payload) in rows {
+        last = seq;
+        let Ok(payload) = serde_json::from_str::<Value>(&payload) else {
+            continue;
+        };
+        let post = |id: i64| {
+            c.query_row("SELECT kind,session_id FROM outbox WHERE id=?", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()
+            .ok()
+            .flatten()
+        };
+        if let Some(line) = describe(&post, &names, &kind, &payload) {
+            lines.push(line);
+        }
+    }
+    Ok((last, lines))
+}
+
+fn text(v: &Value) -> &str {
+    v.as_str().unwrap_or("")
+}
+fn short(id: &str) -> &str {
+    let tail = id.rsplit('-').next().unwrap_or(id);
+    if tail.len() >= 6 {
+        &tail[..6]
+    } else {
+        id
+    }
+}
+fn channel(names: &BTreeMap<String, String>, id: &str) -> String {
+    names
+        .get(id)
+        .map_or_else(|| id.to_string(), |n| format!("#{n}"))
+}
+/// `WORKSPACE:CHANNEL:TS` as `#channel TS`.
+fn thread(names: &BTreeMap<String, String>, session: &str) -> String {
+    let mut parts = session.splitn(3, ':');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(_), Some(c), Some(ts)) => format!("{} {ts}", channel(names, c)),
+        _ => session.to_string(),
+    }
+}
+
+/// Outbox post kind and thread for a delivery, looked up by outbox ID.
+type Post<'a> = &'a dyn Fn(i64) -> Option<(String, String)>;
+
+pub(crate) fn describe(
+    post: Post<'_>,
+    names: &BTreeMap<String, String>,
+    kind: &str,
+    p: &Value,
+) -> Option<Line> {
+    Some(match kind {
+        "service_start" => (
+            "INFO",
+            "fridica",
+            if p["observe_only"] == true {
+                "running in observe-only mode (no replies or jobs)".into()
+            } else {
+                "running".into()
+            },
+        ),
+        "service_stop" => match &p["failure"] {
+            Value::Null => ("INFO", "fridica", "stopped".into()),
+            failure => ("WARNING", "fridica", format!("stopped: {failure}")),
+        },
+        "slack_socket_state" => match &p["failure"] {
+            Value::Null => ("INFO", "slack", text(&p["status"]).to_string()),
+            failure => (
+                "WARNING",
+                "slack",
+                format!("{} ({failure})", text(&p["status"])),
+            ),
+        },
+        "service_catchup" => {
+            let incomplete = p["incomplete_channels"].as_array().map_or(0, Vec::len);
+            if incomplete > 0 {
+                (
+                    "WARNING",
+                    "slack",
+                    format!("catch-up incomplete in {incomplete} channel(s)"),
+                )
+            } else if p["added"].as_u64().unwrap_or(0) > 0 {
+                (
+                    "INFO",
+                    "slack",
+                    format!("caught up on {} missed message(s)", p["added"]),
+                )
+            } else {
+                return None;
+            }
+        }
+        "intake" => {
+            let m = &p["message"];
+            // Our own posts come back as events; they are not news.
+            if !m["meta"].is_null() && m["sender"] == p["owner"] {
+                return None;
+            }
+            let root = m["thread_ts"].as_str().unwrap_or(text(&m["ts"]));
+            let source = if m["source"] == "catchup" {
+                " (catch-up)"
+            } else {
+                ""
+            };
+            (
+                "INFO",
+                "intake",
+                format!(
+                    "{} {root} from {}{source}",
+                    channel(names, text(&m["channel"])),
+                    text(&m["sender"])
+                ),
+            )
+        }
+        "actor_commit" => {
+            let d = &p["decision"];
+            let mut parts = vec![];
+            if d["reply"]["send"] != false && !text(&d["reply"]["text"]).is_empty() {
+                parts.push(format!("replied ({})", text(&d["reply"]["status"])));
+            }
+            if let Some(delegations) = d["delegations"].as_array().filter(|d| !d.is_empty()) {
+                let places: Vec<String> = delegations
+                    .iter()
+                    .map(|d| match text(&d["machine"]) {
+                        "" => d["tags"].as_array().map_or("default".into(), |t| {
+                            t.iter().map(text).collect::<Vec<_>>().join("+")
+                        }),
+                        machine => machine.to_string(),
+                    })
+                    .collect();
+                parts.push(format!(
+                    "delegated {} job(s) to {}",
+                    delegations.len(),
+                    places.join(", ")
+                ));
+            }
+            if parts.is_empty() {
+                parts.push("no reply".into());
+            }
+            (
+                "INFO",
+                "parent",
+                format!(
+                    "{}: {}",
+                    thread(names, text(&p["request"]["session"]["id"])),
+                    parts.join("; ")
+                ),
+            )
+        }
+        "parent_result" => match (&p["failure"], &p["error"]) {
+            (Value::Null, Value::Null) => return None,
+            (Value::Null, error) => ("WARNING", "parent", format!("call failed: {error}")),
+            (failure, _) => ("WARNING", "parent", format!("call failed: {failure}")),
+        },
+        "worker_call" => {
+            let spec = &p["spec"];
+            (
+                "INFO",
+                "worker",
+                format!(
+                    "job {} started on {} ({}, slot {})",
+                    short(text(&p["request"]["job_id"])),
+                    text(&spec["machine"]["name"]),
+                    text(&spec["backend"]),
+                    spec["slot"]
+                ),
+            )
+        }
+        "worker_completion" => {
+            let job = short(text(&p["job_id"]));
+            let completion = &p["completion"];
+            if completion["interrupted"] == true {
+                ("WARNING", "worker", format!("job {job} interrupted"))
+            } else if let Some(error) = completion["outcome"].get("Err") {
+                (
+                    "WARNING",
+                    "worker",
+                    format!("job {job} failed ({})", text(&error["code"])),
+                )
+            } else {
+                match text(&completion["outcome"]["Ok"]["result"]["status"]) {
+                    "" | "complete" | "done" => ("INFO", "worker", format!("job {job} finished")),
+                    status => ("WARNING", "worker", format!("job {job} finished: {status}")),
+                }
+            }
+        }
+        "delivery" => {
+            let found = post(p["outbox_id"].as_i64().unwrap_or(-1));
+            let (what, session) = found.unwrap_or_else(|| ("post".into(), String::new()));
+            let place = thread(names, &session);
+            match text(&p["result"]["outcome"]) {
+                "sent" => ("INFO", "slack", format!("posted {what} in {place}")),
+                outcome => (
+                    "WARNING",
+                    "slack",
+                    format!(
+                        "{what} in {place} {outcome}{}",
+                        match text(&p["result"]["code"]) {
+                            "" => String::new(),
+                            code => format!(" ({code})"),
+                        }
+                    ),
+                ),
+            }
+        }
+        "control_request" => (
+            "INFO",
+            "control",
+            format!("{} {}", text(&p["method"]), text(&p["target"])),
+        ),
+        "machine_load_result" if p["reading"].is_null() => (
+            "WARNING",
+            "placement",
+            format!(
+                "could not probe {}; treating it as available",
+                text(&p["machine"])
+            ),
+        ),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn describes_notable_events_without_message_text() {
+        let post = |id: i64| (id == 7).then(|| ("reply".to_string(), "T:C1:100.1".to_string()));
+        let names = BTreeMap::from([("C1".to_string(), "ai-human-plume".to_string())]);
+        let say = |kind: &str, p: Value| {
+            describe(&post, &names, kind, &p).map(|(l, n, m)| format!("{l} {n}: {m}"))
+        };
+        assert_eq!(
+            say("service_start", json!({"observe_only":false})).unwrap(),
+            "INFO fridica: running"
+        );
+        let intake = json!({"owner":"UO","message":{"channel":"C1","ts":"100.1","thread_ts":null,"sender":"UA","source":"socket","text":"private words","meta":null}});
+        let line = say("intake", intake).unwrap();
+        assert_eq!(line, "INFO intake: #ai-human-plume 100.1 from UA");
+        assert!(say("intake", json!({"owner":"UO","message":{"channel":"C1","ts":"1","sender":"UO","meta":{"kind":"reply"}}})).is_none());
+        let commit = json!({"request":{"session":{"id":"T:C1:100.1"}},"decision":{"reply":{"send":true,"text":"secret reply","status":"complete"},"delegations":[{"machine":"dart10"},{"machine":"","tags":["cuda"]}]}});
+        assert_eq!(say("actor_commit", commit).unwrap(), "INFO parent: #ai-human-plume 100.1: replied (complete); delegated 2 job(s) to dart10, cuda");
+        assert_eq!(
+            say("worker_call", json!({"request":{"job_id":"job-c5ebde2a-7a39-4a0e-af86-1eb487ec49ec"},"spec":{"machine":{"name":"dart11"},"backend":"codex","slot":1}})).unwrap(),
+            "INFO worker: job 1eb487 started on dart11 (codex, slot 1)"
+        );
+        assert_eq!(
+            say("worker_completion", json!({"job_id":"job-a-b","completion":{"interrupted":false,"outcome":{"Ok":{"result":{"status":"failed"}}}}})).unwrap(),
+            "WARNING worker: job job-a-b finished: failed"
+        );
+        assert_eq!(
+            say(
+                "delivery",
+                json!({"outbox_id":7,"result":{"outcome":"sent"}})
+            )
+            .unwrap(),
+            "INFO slack: posted reply in #ai-human-plume 100.1"
+        );
+        assert_eq!(
+            say(
+                "delivery",
+                json!({"outbox_id":7,"result":{"outcome":"rejected","code":"invalid_arguments"}})
+            )
+            .unwrap(),
+            "WARNING slack: reply in #ai-human-plume 100.1 rejected (invalid_arguments)"
+        );
+        assert_eq!(
+            say(
+                "control_request",
+                json!({"method":"POST","target":"/channels/C1/instruct","body":{"text":"secret"}})
+            )
+            .unwrap(),
+            "INFO control: POST /channels/C1/instruct"
+        );
+        assert!(say(
+            "machine_load_result",
+            json!({"machine":"dart10","reading":{"load1":1}})
+        )
+        .is_none());
+        assert!(say("backend_wire", json!({})).is_none());
+        for kind in ["intake", "actor_commit", "control_request"] {
+            let all = [say(
+                kind,
+                json!({"owner":"UO","message":{"text":"private words"},"request":{"session":{"id":"x"}},"decision":{},"body":{"text":"secret"}}),
+            )];
+            assert!(all
+                .iter()
+                .flatten()
+                .all(|l| !l.contains("private") && !l.contains("secret")));
+        }
+    }
+}
