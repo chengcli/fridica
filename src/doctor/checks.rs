@@ -34,7 +34,6 @@ pub struct Check {
 pub struct Report {
     pub checks: Vec<Check>,
     pub cancelled: bool,
-    pub active_launch_ready: bool,
 }
 impl Report {
     pub fn passed(&self) -> bool {
@@ -81,7 +80,7 @@ impl Report {
             count(Status::Warn),
             count(Status::Skip)
         ));
-        lines.push("Slack authorization and channel membership are verified on start; no model request was made. Active CLI startup remains gated.".into());
+        lines.push("Slack authorization and channel membership are verified on start; no model request was made.".into());
         lines.join("\n")
     }
 }

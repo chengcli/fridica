@@ -81,27 +81,27 @@ journalctl --user -u fridica-candidate -f
 systemctl --user stop fridica-candidate
 ```
 
-The unit defaults to `--observe-only` with no model/worker/post adapters. This
-mode still connects to Slack and persists intake; perform it only on the intended
-host with owner-managed credentials. Control authority uses the owner's local
+The unit runs the daemon; `service-print --observe-only` instead prints a unit with
+no model/worker/post adapters, which still connects to Slack and persists intake.
+Run either only on the intended host with owner-managed credentials. Control authority uses the owner's local
 Unix identity. SIGINT/SIGTERM drain the service and remove the socket; a second
 process cannot open the same state. `KillMode=control-group` bounds abandoned
 children on forced service termination. For foreground startup, load credentials
 in the environment and run `start --observe-only --config ...`; stop with Ctrl-C.
 No worker-process survival across daemon restarts is promised.
 
-## Active opt-in
+## Running the daemon
 
-Work through `DEPLOYMENT.md` first. Active operation replies, delegates and posts
-in Slack, so it is an explicit flag:
+Work through `DEPLOYMENT.md` first. `start` replies, delegates and posts in Slack:
 
 ```sh
-/absolute/install/bin/fridica-candidate start --active --config /private/fridica/config.toml
+/absolute/install/bin/fridica-candidate start --config /private/fridica/config.toml
 ```
 
-Active startup reruns readiness and doctor before reading credentials or opening
-state, and refuses a config that changes during those probes. A bare `start`
-refuses to run. For an active unit, pass `--active` to `service-print`. Start with one channel/target;
+Startup reruns readiness and doctor before reading credentials or opening state,
+and refuses a config that changes during those probes. Add `--observe-only` to
+record intake without models, workers or posts. `service-print` prints a daemon
+unit; pass `--observe-only` for an observer unit. Start with one channel/target;
 keep campaign actions, channel report posting and MCP controls disabled until
 separately enabled and verified.
 

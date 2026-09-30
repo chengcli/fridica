@@ -107,10 +107,9 @@ mcp_inventory_complete=true
             path.write_text("#!/bin/sh\nexit 0\n")
             path.chmod(0o700)
         fingerprint = json.loads(command("check-config", "--config", config))["fingerprint"]
-        assert "requires --observe-only" in command("start", "--config", config, ok=False)
         assert not (root / "private/state.sqlite3").exists()
         ready = json.loads(command("start", "--check-ready", "--config", config))
-        assert ready["startup_checks_passed"] and not ready["active_launch_ready"]
+        assert ready["startup_checks_passed"] and "active_launch_ready" not in ready
         diagnostics = json.loads(command("doctor", "--config", config, "--json"))
         assert not diagnostics["cancelled"]
         command("init-state", "--config", config)
@@ -120,14 +119,17 @@ mcp_inventory_complete=true
             assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("6",)
         checks.append("offline init/configure/readiness/doctor/fresh v6 initialization")
         unit = command("service-print", "--config", config, "--environment-file", root / "private/credentials.env")
-        assert "--observe-only" in unit and "--active" not in unit and "synthetic" not in unit
+        # The default unit runs the daemon; --observe-only is an explicit opt-in.
+        assert "--observe-only" not in unit and "--active" not in unit and "synthetic" not in unit
+        observer_unit = command("service-print", "--config", config, "--environment-file", root / "private/credentials.env", "--observe-only")
+        assert observer_unit.replace(" --observe-only", "") == unit
         unit_path = root / "fridica-candidate.service"
         unit_path.write_text(unit)
         if LINUX:
             run("/usr/bin/systemd-analyze", "verify", unit_path, env=environment, cwd=root)
-            checks.append("generated observe-only systemd unit passes systemd-analyze verify")
+            checks.append("generated daemon systemd unit passes systemd-analyze verify")
         else:
-            checks.append("generated observe-only systemd unit content (systemd-analyze skipped: not Linux)")
+            checks.append("generated daemon systemd unit content (systemd-analyze skipped: not Linux)")
 
         def lifecycle(active):
             with socket.socket() as proxy:
@@ -137,7 +139,7 @@ mcp_inventory_complete=true
                 environment["HTTPS_PROXY"] = f"http://127.0.0.1:{proxy.getsockname()[1]}"
                 environment["NO_PROXY"] = ""
                 args = ["start", "--config", str(config)]
-                args += ["--active"] if active else ["--observe-only"]
+                args += [] if active else ["--observe-only"]
                 child = subprocess.Popen([binary, *args], env=environment, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 try:
                     connection, _ = proxy.accept()
@@ -168,17 +170,17 @@ mcp_inventory_complete=true
         checks.append("installed observer: status, exclusive lock, snapshot refusal, SIGINT drain; no jobs/posts")
         before = config.read_text()
         fake.unlink()
-        assert "readiness checks did not pass" in command("start", "--active", "--config", config, ok=False)
+        assert "readiness checks did not pass" in command("start", "--config", config, ok=False)
         fake.write_text(BACKEND.replace("'loggedIn': True", "'loggedIn': False"))
         fake.chmod(0o700)
-        assert "doctor checks did not pass" in command("start", "--active", "--config", config, ok=False)
+        assert "doctor checks did not pass" in command("start", "--config", config, ok=False)
         fake.write_text(BACKEND.replace("print(json.dumps({'loggedIn': True}))",
             f"open({str(config)!r}, 'a').write('\\n# changed during probes\\n'); print(json.dumps({{'loggedIn': True}}))"))
-        assert "configuration changed" in command("start", "--active", "--config", config, ok=False)
+        assert "configuration changed" in command("start", "--config", config, ok=False)
         config.write_text(before)
         fake.write_text(BACKEND)
         lifecycle(True)
-        checks.append("active opt-in reruns readiness/auth, refuses config changes during probes, serves controls and drains SIGTERM with Slack held locally")
+        checks.append("default start reruns readiness/auth, refuses config changes during probes, serves controls and drains SIGTERM with Slack held locally")
 
         snapshot = installation / "share/state_snapshot.py"
         def snapshot_command(*args):

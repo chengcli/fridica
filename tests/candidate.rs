@@ -2,7 +2,7 @@ use fridica::cli::{assets, candidate};
 use std::{fs, path::Path};
 
 #[test]
-fn service_defaults_to_observer_and_quotes_paths_without_shell_expansion() {
+fn service_defaults_to_active_daemon_and_quotes_paths_without_shell_expansion() {
     let unit = candidate::service(
         Path::new("/opt/fridica bin/fridica"),
         Path::new("/home/a/$cfg%/file\".toml"),
@@ -10,8 +10,8 @@ fn service_defaults_to_observer_and_quotes_paths_without_shell_expansion() {
         false,
     )
     .unwrap();
-    assert!(unit.contains("--observe-only"));
-    assert!(!unit.contains("--active"));
+    assert!(unit.contains("start --config \"/home/a/$$cfg%%/file\\\".toml\"\n"));
+    assert!(!unit.contains("--observe-only") && !unit.contains("--active"));
     assert!(unit.contains("\"/home/a/$$cfg%%/file\\\".toml\""));
     assert!(unit.contains("EnvironmentFile=\"/home/a/$env%%\""));
     assert!(unit.contains("KillMode=control-group"));
@@ -36,8 +36,7 @@ fn service_defaults_to_observer_and_quotes_paths_without_shell_expansion() {
         true,
     )
     .unwrap();
-    assert!(unit.contains("start --config \"/config\" --active\n"));
-    assert!(!unit.contains("--observe-only"));
+    assert!(unit.contains("start --config \"/config\" --observe-only\n"));
 }
 
 #[test]
@@ -79,11 +78,12 @@ fn exported_assets_are_complete_and_never_overwrite() {
 }
 
 #[test]
-fn start_modes_are_exclusive_and_the_record_command_is_gone() {
+fn start_modes_are_exclusive_and_removed_flags_are_rejected() {
     for args in [
-        vec!["start", "--active", "--observe-only"],
-        vec!["start", "--active", "--check-ready"],
-        vec!["start", "--active", "--deployment-record", "/nope"],
+        vec!["start", "--observe-only", "--check-ready"],
+        vec!["start", "--active"],
+        vec!["start", "--deployment-record", "/nope"],
+        vec!["service-print", "--environment-file", "/env", "--active"],
         vec!["deployment-record", "--output", "/nope"],
     ] {
         let result = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))

@@ -35,8 +35,6 @@ pub struct Report {
     pub targets: Vec<Target>,
     pub cancelled: bool,
     pub startup_checks_passed: bool,
-    pub active_launch_ready: bool,
-    pub remaining_gates: [&'static str; 1],
 }
 
 /// Check all configured worker destinations. Completion of an in-flight probe
@@ -63,8 +61,6 @@ pub async fn check(
         targets: vec![],
         cancelled: *stop.borrow(),
         startup_checks_passed: false,
-        active_launch_ready: false,
-        remaining_gates: ["deployment_validation"],
     };
     if report.cancelled {
         return Ok(report);

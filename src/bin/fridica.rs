@@ -31,9 +31,9 @@ enum Command {
         config: Option<PathBuf>,
         #[arg(long)]
         environment_file: PathBuf,
-        /// Print an active unit instead of the observe-only default.
+        /// Print an observe-only unit instead of the active default.
         #[arg(long)]
-        active: bool,
+        observe_only: bool,
     },
     /// Create an experimental starter configuration, contract and Slack manifest.
     Init {
@@ -48,12 +48,9 @@ enum Command {
     Start {
         #[arg(long)]
         config: Option<PathBuf>,
-        /// Start without model, worker or posting adapters.
+        /// Connect and record intake without model, worker or posting adapters.
         #[arg(long)]
         observe_only: bool,
-        /// Explicit opt-in: reply, delegate and post. Readiness and doctor rerun first.
-        #[arg(long, conflicts_with_all = ["observe_only", "check_ready"])]
-        active: bool,
         /// Read-only startup preparation; no Slack credentials or state required.
         #[arg(long, conflicts_with = "observe_only")]
         check_ready: bool,
@@ -150,7 +147,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::ServicePrint {
             config,
             environment_file,
-            active,
+            observe_only,
         } => {
             print!(
                 "{}",
@@ -158,7 +155,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &std::env::current_exe()?,
                     &config_path(config)?,
                     &environment_file,
-                    active
+                    observe_only
                 )?
             );
         }
@@ -171,7 +168,7 @@ async fn run(cli: Cli) -> Result<()> {
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Next: use this executable with the same --config path for configure --detect, check-config and start --check-ready; complete workspaces and inventories first. Services default to observe-only; start --active opts in explicitly.");
+            println!("Next: use this executable with the same --config path for configure --detect, check-config and start --check-ready; complete workspaces and inventories first. `start` runs the daemon; add --observe-only to record without replying.");
         }
         Command::Configure(options) => {
             if let Err(error) = options.run(&fridica::config::LoadContext::current()?).await {
@@ -182,13 +179,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Start {
             config,
             observe_only,
-            active,
             check_ready,
             timeout,
         } => {
-            if !observe_only && !check_ready && !active {
-                anyhow::bail!("experimental Rust start requires --observe-only or explicit --active; use --check-ready for startup preparation");
-            }
             let context = fridica::config::LoadContext::current()?;
             let path = config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
             let config =
@@ -213,7 +206,8 @@ async fn run(cli: Cli) -> Result<()> {
                 let credentials =
                     fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())
                         .map_err(fridica::cli::input_error)?;
-                if active {
+                if !observe_only {
+                    // Active by default: readiness and doctor rerun before Slack I/O.
                     with_shutdown(|stop| {
                         fridica::daemon::active(
                             config,
