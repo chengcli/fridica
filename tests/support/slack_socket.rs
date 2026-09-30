@@ -740,6 +740,7 @@ async fn service_composes_real_socket_history_and_delivery_across_a_reconnect() 
             delivery: web.clone(),
             workers: Arc::new(NoServiceWorkers),
             job_io: Arc::new(crate::workers::protocol::NoJobIo),
+            machine_load: None,
         },
         receiver.clock.clone(),
         receiver.ids.clone(),

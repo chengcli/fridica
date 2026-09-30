@@ -1,6 +1,7 @@
 //! Runtime composition with injected external adapters. Socket/control servers
 //! can drive bounded passes; the database, not notifications, owns queued work.
 use super::{actor, controls, manager::Manager};
+use crate::machines::probe::Monitor;
 use crate::{
     approvals::Broker,
     attention::{self, Message},
@@ -30,6 +31,8 @@ pub struct Adapters<P: Parent, D: Delivery> {
     pub delivery: Arc<D>,
     pub workers: Arc<dyn Factory>,
     pub job_io: Arc<dyn JobIo>,
+    /// Load readings for placement; None disables probing (tests, observe-only).
+    pub machine_load: Option<Arc<Monitor>>,
 }
 #[derive(Debug, Default, PartialEq)]
 pub struct Progress {
@@ -52,6 +55,7 @@ pub struct Runtime<P: Parent, D: Delivery> {
     supervisor: Supervisor,
     dispatcher: Dispatcher<D>,
     pub approvals: Arc<Broker>,
+    machine_load: Option<Arc<Monitor>>,
     pass: Mutex<()>,
 }
 impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
@@ -103,6 +107,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             limits: config.attention.clone(),
             observe_only,
             parent_timeout: timeout,
+            machine_load: adapters.machine_load.clone(),
         });
         let manager = Manager::new(actor, config.limits.parent_concurrency)?;
         let dispatcher = Dispatcher {
@@ -125,6 +130,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             supervisor,
             dispatcher,
             approvals,
+            machine_load: adapters.machine_load,
             pass: Mutex::new(()),
         })
     }
@@ -168,6 +174,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             limits: config.attention.clone(),
             observe_only: self.observe_only(),
             parent_timeout: Duration::try_from_secs_f64(config.parent.timeout)?,
+            machine_load: self.machine_load.clone(),
         });
         Ok(Arc::new(Manager::new(
             actor,

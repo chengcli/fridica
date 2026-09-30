@@ -78,6 +78,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             "github",
             "attention",
             "isolation",
+            "placement",
         ],
         "top level",
     )?;
@@ -134,6 +135,24 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     }
     parent.repos = parent.repos.map(|p| file(&p, base, context)).transpose()?;
     let limits: Limits = decode(root.get("limits"))?;
+    let placement: Placement = decode(root.get("placement"))?;
+    number(placement.probe_ttl, 0., "placement.probe_ttl")?;
+    number(placement.probe_timeout, 1., "placement.probe_timeout")?;
+    if placement.probe_timeout > 120. {
+        bail!("placement.probe_timeout must be at most 120 seconds");
+    }
+    for (value, name) in [
+        (placement.max_load, "placement.max_load"),
+        (
+            placement.max_gpu_utilization,
+            "placement.max_gpu_utilization",
+        ),
+        (placement.max_gpu_memory, "placement.max_gpu_memory"),
+    ] {
+        if !value.is_finite() || value <= 0. {
+            bail!("{name} must be a positive number");
+        }
+    }
     if [
         limits.max_delegations_per_turn,
         limits.max_workers_per_thread,
@@ -244,6 +263,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         github,
         attention,
         isolation,
+        placement,
         path,
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };

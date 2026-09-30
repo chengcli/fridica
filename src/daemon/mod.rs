@@ -1,6 +1,7 @@
 //! Candidate daemon composition. Active CLI execution requires an owner
 //! deployment record and fresh read-only startup diagnostics.
 pub mod composition;
+pub mod probe;
 use crate::{
     config::Config,
     control::{

@@ -1,4 +1,5 @@
 //! Placement is pure: choosing a sticky machine does not reserve a job slot or process.
+pub mod probe;
 use crate::config::registry::{Machine, Registry, Workspace};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -52,6 +53,7 @@ pub fn resolve<'a>(
     sticky_machine: &str,
     sticky_workspace: &str,
     busy: &BTreeMap<String, usize>,
+    load: &BTreeMap<String, probe::Assessment>,
 ) -> Result<Placement<'a>, MatchError> {
     let fits = |m: &&Machine| {
         selector.tags.iter().all(|tag| m.tags.contains(tag))
@@ -103,24 +105,34 @@ pub fn resolve<'a>(
                 registry.names(),
             ));
         }
+        // Probed saturation only steers choices among matches; machines without
+        // a reading count as available, so an empty `load` keeps the job-count rule.
+        let saturated = |m: &&Machine| load.get(&m.name).is_some_and(|a| a.saturated);
         let preferred: Vec<_> = candidates
             .iter()
             .copied()
-            .filter(|m| m.name == sticky_machine || m.name == registry.default)
+            .filter(|m| (m.name == sticky_machine || m.name == registry.default) && !saturated(m))
             .collect();
-        let eligible = if preferred.is_empty() {
-            &candidates
-        } else {
+        let open: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|m| !saturated(m))
+            .collect();
+        let eligible = if !preferred.is_empty() {
             &preferred
+        } else if !open.is_empty() {
+            &open
+        } else {
+            &candidates
+        };
+        let pressure = |m: &Machine| {
+            let jobs = *busy.get(&m.name).unwrap_or(&0) as f64 / m.max_jobs as f64;
+            jobs.max(load.get(&m.name).map_or(0., |a| a.score))
         };
         // Stable iteration breaks equal-load ties in configuration order.
         *eligible
             .iter()
-            .min_by(|a, b| {
-                let a_load = *busy.get(&a.name).unwrap_or(&0) as f64 / a.max_jobs as f64;
-                let b_load = *busy.get(&b.name).unwrap_or(&0) as f64 / b.max_jobs as f64;
-                a_load.total_cmp(&b_load)
-            })
+            .min_by(|a, b| pressure(a).total_cmp(&pressure(b)))
             .unwrap()
     } else {
         let fallback = registry

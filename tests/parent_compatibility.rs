@@ -95,6 +95,7 @@ impl Fixture {
             limits: Default::default(),
             observe_only: false,
             parent_timeout: Duration::from_secs(2),
+            machine_load: None,
         }
     }
     async fn reopen(self) -> Self {

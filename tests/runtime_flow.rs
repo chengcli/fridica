@@ -194,6 +194,15 @@ impl Harness {
         Self::with_io(responses, observe, Arc::new(NoJobIo)).await
     }
     async fn with_io(responses: Vec<Value>, observe: bool, job_io: Arc<dyn JobIo>) -> Self {
+        Self::with_machines(responses, observe, job_io, "", None).await
+    }
+    async fn with_machines(
+        responses: Vec<Value>,
+        observe: bool,
+        job_io: Arc<dyn JobIo>,
+        machines: &str,
+        machine_load: Option<Arc<fridica::machines::probe::Monitor>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("project")).unwrap();
         let source = format!(
@@ -209,10 +218,12 @@ max_jobs=2
 max_workers=2
 [machines.local.workspaces]
 project="{}"
+{}
 [state]
 path="{}"
 "#,
             dir.path().join("project").display(),
+            machines,
             dir.path().join("db").display()
         );
         std::fs::write(dir.path().join("config.toml"), &source).unwrap();
@@ -243,6 +254,7 @@ path="{}"
                 delivery: sink.clone(),
                 workers: Arc::new(Fakes(worker.clone())),
                 job_io,
+                machine_load,
             },
             clock.clone(),
             ids.clone(),
@@ -314,6 +326,83 @@ path="{}"
         }).await.unwrap();
     }
 }
+struct Readings;
+impl fridica::machines::probe::Reader for Readings {
+    fn read<'a>(
+        &'a self,
+        machine: &'a fridica::config::registry::Machine,
+        _: Duration,
+    ) -> AdapterFuture<'a, Option<fridica::machines::probe::Reading>> {
+        let output: &[u8] = match machine.name.as_str() {
+            "gpu_a" => b"load 1 8\ngpu 0, 99, 100, 1000\n",
+            "gpu_b" => b"load 1 8\ngpu 0, 3, 100, 1000\n",
+            _ => b"",
+        };
+        Box::pin(async move { fridica::machines::probe::parse(output, 0.) })
+    }
+}
+
+#[tokio::test]
+async fn probed_load_reaches_the_parent_and_steers_tag_based_placement() {
+    let gpus = r#"
+[machines.gpu_a]
+host="gpu-a"
+tags=["cuda"]
+backends=["codex"]
+resources={cpus=8, gpus=[0]}
+[machines.gpu_a.workspaces]
+shared="/work/shared"
+[machines.gpu_b]
+host="gpu-b"
+tags=["cuda"]
+backends=["codex"]
+resources={cpus=8, gpus=[0]}
+[machines.gpu_b.workspaces]
+shared="/work/shared"
+"#;
+    let decision = json!({"reply":{"text":"Training.","status":"complete"},
+        "delegations":[{"brief":"Train the model","tags":["cuda"],"workspace":"shared"}]});
+    let monitor = Arc::new(fridica::machines::probe::Monitor::new(Arc::new(Readings)));
+    let h = Harness::with_machines(
+        vec![decision],
+        false,
+        Arc::new(NoJobIo),
+        gpus,
+        Some(monitor),
+    )
+    .await;
+    h.intake(false).await;
+    let first = h.runtime.pass().await.unwrap();
+    assert_eq!(first.started, 1);
+    // gpu_a is first in configuration order but its only GPU is busy.
+    assert_eq!(h.scalar("SELECT machine FROM workers").await, "gpu_b");
+    let request = h.parent.calls.lock().unwrap()[0].clone();
+    let load = &request.session["work"]["load"];
+    assert_eq!(
+        (
+            load["gpu_a"]["saturated"].clone(),
+            load["gpu_b"]["saturated"].clone()
+        ),
+        (json!(true), json!(false))
+    );
+    assert!(
+        load.get("local").is_none(),
+        "an unreadable machine is omitted, not guessed"
+    );
+    let machines = request.session["machines"].as_array().unwrap();
+    assert!(machines
+        .iter()
+        .any(|m| m["name"] == "gpu_b" && m["load"]["score"] == json!(0.125)));
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='machine_load_result'"
+        )
+        .await,
+        "3"
+    );
+    h.finish(1, 1).await;
+}
+
 fn delegate() -> Value {
     json!({"reply":{"text":"Running checks.","status":"complete"},"delegations":[{"brief":"Run focused checks","machine":"local","workspace":"project"}]})
 }
@@ -622,6 +711,7 @@ async fn restart_recovers_unconsumed_results_and_uncertain_sends_without_duplica
                 limits: h.config.attention.clone(),
                 observe_only: false,
                 parent_timeout: Duration::from_secs(1),
+                machine_load: None,
             };
             actor.step(SESSION.into()).await.unwrap();
             assert!(fridica::store::outbox::claim(&h.store, 20.)
@@ -661,6 +751,7 @@ async fn restart_recovers_unconsumed_results_and_uncertain_sends_without_duplica
                 delivery: sink.clone(),
                 workers: Arc::new(Fakes(worker.clone())),
                 job_io: Arc::new(NoJobIo),
+                machine_load: None,
             },
             clock,
             Arc::new(fridica::core::time::RandomIds),
@@ -1896,6 +1987,7 @@ async fn worker_stop_intents_recover_after_runtime_restart_before_restore() {
                 delivery: sink.clone(),
                 workers: Arc::new(Fakes(worker.clone())),
                 job_io: Arc::new(NoJobIo),
+                machine_load: None,
             },
             clock.clone(),
             Arc::new(SequenceIds::default()),
@@ -2260,6 +2352,7 @@ fn control_actor(h: &Harness) -> fridica::threads::actor::Actor<ParentScript> {
         limits: h.config.attention.clone(),
         observe_only: false,
         parent_timeout: Duration::from_secs(3),
+        machine_load: None,
     }
 }
 fn worker_control(worker: &str, op: &str) -> Value {
@@ -2373,6 +2466,7 @@ async fn parent_stop_cancels_queued_work_and_approvals_and_recovers_a_lost_ack()
             delivery: h.sink.clone(),
             workers: Arc::new(Fakes(h.worker.clone())),
             job_io: Arc::new(NoJobIo),
+            machine_load: None,
         },
         h.clock.clone(),
         Arc::new(fridica::core::time::RandomIds),
@@ -2782,6 +2876,7 @@ async fn idle_parent_interrupt_is_visible_and_observe_only_defers_reconciliation
             delivery: h.sink.clone(),
             workers: Arc::new(Fakes(h.worker.clone())),
             job_io: Arc::new(NoJobIo),
+            machine_load: None,
         },
         h.clock.clone(),
         Arc::new(fridica::core::time::RandomIds),
@@ -3148,6 +3243,7 @@ impl Harness {
                 delivery: sink.clone(),
                 workers: Arc::new(Fakes(worker.clone())),
                 job_io: Arc::new(NoJobIo),
+                machine_load: None,
             },
             clock.clone(),
             ids.clone(),
@@ -3311,6 +3407,7 @@ async fn complete_runtime_capture(
                     limits: h.config.attention.clone(),
                     observe_only: false,
                     parent_timeout: Duration::from_secs(1),
+                    machine_load: None,
                 };
                 actor.step(SESSION.into()).await.unwrap();
                 assert!(fridica::store::outbox::claim(&h.store, 22.)

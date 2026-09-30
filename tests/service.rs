@@ -562,6 +562,7 @@ control_socket="private/control.sock"
                 delivery: sink.clone(),
                 workers: Arc::new(FactoryStub(workers.clone())),
                 job_io: Arc::new(NoJobIo),
+                machine_load: None,
             },
             clock.clone(),
             Arc::new(SequenceIds::default()),

@@ -56,6 +56,7 @@ fn frozen_placement_diagnostics_payloads_and_gpu_views_match_exactly() {
             &c.sticky_machine,
             &c.sticky_workspace,
             &c.busy,
+            &BTreeMap::new(),
         ) {
             Ok(p) => assert_eq!(
                 Some(
@@ -91,4 +92,98 @@ fn frozen_placement_diagnostics_payloads_and_gpu_views_match_exactly() {
         PathBuf::from("~/work/unique/worker2")
     );
     assert_eq!(gpu.resources.gpus, Some(vec![0, 1, 2, 3]));
+}
+
+#[test]
+fn probed_saturation_steers_only_tag_based_choices() {
+    use fridica::machines::probe::Assessment;
+    let corpus: Corpus = serde_json::from_str(include_str!("corpus/placement.json")).unwrap();
+    let context = LoadContext {
+        home: PathBuf::from("/tmp/fridica-test-home"),
+        runtime_dir: None,
+        uid: 123,
+        protected: vec![],
+    };
+    let config = loader::parse(
+        &corpus.source,
+        &PathBuf::from("/tmp/fridica-test-config.toml"),
+        &context,
+    )
+    .unwrap();
+    let load = |entries: &[(&str, f64, bool)]| -> BTreeMap<String, Assessment> {
+        entries
+            .iter()
+            .map(|(name, score, saturated)| {
+                (
+                    name.to_string(),
+                    Assessment {
+                        score: *score,
+                        saturated: *saturated,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect()
+    };
+    let pick = |selector: Selector, sticky: &str, load: &BTreeMap<String, Assessment>| {
+        resolve(
+            &config.machines,
+            &selector,
+            sticky,
+            "",
+            &BTreeMap::new(),
+            load,
+        )
+        .unwrap()
+        .machine
+        .name
+        .clone()
+    };
+    let cuda = || Selector {
+        tags: vec!["cuda".into()],
+        workspace: "shared".into(),
+        ..Default::default()
+    };
+    // No readings: the job-count rule, ties in configuration order.
+    assert_eq!(pick(cuda(), "", &load(&[])), "gpu");
+    // A saturated match is avoided, and measured load ranks the rest.
+    assert_eq!(pick(cuda(), "", &load(&[("gpu", 1.2, true)])), "gpu2");
+    assert_eq!(
+        pick(
+            cuda(),
+            "",
+            &load(&[("gpu", 0.8, false), ("gpu2", 0.1, false)])
+        ),
+        "gpu2"
+    );
+    // The sticky machine is kept unless it is saturated.
+    assert_eq!(
+        pick(
+            cuda(),
+            "gpu",
+            &load(&[("gpu", 0.8, false), ("gpu2", 0.1, false)])
+        ),
+        "gpu"
+    );
+    assert_eq!(pick(cuda(), "gpu", &load(&[("gpu", 1.0, true)])), "gpu2");
+    // Everything saturated: still place, on the least loaded match.
+    assert_eq!(
+        pick(
+            cuda(),
+            "",
+            &load(&[("gpu", 1.5, true), ("gpu2", 1.1, true)])
+        ),
+        "gpu2"
+    );
+    // An explicitly named machine and the untagged default are never redirected.
+    let named = Selector {
+        machine: "gpu".into(),
+        workspace: "shared".into(),
+        ..Default::default()
+    };
+    assert_eq!(pick(named, "", &load(&[("gpu", 2., true)])), "gpu");
+    assert_eq!(
+        pick(Selector::default(), "", &load(&[("cpu", 2., true)])),
+        "cpu"
+    );
 }
