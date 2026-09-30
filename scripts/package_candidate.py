@@ -33,7 +33,7 @@ def canonical(value):
 
 
 def sources():
-    paths = {ROOT / name for name in ("Cargo.toml", "Cargo.lock", "scripts/package_candidate.py", "scripts/smoke_candidate.py", ".github/workflows/ci.yml")}
+    paths = {ROOT / name for name in ("Cargo.toml", "Cargo.lock", "build.rs", "scripts/package_candidate.py", "scripts/smoke_candidate.py", ".github/workflows/ci.yml")}
     paths.update(ROOT / name for name in EVIDENCE)
     paths.update(ROOT.glob("tests/**/*.rs"))
     paths.update(ROOT.glob("tests/corpus/**/*.json"))
