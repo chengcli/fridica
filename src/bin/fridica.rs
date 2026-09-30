@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Experimental v0.4 candidate. Separate from the production Python launcher."
+    about = "Slack agent daemon: a parent agent that answers threads and delegates work to Claude Code/Codex workers."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -18,14 +18,14 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Print the candidate version, source fingerprint and native target.
+    /// Print the version, source fingerprint and native target.
     BuildInfo,
     /// Initialize fresh v6 state offline; existing legacy databases require migrate.
     InitState {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Print a user systemd service; default mode is observe-only. Does not install it.
+    /// Print a user systemd service (active unless --observe-only). Does not install it.
     ServicePrint {
         #[arg(long)]
         config: Option<PathBuf>,
@@ -35,7 +35,7 @@ enum Command {
         #[arg(long)]
         observe_only: bool,
     },
-    /// Create an experimental starter configuration, contract and Slack manifest.
+    /// Create a starter configuration, contract and Slack manifest.
     Init {
         #[arg(long)]
         config: Option<PathBuf>,
@@ -44,7 +44,7 @@ enum Command {
     Configure(fridica::cli::setup::Configure),
     #[command(flatten)]
     Control(fridica::control::cli::Commands),
-    /// Candidate daemon with owner-authenticated local controls.
+    /// Run the daemon, with owner-authenticated local controls.
     Start {
         #[arg(long)]
         config: Option<PathBuf>,
@@ -106,7 +106,7 @@ enum Command {
         #[arg(long)]
         directory: PathBuf,
     },
-    /// Show the embedded assets used by this development build.
+    /// Show the embedded assets used by this build.
     Assets {
         #[arg(long)]
         list: bool,

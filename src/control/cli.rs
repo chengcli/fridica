@@ -132,7 +132,8 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
-    /// Tell the parent something as the owner, in a channel's most recent thread.
+    /// Send an owner instruction to the parent in a channel's latest thread.
+    ///
     /// After an uncertain response, retry with the printed client_id.
     Instruct {
         /// Channel name (`ai-human-plume` or `#ai-human-plume`) or ID, or a thread ID.

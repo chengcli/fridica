@@ -696,6 +696,20 @@ async fn live_configuration_rebuilds_real_parent_adapter_and_prompt_limits() {
         .as_str()
         .unwrap()
         .contains("\"max_delegations\":1")));
+    // The decide schema is built from the live snapshot: the granted repository
+    // is the only non-empty fetch_repo, and no worker IDs exist yet.
+    let decide = calls
+        .iter()
+        .map(|call| {
+            let argv = call["argv"].as_array().unwrap();
+            let at = argv.iter().position(|v| v == "--json-schema").unwrap();
+            serde_json::from_str::<Value>(argv[at + 1].as_str().unwrap()).unwrap()
+        })
+        .find(|schema| schema["properties"].get("delegations").is_some())
+        .unwrap();
+    let delegation = &decide["properties"]["delegations"]["items"]["properties"];
+    assert_eq!(delegation["fetch_repo"]["enum"], json!(["", "o/r"]));
+    assert_eq!(delegation["worker_id"]["enum"], json!([""]));
     assert_eq!(f.scalar("SELECT count(*) FROM jobs").await, 0);
     assert_eq!(
         f.scalar(
