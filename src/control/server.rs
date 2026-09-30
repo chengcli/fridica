@@ -225,21 +225,42 @@ impl Server {
         {
             return Err(Failure::UnsafePath);
         }
-        FileExt::try_lock_exclusive(&lock).map_err(|_| Failure::AlreadyRunning)?;
+        // A child forked (not yet exec'd) anywhere in this or a just-exited
+        // process briefly holds duplicates of a released lock or listener; retry
+        // before concluding that another server owns the socket.
+        let deadline = tokio::time::Instant::now() + BIND_RETRY;
+        while FileExt::try_lock_exclusive(&lock).is_err() {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(Failure::AlreadyRunning);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         match std::fs::symlink_metadata(&path) {
             Ok(m) => {
                 if !m.file_type().is_socket() || m.uid() != users::get_current_uid() {
                     return Err(Failure::UnsafePath);
                 }
-                match tokio::time::timeout(Duration::from_millis(200), UnixStream::connect(&path))
+                loop {
+                    match tokio::time::timeout(
+                        Duration::from_millis(200),
+                        UnixStream::connect(&path),
+                    )
                     .await
-                {
-                    Ok(Err(e))
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-                        ) => {}
-                    _ => return Err(Failure::AlreadyRunning),
+                    {
+                        Ok(Err(e))
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::ConnectionRefused
+                                    | std::io::ErrorKind::NotFound
+                            ) =>
+                        {
+                            break
+                        }
+                        _ if tokio::time::Instant::now() < deadline => {
+                            tokio::time::sleep(Duration::from_millis(25)).await
+                        }
+                        _ => return Err(Failure::AlreadyRunning),
+                    }
                 }
                 std::fs::remove_file(&path).map_err(|_| Failure::UnsafePath)?;
             }
@@ -293,6 +314,8 @@ impl Server {
     }
 }
 type Tasks = Arc<Mutex<JoinSet<()>>>;
+/// How long `bind` waits out transiently duplicated lock/listener descriptors.
+const BIND_RETRY: Duration = Duration::from_secs(2);
 async fn run(
     listener: UnixListener,
     guard: SocketGuard,
