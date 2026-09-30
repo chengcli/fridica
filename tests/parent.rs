@@ -167,6 +167,7 @@ impl Harness {
             limits: self.config.attention.clone(),
             observe_only: false,
             parent_timeout: Duration::from_secs(5),
+            machine_load: None,
         }
     }
     async fn intake(&self, n: usize, text: &str) -> String {
@@ -926,6 +927,7 @@ async fn context_reads_are_skipped_for_triage_observe_and_owner_pause() {
             limits: base.limits,
             observe_only: mode == "observe",
             parent_timeout: base.parent_timeout,
+            machine_load: None,
         };
         let session = h
             .intake(
@@ -1025,6 +1027,7 @@ async fn attachment_history_uses_the_full_sixty_message_python_window() {
         limits: base.limits,
         observe_only: false,
         parent_timeout: base.parent_timeout,
+        machine_load: None,
     };
     assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
     assert_eq!(downloads.calls.lock().unwrap().len(), 1);
@@ -1103,6 +1106,7 @@ async fn slow_optional_files_do_not_consume_the_models_response_deadline() {
         limits: base.limits,
         observe_only: false,
         parent_timeout: Duration::from_millis(100),
+        machine_load: None,
     };
     assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
     assert_eq!(h.scalar("SELECT state FROM outbox").await, "pending");
@@ -1396,6 +1400,7 @@ async fn clean_restore_followup_does_not_download_or_render_old_attachments() {
         limits: base.limits,
         observe_only: false,
         parent_timeout: base.parent_timeout,
+        machine_load: None,
     };
     h.intake(1, "<@UOWNER> review the old diff").await;
     let attached = attachment_message("e1", "F1", "old.diff", "UALICE")["attachments"].to_string();

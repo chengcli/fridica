@@ -38,9 +38,33 @@ pub struct Actor<P: Parent> {
     pub limits: Attention,
     pub observe_only: bool,
     pub parent_timeout: Duration,
+    /// Probes machine load before a decision; None keeps placement by job counts.
+    pub machine_load: Option<Arc<crate::machines::probe::Monitor>>,
 }
 
 impl<P: Parent> Actor<P> {
+    /// Attach current machine readings next to `busy` so placement and the parent
+    /// see them; they are recorded with the request, keeping replay exact.
+    async fn attach_load(&self, request: &mut ParentRequest) -> Result<()> {
+        let (Some(config), Some(monitor)) = (&self.config, &self.machine_load) else {
+            return Ok(());
+        };
+        if !config.placement.probe {
+            return Ok(());
+        }
+        let loads = monitor
+            .assess(config, &self.store, self.clock.as_ref())
+            .await?;
+        if let Some(machines) = request.session["machines"].as_array_mut() {
+            for machine in machines {
+                if let Some(load) = machine["name"].as_str().and_then(|name| loads.get(name)) {
+                    machine["load"] = json!(load);
+                }
+            }
+        }
+        request.session["work"]["load"] = json!(loads);
+        Ok(())
+    }
     pub async fn step(&self, session: String) -> Result<Step> {
         if !self.observe_only {
             let pending_session = session.clone();
@@ -300,6 +324,9 @@ impl<P: Parent> Actor<P> {
         } else {
             None
         };
+        if result.is_none() {
+            self.attach_load(&mut request).await?;
+        }
         for round in 0..2 {
             if result.is_some() {
                 break;

@@ -48,6 +48,8 @@ pub struct Execution {
     pub artifacts: Arc<dyn JobIo>,
     pub github: Option<Arc<dyn client::Api>>,
     pub workers: jsonl::Options,
+    /// Placement load probe; `[placement] probe = false` or None disables it.
+    pub machine_load: Option<Arc<crate::machines::probe::Monitor>>,
 }
 pub struct Host {
     pub home: PathBuf,
@@ -78,7 +80,17 @@ impl Execution {
         } else {
             None
         };
+        let machine_load = config.placement.probe.then(|| {
+            Arc::new(crate::machines::probe::Monitor::new(Arc::new(
+                super::probe::SystemReader::new(
+                    config,
+                    host.home.clone(),
+                    host.environment.clone(),
+                ),
+            )))
+        });
         Ok(Self {
+            machine_load,
             artifacts: Arc::new(SystemJobIo {
                 home: host.home.clone(),
                 environment: host.environment.clone(),
@@ -137,6 +149,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                 delivery: slack,
                 workers: Arc::new(Disabled),
                 job_io: Arc::new(NoJobIo),
+                machine_load: None,
             },
             true,
             Arc::new(|_| Ok(Arc::new(ComposedParent(Arc::new(Disabled))))),
@@ -196,6 +209,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                     delivery: slack,
                     workers: Arc::new(factory),
                     job_io: Arc::new(io),
+                    machine_load: execution.machine_load,
                 },
                 false,
                 parent_factory,

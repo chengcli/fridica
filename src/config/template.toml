@@ -39,6 +39,14 @@ max_replies_per_hour = 20          # all non-owner-triggered replies
 streak_signal = 3                # visible signal; never an automatic pause
 mention_grace = 900
 
+[placement]                       # when work names tags (e.g. cuda), avoid machines that are busy
+probe = true                      # read load average and nvidia-smi before choosing; false = job counts only
+probe_ttl = 60                    # seconds a reading (or a failed probe) is reused
+probe_timeout = 10                # seconds per probe, SSH included
+max_load = 1.0                    # load average per declared CPU at which a machine is saturated
+max_gpu_utilization = 90          # percent; a declared GPU above this, or above max_gpu_memory, is in use
+max_gpu_memory = 0.9              # a machine whose declared GPUs are all in use is saturated
+
 [isolation]
 mcp_inventory_complete = false   # set only after reviewing all local MCP sources
 # private_files = ["~/.config/fridica/credentials.env"]

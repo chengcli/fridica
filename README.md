@@ -334,7 +334,7 @@ path = "~/.local/state/fridica/state.sqlite3"
 workspace and optionally a backend. The order of precedence:
 
 1. an explicit machine;
-2. tags (preferring the thread's machine, then the least busy);
+2. tags (preferring the thread's machine, then the least loaded; see below);
 3. the thread's sticky machine;
 4. `default_machine`.
 
@@ -374,6 +374,20 @@ Under the confinement:
 
 `resources` are declarative. They are shown to the parent and enforced as
 `OMP_NUM_THREADS` and `CUDA_VISIBLE_DEVICES`.
+
+**Load-aware placement.** Before a decision that may delegate, Fridica probes each
+machine with one fixed, read-only command: the 1-minute load average and CPU count, plus
+per-GPU utilization and memory from `nvidia-smi` where it exists. Probes run in parallel
+over the same non-interactive SSH options as `doctor`, within `probe_timeout`, and each
+reading (or failed probe) is reused for `probe_ttl` seconds. A machine is **saturated**
+when its load per declared CPU reaches `max_load`, or when every declared GPU is above
+`max_gpu_utilization` or `max_gpu_memory`. For tag-based work Fridica skips saturated
+machines (including the thread's machine) while an unsaturated match exists, and ranks the
+rest by the higher of measured load and its own job count. An explicitly named machine and
+the untagged default are never redirected; the parent sees each machine's `load` and can
+choose or warn instead. Readings are recorded with each decision, so replay stays exact.
+Machines that cannot be probed count as available. Set `[placement] probe = false` to place
+by job counts alone. GPUs within a machine are still split by slot, as below.
 
 **Job slots, subfolders, and GPUs.** A machine runs up to `max_jobs` jobs at once,
 one per **slot**, and each worker keeps its slot for its whole life. The slots

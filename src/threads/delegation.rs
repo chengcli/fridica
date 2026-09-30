@@ -68,6 +68,12 @@ pub(super) fn prepare(
     }
     let busy: BTreeMap<String, usize> =
         serde_json::from_value(request.session["work"]["busy"].clone())?;
+    // Recorded probe readings (absent when probing is off or unavailable).
+    let load: BTreeMap<String, machines::probe::Assessment> = match &request.session["work"]["load"]
+    {
+        Value::Null => BTreeMap::new(),
+        value => serde_json::from_value(value.clone())?,
+    };
     let mut live = existing
         .iter()
         .filter(|w| !w.ephemeral && w.status != "stopped")
@@ -104,6 +110,7 @@ pub(super) fn prepare(
                 sticky["machine"].as_str().unwrap_or(""),
                 sticky["workspace"].as_str().unwrap_or(""),
                 &busy,
+                &load,
             )?;
             let role = if d.role.is_empty() {
                 "general"

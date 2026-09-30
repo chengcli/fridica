@@ -95,6 +95,7 @@ fn actor<P: Parent>(s: &Store, p: Arc<P>) -> Actor<P> {
         limits: Attention::default(),
         observe_only: false,
         parent_timeout: Duration::from_secs(1),
+        machine_load: None,
     }
 }
 async fn scalar(s: &Store, sql: &'static str) -> String {
