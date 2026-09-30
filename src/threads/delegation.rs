@@ -127,7 +127,7 @@ pub(super) fn prepare(
             existing
                 .iter()
                 .find(|w| w.id == d.worker_id && w.status != "stopped")
-                .context("worker is unavailable in this thread")?
+                .context("worker_id is not a live worker of this thread (see session.work.workers); leave worker_id empty to start a new worker")?
                 .clone()
         };
         let machine = config
@@ -140,22 +140,25 @@ pub(super) fn prepare(
         if !machine.backends.contains(&worker.backend) {
             bail!("worker backend no longer configured");
         }
+        // Scoped fetch is only for owner-granted repositories; errors say how to
+        // repair, because the parent sees them in its one repair round.
         let fetch_repo = if d.fetch_repo.is_empty() {
             if !d.fetch_ref.is_empty() {
-                bail!("fetch_ref needs fetch_repo");
+                bail!("fetch_ref needs fetch_repo; leave both empty so the worker clones the repository itself");
             }
             String::new()
         } else {
-            if !valid_fetch_ref(&d.fetch_ref) {
-                bail!("invalid fetch ref");
-            }
-            workspace
+            let granted = workspace
                 .policy
                 .fetch_repos
                 .iter()
                 .find(|r| r.as_str().case_fold().eq(d.fetch_repo.as_str().case_fold()))
-                .context("fetch repository is not granted")?
-                .clone()
+                .context("fetch_repo is not granted in this workspace's fetch_repos; leave fetch_repo and fetch_ref empty so the worker clones or reuses a checkout itself")?
+                .clone();
+            if !valid_fetch_ref(&d.fetch_ref) {
+                bail!("invalid fetch_ref; use refs/heads/BRANCH, refs/pull/N/head, a commit SHA or HEAD");
+            }
+            granted
         };
         if let Some(ids) = ids {
             if worker.id.is_empty() {

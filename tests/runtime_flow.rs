@@ -621,6 +621,41 @@ async fn invalid_placement_repairs_before_effects_and_job_insert_failure_rolls_b
 }
 
 #[tokio::test]
+async fn delegation_errors_tell_the_parent_how_to_repair() {
+    // An invented worker ID and a scoped fetch of an ungranted repository by URL.
+    let mut stale = delegate();
+    stale["delegations"][0]["worker_id"] = json!("w236-plan");
+    let mut fetch = delegate();
+    fetch["delegations"][0]["fetch_repo"] = json!("https://github.com/chengcli/snapy");
+    fetch["delegations"][0]["fetch_ref"] = json!("main");
+    for (invalid, hint) in [
+        (stale, "leave worker_id empty to start a new worker"),
+        (
+            fetch,
+            "leave fetch_repo and fetch_ref empty so the worker clones",
+        ),
+    ] {
+        let h = Harness::new(vec![invalid, delegate()], false).await;
+        h.intake(false).await;
+        h.runtime.pass().await.unwrap();
+        let calls = h.parent.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].call, "repair");
+        assert!(
+            calls[1].errors.iter().any(|e| e.contains(hint)),
+            "{:?}",
+            calls[1].errors
+        );
+        // The repaired action (a new worker, no fetch) is then accepted.
+        assert_eq!(
+            h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+            "1"
+        );
+        h.runtime.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn ambiguous_report_is_not_resent_and_does_not_close_the_ask() {
     let h = Harness::new(vec![delegate()], false).await;
     h.intake(false).await;
