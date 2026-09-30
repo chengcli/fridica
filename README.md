@@ -704,3 +704,7 @@ the node test on Ubuntu and macOS, and builds and smoke-tests a manylinux wheel 
   smoke-tests the natively built wheels, and publishes after `scripts/release.py verify`
   confirms one `py3-none` wheel per selected platform, each with both executables, and
   matching versions.
+
+## License
+
+MIT; see [`LICENSE`](LICENSE).
