@@ -132,13 +132,16 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
-    /// Queue an owner instruction. Reuse the client ID after an uncertain response.
+    /// Tell the parent something as the owner, in a channel's most recent thread.
+    /// After an uncertain response, retry with the printed client_id.
     Instruct {
-        id: String,
-        #[arg(long)]
+        /// Channel name (`ai-human-plume` or `#ai-human-plume`) or ID, or a thread ID.
+        target: String,
+        /// The instruction, e.g. "approve cloning compressible_plume for this run".
         text: String,
+        /// Idempotency key; generated when omitted and printed in the result.
         #[arg(long)]
-        client_id: String,
+        client_id: Option<String>,
         #[command(flatten)]
         connection: Connection,
     },
@@ -255,16 +258,39 @@ impl Commands {
                 }
             }
             Self::Instruct {
-                id,
+                target,
                 text,
                 client_id,
                 connection,
-            } => (
-                connection,
-                "POST",
-                format!("/threads/{}/instruct", segment(&id)?),
-                Some(json!({"text":text,"client_id":client_id})),
-            ),
+            } => {
+                let client_id =
+                    client_id.unwrap_or_else(|| format!("cli-{}", uuid::Uuid::new_v4()));
+                // Thread IDs are workspace:channel:ts; channel names never contain ':'.
+                let route = if target.contains(':') {
+                    format!("/threads/{}/instruct", segment(&target)?)
+                } else {
+                    format!(
+                        "/channels/{}/instruct",
+                        segment(target.trim_start_matches('#'))?
+                    )
+                };
+                let body = json!({"text":text,"client_id":client_id});
+                let sent = async {
+                    Ok::<_, anyhow::Error>(
+                        connection
+                            .client()?
+                            .request("POST", &route, Some(body))
+                            .await?,
+                    )
+                };
+                // Keep the failure type (exit code) and always show the retry key.
+                let mut result = sent.await.map_err(|error: anyhow::Error| {
+                    let message = format!("{error}; retry with --client-id {client_id}");
+                    error.context(message)
+                })?;
+                result["client_id"] = json!(client_id);
+                return Ok(result);
+            }
         };
         Ok(connection.client()?.request(method, &target, body).await?)
     }

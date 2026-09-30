@@ -126,7 +126,9 @@ os.execv('/bin/sh',['sh','-c',script])
         environment.insert("GH_TOKEN".into(), "private-marker".into());
         let mut fetcher = SystemFetcher::new(root.into(), environment, control);
         fetcher.git = bin.join("git");
-        fetcher.timeout = Duration::from_secs(2);
+        // Room for two interpreter startups plus Git on a loaded macOS runner;
+        // tests that exercise the timeout itself set their own.
+        fetcher.timeout = Duration::from_secs(10);
         Self {
             dir,
             spec,

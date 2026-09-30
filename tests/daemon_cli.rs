@@ -152,6 +152,16 @@ async fn signals_drain_real_observer_and_database_lock_rejects_second_launch() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        // The terminal log shows lifecycle and control events, never token text.
+        let log = String::from_utf8_lossy(&output.stderr);
+        for expected in [
+            "INFO fridica: running in observe-only mode",
+            "INFO control: GET /status",
+            "INFO fridica: stopped",
+        ] {
+            assert!(log.contains(expected), "{expected}\n{log}");
+        }
+        assert!(!log.contains("synthetic"));
         assert!(!f.socket.exists());
         let db = Connection::open(&f.db).unwrap();
         let stopped: bool = db.query_row("SELECT slack_status='stopped' AND control_socket='' AND observe_only=1 FROM runtime", [], |r| r.get(0)).unwrap();

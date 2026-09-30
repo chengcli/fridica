@@ -200,6 +200,75 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     Err(_) => Response::error(409, "backfill_refused"),
                 }
             }
+            ["channels", channel, "instruct"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                if body
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .any(|k| !["actor", "text", "client_id"].contains(&k.as_str()))
+                {
+                    return Response::error(400, "unknown_body_field");
+                }
+                // A configured channel ID, or its name as recorded at Slack startup.
+                let wanted = channel.trim_start_matches('#').to_string();
+                let channels = config.slack.channels.clone();
+                let workspace = config.slack.workspace.clone();
+                let thread = store
+                    .call(move |c| {
+                        let names: BTreeMap<String, String> = c
+                            .query_row("SELECT value FROM meta WHERE key='slack_channel_names'", [], |r| {
+                                r.get::<_, String>(0)
+                            })
+                            .optional()?
+                            .and_then(|v| serde_json::from_str(&v).ok())
+                            .unwrap_or_default();
+                        let Some(id) = channels
+                            .iter()
+                            .find(|id| **id == wanted || names.get(*id).is_some_and(|n| *n == wanted))
+                        else {
+                            return Ok(Err("unknown_channel"));
+                        };
+                        Ok(c.query_row(
+                            "SELECT id FROM threads WHERE workspace=? AND channel=? ORDER BY updated DESC, rowid DESC LIMIT 1",
+                            params![workspace, id],
+                            |r| r.get::<_, String>(0),
+                        )
+                        .optional()?
+                        .ok_or("no_thread_in_channel"))
+                    })
+                    .await;
+                let thread = match thread {
+                    Ok(Ok(thread)) => thread,
+                    Ok(Err(code)) => return Response::error(404, code),
+                    Err(_) => return Response::error(500, "storage_failed"),
+                };
+                let (Some(text), Some(client_id)) =
+                    (body["text"].as_str(), body["client_id"].as_str())
+                else {
+                    return Response::error(400, "invalid_instruction");
+                };
+                if !(1..=4000).contains(&text.trim().chars().count())
+                    || !(8..=80).contains(&client_id.len())
+                    || !client_id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                {
+                    return Response::error(400, "invalid_instruction");
+                }
+                match self
+                    .runtime
+                    .instruct(thread.clone(), text.into(), client_id.into(), authority)
+                    .await
+                {
+                    Ok(id) => {
+                        Response::ok(json!({"instruction_id":id,"queued":true,"thread":thread}))
+                    }
+                    Err(error) => operation_error(error),
+                }
+            }
             ["threads", id, action] => {
                 if authority != Authority::Owner && !matches!(*action, "pause" | "resume") {
                     return Response::error(403, "owner_required");

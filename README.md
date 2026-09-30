@@ -254,7 +254,7 @@ using `SLACK_USER_TOKEN` only. It posts nothing. `configure` keeps the comments 
 ## Configure machines
 
 `config.toml` has a fixed set of tables, and unknown keys are errors. Defaults live
-in `fridica/config/schema.py`. A complete example:
+in `src/config/schema.rs` (the template is `src/config/template.toml`). A complete example:
 
 ```toml
 [owner]
@@ -505,6 +505,18 @@ fridica start --observe-only        # store messages, call nothing, post nothing
 fridica start
 ```
 
+`start` logs one line per notable event to the terminal, for example:
+
+```text
+2026-09-30 14:02:11 INFO slack: connected
+2026-09-30 14:02:40 INFO intake: #ai-human-plume 1790791454.276899 from U0C5CAJQ2UA
+2026-09-30 14:02:52 INFO parent: #ai-human-plume 1790791454.276899: replied (working); delegated 1 job(s) to dart11
+2026-09-30 14:02:53 INFO worker: job 1eb487 started on dart11 (codex, slot 1)
+2026-09-30 14:07:20 INFO slack: posted report in #ai-human-plume 1790791454.276899
+```
+
+It never prints message text, briefs or credentials. Set `FRIDICA_LOG=off` to silence it.
+
 `doctor` checks the following without calling a model:
 
 - that each SSH machine is reachable without a prompt;
@@ -604,7 +616,12 @@ The CLI uses it and never writes the database.
 ```bash
 fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
+fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
 ```
+
+`instruct` tells the parent something as you, in the channel's most recently active
+thread (a thread ID instead targets that thread). It prints the `client_id` it used;
+after an uncertain response, rerun with `--client-id` so it is not queued twice.
 
 The dashboard's page (`assets/dashboard/`) is embedded in the binary
 (`fridica assets --export DIR`); serving it from the v0.4 daemon is not implemented
@@ -612,8 +629,8 @@ yet. The v0.3 Python server that served it was removed with the v0.3 sources.
 
 ## State, recovery, and guarantees
 
-The daemon owns a single SQLite database. `fridica/store/schema.py` is the only
-module that runs DDL, and migrations are versioned.
+The daemon owns a single SQLite database. `src/store/` (`schema.rs` and the
+versioned `migrations/`) is the only code that runs DDL.
 
 - **Persist before acknowledging.** A Slack event is stored, together with its
   thread and inbox row, before Socket Mode is acked. Catch-up re-reads each channel

@@ -14,7 +14,14 @@ import tempfile
 import threading
 
 
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+
 def interrupt(_signal, _frame):
+    # The first signal starts shutdown; later ones (stdin EOF plus the owner's or
+    # watchdog's SIGTERM) must not interrupt removal of the staging directory.
+    for number in STOP_SIGNALS:
+        signal.signal(number, signal.SIG_IGN)
     raise InterruptedError("fetch interrupted")
 
 
@@ -119,9 +126,8 @@ def main():
     executable = request["git"]
     if not executable.startswith("/") or "\x00" in executable:
         raise ValueError("invalid Git executable")
-    signal.signal(signal.SIGTERM, interrupt)
-    signal.signal(signal.SIGINT, interrupt)
-    signal.signal(signal.SIGHUP, interrupt)
+    for number in STOP_SIGNALS:
+        signal.signal(number, interrupt)
     threading.Thread(target=watch_input, daemon=True).start()
     root = directory(workspace, request["create"])
     try:
