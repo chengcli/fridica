@@ -38,6 +38,15 @@ impl Default for Policy {
     }
 }
 impl Policy {
+    /// The granted spelling of `repo`, matched case-insensitively (Unicode case
+    /// folding, so look-alike letters cannot bypass a grant).
+    pub fn fetch_grant(&self, repo: &str) -> Option<&str> {
+        use unicode_casefold::UnicodeCaseFold;
+        self.fetch_repos
+            .iter()
+            .find(|r| r.as_str().case_fold().eq(repo.case_fold()))
+            .map(String::as_str)
+    }
     pub fn validate(&self) -> Result<()> {
         if !["read-only", "write", "full"].contains(&self.mode.as_str()) {
             bail!("policy.mode must be read-only, write or full");

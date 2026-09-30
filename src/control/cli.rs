@@ -272,15 +272,14 @@ impl Commands {
             } => {
                 let client_id =
                     client_id.unwrap_or_else(|| format!("cli-{}", uuid::Uuid::new_v4()));
-                // Thread IDs are workspace:channel:ts; channel names never contain ':'.
-                let route = if target.contains(':') {
-                    format!("/threads/{}/instruct", thread(&target)?)
+                // Threads contain ':' (`#channel:TS` or a full ID); channel names never do.
+                let target = segment(target.trim_start_matches('#'))?;
+                let kind = if target.contains(':') {
+                    "threads"
                 } else {
-                    format!(
-                        "/channels/{}/instruct",
-                        segment(target.trim_start_matches('#'))?
-                    )
+                    "channels"
                 };
+                let route = format!("/{kind}/{target}/instruct");
                 let body = json!({"text":text,"client_id":client_id});
                 let sent = async {
                     Ok::<_, anyhow::Error>(

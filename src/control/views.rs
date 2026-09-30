@@ -136,7 +136,7 @@ pub fn get(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(if parts == ["activity"] { 200 } else { 100 });
     let parts: Vec<_> = parts.iter().map(String::as_str).collect();
-    let names = Names::load(c, &config.slack.workspace)?;
+    let names = Names::load(c, &config.slack)?;
     let mut values = match parts.as_slice() {
         ["status"] => {
             let runtime = rows(c, "SELECT started_at,slack_status FROM runtime WHERE id=1", [])?

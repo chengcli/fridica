@@ -36,9 +36,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         // Owners may name a thread `#channel:TS`; state uses the full thread ID.
         if parts.len() >= 2 && parts[0] == "threads" && parts[1].matches(':').count() == 1 {
             let reference = parts[1].clone();
-            let workspace = self.runtime.config().slack.workspace.clone();
+            let slack = self.runtime.config().slack.clone();
             match store
-                .call(move |c| Ok(Names::load(c, &workspace)?.resolve(&reference)))
+                .call(move |c| Ok(Names::load(c, &slack)?.resolve(&reference)))
                 .await
             {
                 Ok(Some(id)) => parts[1] = id,
@@ -228,20 +228,16 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 }
                 // A configured channel ID, or its name as recorded at Slack startup.
                 let wanted = channel.to_string();
-                let channels = config.slack.channels.clone();
-                let workspace = config.slack.workspace.clone();
+                let slack = config.slack.clone();
                 let thread = store
                     .call(move |c| {
-                        let names = Names::load(c, &workspace)?;
-                        let Some(id) = channels
-                            .iter()
-                            .find(|id| **id == wanted.trim_start_matches('#') || names.channel_id(&wanted).as_ref() == Some(*id))
-                        else {
+                        let names = Names::load(c, &slack)?;
+                        let Some(id) = names.channel_id(&wanted) else {
                             return Ok(Err("unknown_channel"));
                         };
                         Ok(c.query_row(
                             "SELECT id FROM threads WHERE workspace=? AND channel=? ORDER BY updated DESC, rowid DESC LIMIT 1",
-                            params![workspace, id],
+                            params![slack.workspace, id],
                             |r| r.get::<_, String>(0),
                         )
                         .optional()?

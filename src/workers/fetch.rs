@@ -10,7 +10,6 @@ use crate::{
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use unicode_casefold::UnicodeCaseFold;
 fn failure(kind: Failure, code: &str) -> WorkerFailure {
     WorkerFailure {
         kind,
@@ -30,13 +29,7 @@ pub fn request(spec: &WorkerSpec, job: &Job) -> Result<Request, WorkerFailure> {
         return Err(failure(Failure::Refusal, "fetch_invalid_policy"));
     }
     let granted = policy
-        .fetch_repos
-        .iter()
-        .find(|repo| {
-            repo.as_str()
-                .case_fold()
-                .eq(job.fetch_repo.as_str().case_fold())
-        })
+        .fetch_grant(&job.fetch_repo)
         .ok_or_else(|| failure(Failure::Refusal, "fetch_repository_not_granted"))?;
     if !valid_fetch_ref(&job.fetch_ref) {
         return Err(failure(Failure::Refusal, "fetch_invalid_ref"));
@@ -60,7 +53,7 @@ pub fn request(spec: &WorkerSpec, job: &Job) -> Result<Request, WorkerFailure> {
         machine: spec.machine.clone(),
         workspace: spec.workspace.path.clone(),
         excluded_env: spec.excluded_env.clone(),
-        repo: granted.clone(),
+        repo: granted.to_string(),
         reference: job.fetch_ref.clone(),
         leaf,
         create: spec.create_cwd(),

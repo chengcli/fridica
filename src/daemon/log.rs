@@ -2,7 +2,7 @@
 //! line per notable event to stderr, in v0.3's `time LEVEL name: message` form.
 //! It only reads; it never prints message text, briefs, tokens or paths.
 //! `FRIDICA_LOG=off` silences it.
-use crate::{slack::names::Names, store::Store};
+use crate::{config::schema::Slack, slack::names::Names, store::Store};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::time::Duration;
@@ -21,7 +21,7 @@ pub fn line(level: &str, name: &str, message: &str) {
 }
 
 /// Print events recorded after the call until `finished` turns true, then drain.
-pub async fn follow(store: Store, workspace: String, mut finished: watch::Receiver<bool>) {
+pub async fn follow(store: Store, slack: Slack, mut finished: watch::Receiver<bool>) {
     if !enabled() {
         return;
     }
@@ -38,8 +38,8 @@ pub async fn follow(store: Store, workspace: String, mut finished: watch::Receiv
     loop {
         let done = *finished.borrow();
         let after = seq;
-        let workspace = workspace.clone();
-        if let Ok((last, lines)) = store.call(move |c| read(c, &workspace, after)).await {
+        let slack = slack.clone();
+        if let Ok((last, lines)) = store.call(move |c| read(c, &slack, after)).await {
             seq = last;
             for (level, name, message) in lines {
                 line(level, name, &message);
@@ -57,8 +57,8 @@ pub async fn follow(store: Store, workspace: String, mut finished: watch::Receiv
 
 type Line = (&'static str, &'static str, String);
 
-fn read(c: &mut Connection, workspace: &str, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
-    let names = Names::load(c, workspace)?;
+fn read(c: &mut Connection, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
+    let names = Names::load(c, slack)?;
     let rows: Vec<(i64, String, String)> = c
         .prepare(
             "SELECT seq,kind,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT 500",
