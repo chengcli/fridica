@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod files;
 pub mod ingress;
 pub mod links;
+pub mod names;
 pub mod outbox;
 pub mod receiver;
 pub mod socket;

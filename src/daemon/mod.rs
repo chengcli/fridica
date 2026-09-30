@@ -237,7 +237,11 @@ async fn run(
     let config = Arc::new(config);
     let store = Store::open(config.state.path.clone()).await?;
     let (finished, following) = watch::channel(false);
-    let follower = tokio::spawn(log::follow(store.clone(), following));
+    let follower = tokio::spawn(log::follow(
+        store.clone(),
+        config.slack.workspace.clone(),
+        following,
+    ));
     let clock = Arc::new(SystemClock);
     let web = Arc::new(WebClient::new(
         config.clone(),

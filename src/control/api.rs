@@ -8,6 +8,7 @@ use crate::{
         worker::ApprovalDecision,
         Authority,
     },
+    slack::names::Names,
     store::outbox,
     threads::{controls::Control, runtime::Runtime},
 };
@@ -28,10 +29,23 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         ) {
             return Response::error(403, "forbidden");
         }
-        let Some((parts, query)) = target(&request.target) else {
+        let Some((mut parts, query)) = target(&request.target) else {
             return Response::error(400, "invalid_target");
         };
         let store = self.runtime.store();
+        // Owners may name a thread `#channel:TS`; state uses the full thread ID.
+        if parts.len() >= 2 && parts[0] == "threads" && parts[1].matches(':').count() == 1 {
+            let reference = parts[1].clone();
+            let workspace = self.runtime.config().slack.workspace.clone();
+            match store
+                .call(move |c| Ok(Names::load(c, &workspace)?.resolve(&reference)))
+                .await
+            {
+                Ok(Some(id)) => parts[1] = id,
+                Ok(None) => return Response::error(404, "unknown_thread"),
+                Err(_) => return Response::error(500, "view_unavailable"),
+            }
+        }
         let now = self.runtime.now();
         if !now.is_finite() {
             return Response::error(500, "invalid_control_clock");
@@ -213,21 +227,15 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     return Response::error(400, "unknown_body_field");
                 }
                 // A configured channel ID, or its name as recorded at Slack startup.
-                let wanted = channel.trim_start_matches('#').to_string();
+                let wanted = channel.to_string();
                 let channels = config.slack.channels.clone();
                 let workspace = config.slack.workspace.clone();
                 let thread = store
                     .call(move |c| {
-                        let names: BTreeMap<String, String> = c
-                            .query_row("SELECT value FROM meta WHERE key='slack_channel_names'", [], |r| {
-                                r.get::<_, String>(0)
-                            })
-                            .optional()?
-                            .and_then(|v| serde_json::from_str(&v).ok())
-                            .unwrap_or_default();
+                        let names = Names::load(c, &workspace)?;
                         let Some(id) = channels
                             .iter()
-                            .find(|id| **id == wanted || names.get(*id).is_some_and(|n| *n == wanted))
+                            .find(|id| **id == wanted.trim_start_matches('#') || names.channel_id(&wanted).as_ref() == Some(*id))
                         else {
                             return Ok(Err("unknown_channel"));
                         };
@@ -237,10 +245,11 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                             |r| r.get::<_, String>(0),
                         )
                         .optional()?
+                        .map(|thread| (names.thread(&thread), thread))
                         .ok_or("no_thread_in_channel"))
                     })
                     .await;
-                let thread = match thread {
+                let (name, thread) = match thread {
                     Ok(Ok(thread)) => thread,
                     Ok(Err(code)) => return Response::error(404, code),
                     Err(_) => return Response::error(500, "storage_failed"),
@@ -263,9 +272,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     .instruct(thread.clone(), text.into(), client_id.into(), authority)
                     .await
                 {
-                    Ok(id) => {
-                        Response::ok(json!({"instruction_id":id,"queued":true,"thread":thread}))
-                    }
+                    Ok(id) => Response::ok(
+                        json!({"instruction_id":id,"queued":true,"thread":thread,"name":name}),
+                    ),
                     Err(error) => operation_error(error),
                 }
             }

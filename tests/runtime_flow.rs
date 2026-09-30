@@ -1199,8 +1199,70 @@ async fn channel_instructions_reach_the_most_recent_thread_by_name_or_id() {
         let reply = control_call(&h, "POST", &route(channel), body(id), Authority::Owner).await;
         assert_eq!(reply.status, 200, "{channel}: {:?}", reply.body);
         assert_eq!(reply.body["thread"], "TTEAM:CROOM:200.1", "{channel}");
+        assert_eq!(reply.body["name"], "#ai-human-plume:200.1", "{channel}");
         assert_eq!(reply.body["queued"], true);
     }
+    // Views show the readable name, and it addresses the thread in controls.
+    h.store
+        .call(|c| {
+            c.execute("INSERT INTO meta VALUES('slack_workspace_name','scix')", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let list = control_call(&h, "GET", "/threads", json!({}), Authority::Owner).await;
+    let listed = list
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "TTEAM:CROOM:200.1")
+        .unwrap()
+        .clone();
+    assert_eq!(listed["name"], "#ai-human-plume:200.1");
+    assert_eq!(
+        (
+            listed["key"]["workspace_name"].clone(),
+            listed["key"]["channel_name"].clone()
+        ),
+        (json!("scix"), json!("ai-human-plume"))
+    );
+    for reference in ["ai-human-plume:200.1", "CROOM:200.1", "TTEAM:CROOM:200.1"] {
+        let shown = control_call(
+            &h,
+            "GET",
+            &format!("/threads/{reference}"),
+            json!({}),
+            Authority::Owner,
+        )
+        .await;
+        assert_eq!(
+            (shown.status, shown.body["session"]["id"].clone()),
+            (200, json!("TTEAM:CROOM:200.1")),
+            "{reference}"
+        );
+    }
+    let unknown = control_call(
+        &h,
+        "GET",
+        "/threads/general:200.1",
+        json!({}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (unknown.status, unknown.body["error"].clone()),
+        (404, json!("unknown_thread"))
+    );
+    let named = control_call(
+        &h,
+        "POST",
+        "/threads/ai-human-plume:200.1/instruct",
+        body("thread-5555"),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(named.status, 200, "{:?}", named.body);
     // The same client ID is idempotent through the channel route too.
     let retry = control_call(
         &h,
@@ -1214,7 +1276,7 @@ async fn channel_instructions_reach_the_most_recent_thread_by_name_or_id() {
     assert_eq!(
         h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction' AND session_id='TTEAM:CROOM:200.1'")
             .await,
-        "2"
+        "3"
     );
     for (channel, authority, status, code) in [
         ("general", Authority::Owner, 404, "unknown_channel"),
