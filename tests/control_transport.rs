@@ -800,3 +800,75 @@ async fn bind_waits_out_transiently_duplicated_lock_and_listener_descriptors() {
     server.close().await.unwrap();
     assert!(!path.exists());
 }
+
+#[tokio::test]
+async fn instruct_cli_takes_a_channel_and_text_and_always_shows_the_retry_key() {
+    let f = Fixture::new();
+    let server = f
+        .bind(
+            Arc::new(Echo::default()),
+            Access::OwnerPeer,
+            Options::default(),
+        )
+        .await;
+    let socket = f.config.state.control_socket.to_str().unwrap().to_string();
+    let run = |args: &[&str]| {
+        let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        args.extend(["--socket".into(), socket.clone()]);
+        bounded_cli(args)
+    };
+    for (args, target, generated) in [
+        (
+            vec!["instruct", "ai-human-plume", "Approve the clone"],
+            "/channels/ai-human-plume/instruct",
+            true,
+        ),
+        (
+            vec![
+                "instruct",
+                "#ai-human-plume",
+                "Approve the clone",
+                "--client-id",
+                "retry-12345",
+            ],
+            "/channels/ai-human-plume/instruct",
+            false,
+        ),
+        (
+            vec!["instruct", "TTEAM:CROOM:100.1", "Approve the clone"],
+            "/threads/TTEAM:CROOM:100.1/instruct",
+            true,
+        ),
+    ] {
+        let output = run(&args).await;
+        assert_eq!(
+            output.returncode,
+            0,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            (result["method"].as_str(), result["target"].as_str()),
+            (Some("POST"), Some(target))
+        );
+        assert_eq!(result["body"]["text"], "Approve the clone");
+        let id = result["body"]["client_id"].as_str().unwrap();
+        assert_eq!(result["client_id"], id, "the key used is printed");
+        if generated {
+            assert!(
+                id.starts_with("cli-") && (8..=80).contains(&id.len()),
+                "{id}"
+            );
+        } else {
+            assert_eq!(id, "retry-12345");
+        }
+    }
+    assert_ne!(run(&["instruct", "bad/channel", "x"]).await.returncode, 0);
+    server.close().await.unwrap();
+    // With the daemon gone the response is uncertain: the error names the key to reuse.
+    let output = run(&["instruct", "ai-human-plume", "Approve the clone"]).await;
+    assert_eq!(output.returncode, 3);
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("retry with --client-id cli-"), "{error}");
+}

@@ -21,7 +21,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -222,6 +222,7 @@ impl WebClient {
                 .map(str::to_string)
                 .collect::<BTreeSet<_>>()
         });
+        let mut names = BTreeMap::new();
         for channel in &self.config.slack.channels {
             let info = decode(
                 &self
@@ -231,7 +232,12 @@ impl WebClient {
             if info["channel"]["id"] != *channel || info["channel"]["is_member"] != true {
                 return Err(Failure::Membership);
             }
+            // Names let owner controls address a channel as `#name`.
+            if let Some(name) = info["channel"]["name"].as_str().filter(|n| n.len() <= 80) {
+                names.insert(channel.clone(), name.to_string());
+            }
         }
+        let names = json!(names).to_string();
         let identity = Identity {
             owner: self.config.owner.slack_user.clone(),
             workspace: self.config.slack.workspace.clone(),
@@ -242,7 +248,11 @@ impl WebClient {
             .as_ref()
             .map(|s| s.iter().cloned().collect::<Vec<_>>().join(","))
             .unwrap_or("unknown".into());
-        self.store.call(move|c| {c.execute("INSERT INTO meta VALUES('slack_scopes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[stored])?;Ok(())}).await.map_err(|_|Failure::Recording)?;
+        self.store.call(move|c| {
+            c.execute("INSERT INTO meta VALUES('slack_scopes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[stored])?;
+            c.execute("INSERT INTO meta VALUES('slack_channel_names',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[names])?;
+            Ok(())
+        }).await.map_err(|_|Failure::Recording)?;
         *self.file_scopes.write().map_err(|_| Failure::Recording)? = identity.scopes.clone();
         self.validated.store(true, Ordering::Release);
         Ok(identity)
