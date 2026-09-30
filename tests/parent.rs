@@ -485,7 +485,7 @@ fn owner_prompt_inputs_reload_and_schema_matches_the_implemented_actions() {
             strict(&v["items"]);
         }
     }
-    strict(&parent::schema::decision());
+    strict(&parent::schema::decision(&Default::default()));
     strict(&parent::schema::debrief());
 }
 
@@ -1474,4 +1474,28 @@ async fn debrief_uses_its_contract_and_strict_schema_through_both_cli_adapters()
             .contains(parent::prompts::UNTRUSTED));
         assert_eq!(h.scalar("SELECT json_extract(payload_json,'$.schema.properties.debrief.type') FROM replay_events WHERE kind='parent_transport_call'").await,"string");
     }
+}
+
+#[test]
+fn decision_schema_allows_only_known_workers_and_granted_fetches() {
+    let session = json!({"id":"T:C:1","work":{"workers":[
+        {"id":"w1","session_id":"T:C:1","status":"idle"},
+        {"id":"w2","session_id":"T:C:1","status":"stopped"},
+        {"id":"w3","session_id":"T:C:2","status":"idle"}]},
+        "machines":[{"name":"a","fetch_repos":{"src":["chengcli/snapy"]}},
+                    {"name":"b","fetch_repos":{}},{"name":"c","fetch_repos":{"x":["chengcli/snapy","o/r"]}}]});
+    let schema = parent::schema::decision(&parent::schema::Choices::from_session(&session));
+    let delegation = &schema["properties"]["delegations"]["items"]["properties"];
+    assert_eq!(delegation["worker_id"]["enum"], json!(["", "w1"]));
+    assert_eq!(
+        delegation["fetch_repo"]["enum"],
+        json!(["", "chengcli/snapy", "o/r"])
+    );
+    let control = &schema["properties"]["worker_control"]["items"]["properties"];
+    assert_eq!(control["worker_id"]["enum"], json!(["", "w1", "w2"]));
+    // Nothing granted and no workers: only the empty value remains.
+    let schema = parent::schema::decision(&Default::default());
+    let delegation = &schema["properties"]["delegations"]["items"]["properties"];
+    assert_eq!(delegation["worker_id"]["enum"], json!([""]));
+    assert_eq!(delegation["fetch_repo"]["enum"], json!([""]));
 }

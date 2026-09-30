@@ -31,7 +31,7 @@ pub fn build(
     let repositories = repos::load(config.parent.repos.as_deref())?;
     let (instructions,schema,model)=match request.call.as_str(){
         "triage"=>(format!("{}\nReturn decision: respond to take part, observe to stay quiet but keep context, ignore for noise.",rules.participation),super::schema::triage(),if config.parent.triage_model.is_empty(){&config.parent.model}else{&config.parent.triage_model}),
-        "decide"|"repair"=>(format!("{}\n{ACTION}",rules.parent()),super::schema::decision(),&config.parent.model),
+        "decide"|"repair"=>(format!("{}\n{ACTION}",rules.parent()),super::schema::decision(&super::schema::Choices::from_session(&request.session)),&config.parent.model),
         "debrief"=>(format!("{}\n{}\nReturn only the debrief text in the supplied schema, at most 2500 characters. Do not add the closing header; the runtime supplies it.",rules.debriefs,rules.extra),super::schema::debrief(),&config.parent.model),
         _=>bail!("unsupported parent call"),
     };
