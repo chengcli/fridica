@@ -17,8 +17,6 @@ pub struct Report {
     pub machine: String,
     pub workspace: String,
     pub check: Check,
-    // A successful mount probe is not backend conformance or active parity.
-    pub active_launch_ready: bool,
 }
 impl Report {
     pub fn passed(&self) -> bool {
@@ -68,7 +66,6 @@ pub async fn isolation_backend(
         machine: machine.name.clone(),
         workspace: workspace.name.clone(),
         check: Check::LaunchConfigurationRefused,
-        active_launch_ready: false,
     };
     let isolation = Isolation::new(config, &[])?;
     let excluded_env = vec![

@@ -33,7 +33,6 @@ async fn local_probe_and_cli_do_not_provision_state_or_start_backends() {
     .await
     .unwrap();
     assert!(report.passed(), "{report:?}");
-    assert!(!report.active_launch_ready);
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
         .args(["doctor-isolation", "--config"])
         .arg(&f.config.path)
@@ -50,7 +49,7 @@ async fn local_probe_and_cli_do_not_provision_state_or_start_backends() {
     );
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["check"], "passed");
-    assert_eq!(result["active_launch_ready"], false);
+    assert!(result.get("active_launch_ready").is_none());
     assert_eq!(std::fs::read(&f.config.path).unwrap(), source);
     assert!(!f.config.state.path.exists());
     assert!(!f.config.state.control_socket.exists());

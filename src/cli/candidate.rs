@@ -40,12 +40,12 @@ pub fn service(
     executable: &Path,
     config: &Path,
     environment: &Path,
-    active: bool,
+    observe_only: bool,
 ) -> Result<String> {
     let executable = unit_path(executable)?;
     let config = unit_path(config)?;
     // EnvironmentFile supports specifiers but does not perform ExecStart's $ expansion.
     let environment = unit_path(environment)?.replace("$$", "$");
-    let mode = if active { "--active" } else { "--observe-only" };
-    Ok(format!("[Unit]\nDescription=Fridica experimental native candidate\nAfter=network-online.target\nStartLimitIntervalSec=600\nStartLimitBurst=3\n\n[Service]\nType=simple\nUMask=0077\nEnvironmentFile={environment}\nExecStart={executable} start --config {config} {mode}\nRestart=on-failure\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=180\n\n[Install]\nWantedBy=default.target\n"))
+    let mode = if observe_only { " --observe-only" } else { "" };
+    Ok(format!("[Unit]\nDescription=Fridica experimental native candidate\nAfter=network-online.target\nStartLimitIntervalSec=600\nStartLimitBurst=3\n\n[Service]\nType=simple\nUMask=0077\nEnvironmentFile={environment}\nExecStart={executable} start --config {config}{mode}\nRestart=on-failure\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=180\n\n[Install]\nWantedBy=default.target\n"))
 }

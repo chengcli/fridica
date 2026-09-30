@@ -2,9 +2,9 @@
 
 Use these settings in a separate experimental Rust configuration. The installed
 Python daemon rejects the new `[isolation]` section. Do not add it to a live Python
-configuration or migrate a live database to v6 to try these settings. Active Rust
-startup remains gated; this configures the worker launcher library and offline
-validation, with an explicit target runtime probe.
+configuration or migrate a live database to v6 to try these settings. These
+settings configure the worker launcher, offline validation and the explicit target
+runtime probe.
 
 Existing configurations remain valid without this section. Confined workers see
 the target's normal files, including SSH keys, git configuration and `gh`
@@ -105,11 +105,9 @@ other readiness codes include `host_paths_refused`, `owner_inputs_refused`,
 SIGINT/SIGTERM finish cleanup of the current bounded probe before skipping later
 probes; the timeout is per probe, and cleanup may take additional time.
 
-A passing report always retains `active_launch_ready: false` and lists the later
-compatibility, replay/recovery, packaging and deployment gates. It does not check
-backend versions/protocols/authentication, Slack access, database migration/locking,
-or guarantee writable state provisioning. Active library host startup reruns these
-checks before state/recovery and daemon service I/O; the active CLI remains gated.
+A passing report does not check backend versions/protocols/authentication, Slack
+access, database migration/locking, or guarantee writable state provisioning.
+`fridica start` reruns these checks before state/recovery and daemon service I/O.
 `--check-ready` and `--observe-only` are mutually exclusive.
 
 To test confinement on one configured machine and workspace, use:
@@ -149,8 +147,7 @@ failed check exits nonzero without printing subprocess output or private paths:
 | `launch_configuration_refused` / `unsupported_transport` | The selected launch cannot be probed. |
 
 `--timeout` defaults to 30 seconds and accepts 1–120 seconds; process cleanup can
-take additional time. A successful probe always reports `active_launch_ready:
-false`. It does not establish inventory completeness, backend version/protocol
+take additional time. A successful probe does not establish inventory completeness, backend version/protocol
 conformance, writable state provisioning, unrestricted-worker MCP isolation, or
 full runtime parity. Launch-time checks still run again to catch later changes.
 

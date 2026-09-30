@@ -46,7 +46,7 @@ publishing are not covered by candidate packaging.
 - Start observe-only with intended Slack workspace/channel; reconcile catch-up,
   persisted mentions, owner pauses, outbox ambiguity and unexpected state. Stop.
 - Confirm recovery choice and operator stop/status/log commands.
-- Explicitly opt into active operation with `start --active`.
+- Start the daemon with `start` (no `--observe-only`).
 - Run one week of ordinary live attention and inspect obligations, throttling,
   delivery, cancellation and restart behavior before widening scope.
 

@@ -64,9 +64,14 @@ control_socket="private/control.sock"
 #[tokio::test]
 async fn active_launch_and_invalid_tokens_fail_before_state_creation() {
     let f = Fixture::new();
+    // A bare start is the active daemon; without credentials it stops before state.
     let output = f.command().output().await.unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("requires --observe-only"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("SLACK_"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(!f.db.exists());
     let output = f
         .observer()

@@ -1,5 +1,5 @@
 # Experimental Fridica v0.4 configuration.
-# Services default to observe-only. Active startup requires an explicit start --active.
+# `fridica start` runs the daemon; `fridica start --observe-only` records without replying.
 #
 # Fridica is your Slack presence. One parent agent (you) listens in the channels
 # below. Each Slack thread becomes a session, and the parent delegates real work to

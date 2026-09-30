@@ -146,10 +146,9 @@ async fn cli_checks_all_backends_without_tokens_state_or_backend_invocation() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["startup_checks_passed"], true);
-    assert_eq!(report["active_launch_ready"], false);
     assert_eq!(report["targets"].as_array().unwrap().len(), 2);
     assert_eq!(report["config_fingerprint"], f.config.fingerprint);
-    assert_eq!(report["remaining_gates"].as_array().unwrap().len(), 1);
+    assert!(report.get("remaining_gates").is_none() && report.get("active_launch_ready").is_none());
     assert!(!String::from_utf8_lossy(&output.stdout).contains(f.root.to_str().unwrap()));
     f.pristine();
     let output = f.cli(&["--observe-only"]).await;

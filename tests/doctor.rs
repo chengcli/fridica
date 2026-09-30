@@ -240,7 +240,6 @@ os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
     );
     assert_eq!(status(&report, "Machine batch"), Status::Skip);
     assert!(!report.passed());
-    assert!(!report.active_launch_ready);
     let text = serde_json::to_string(&report).unwrap();
     assert!(!text.contains("private-secret"));
     assert!(!text.contains(fixture.dir.path().to_str().unwrap()));
@@ -441,7 +440,7 @@ async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
         String::from_utf8_lossy(&result.stderr)
     );
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(report["active_launch_ready"], false);
+    assert!(report.get("active_launch_ready").is_none());
     let result = fixture.cli(&["doctor", "--timeout", "1"]).await;
     assert_eq!(result.returncode, 0);
     assert!(result.text().contains("0 failed"));
