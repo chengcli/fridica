@@ -186,6 +186,7 @@ function latestJobs(jobs) {
   return latest;
 }
 function workerState(worker, job) {
+  if (worker.status === "awaiting_approval") return "blocked";
   const status = job?.status || worker.status;
   if (["running", "queued"].includes(status)) return status;
   if (["failed", "blocked", "lost"].includes(status)) return "blocked";
@@ -206,13 +207,15 @@ function workItems(thread, data, latest) {
 }
 function workFlags(thread, items) {
   const closed = ["closed", "archived", "cleaned"].includes(thread.control);
-  const running = !closed && (items.some((item) => item.status === "running") ||
+  const live = items.some((item) => ["running", "queued"].includes(item.status) ||
+    item.worker?.status === "awaiting_approval");
+  const completed = closed || (thread.control === "active" && thread.status === "complete" && !live);
+  const running = !completed && (items.some((item) => item.status === "running") ||
     (thread.control === "active" && thread.status === "working"));
-  const queued = !closed && items.some((item) => item.status === "queued");
-  const blocked = !closed && (thread.control === "paused" || thread.status === "blocked" ||
+  const queued = !completed && items.some((item) => item.status === "queued");
+  const blocked = !completed && (thread.control === "paused" || thread.status === "blocked" ||
     items.some((item) => item.status === "blocked"));
-  const waiting = !closed && thread.status === "waiting" && !running && !queued && !blocked;
-  const completed = closed || (thread.status === "complete" && !running && !queued && !blocked);
+  const waiting = !completed && thread.status === "waiting" && !running && !queued && !blocked;
   return { current: running || queued || blocked || waiting, running, queued, blocked, waiting, completed };
 }
 function workCounts(items) {
@@ -228,7 +231,8 @@ function parentCard(thread, items, flags, selected) {
   const counts = workCounts(items);
   const hosts = [...new Set(items.map((item) => item.place.host))];
   return el("button", { class: "parent-card" + (selected ? " selected" : ""), "aria-pressed": String(selected),
-    onclick: () => { state.selectedParent = thread.id; state.historyOpen = state.workFilter === "completed"; state.descriptionOpen = false; render(); } },
+    onclick: () => { document.querySelector(".work-main").scrollTop = 0; state.selectedParent = thread.id;
+      state.historyOpen = state.workFilter === "completed"; state.descriptionOpen = false; render(); } },
     el("div", { class: "parent-card-top" }, el("span", { class: "eyebrow" }, "PARENT AGENT"),
       statusPill(parentStatus(thread, flags))),
     el("strong", { class: "parent-name" }, workTitle(thread)),
@@ -248,21 +252,22 @@ function workerDetail(thread, item) {
     el("h2", {}, shortTitle(job?.brief || worker.summary || worker.role || "Worker")),
     el("p", { class: "sub" }, workTitle(thread)),
     el("div", { class: "worker-facts" },
-      [["Status", job?.status || worker.status || "idle"], ["Role", worker.role || "Worker"],
+      [["Status", worker.status === "awaiting_approval" ? "awaiting approval" : job?.status || worker.status || "idle"], ["Role", worker.role || "Worker"],
         ["Server", place.host], ["Environment", place.environment], ["Backend", worker.backend || "—"],
         ["Started", job?.started_at ? when(job.started_at) : "—"], ["Finished", job?.finished_at ? when(job.finished_at) : "—"]]
         .map(([label, value]) => el("div", {}, el("small", {}, label), el("strong", {}, value)))),
     status === "blocked" || thread.pause_reason ?
-      el("section", { class: "detail-note alert" }, el("h3", {}, "Why it stopped"),
-        el("p", {}, job?.error || thread.pause_reason || "No reason recorded.")) : null,
+      el("section", { class: "detail-note alert" }, el("h3", {}, worker.status === "awaiting_approval" ? "Approval pending" : "Why it stopped"),
+        el("p", {}, worker.status === "awaiting_approval" ? "Review the request in Needs you." :
+          job?.error || thread.pause_reason || "No reason recorded.")) : null,
     job?.result?.summary ? el("section", { class: "detail-note" }, el("h3", {}, "Result"), el("p", {}, job.result.summary)) : null,
     job?.brief ? el("section", { class: "detail-note" }, el("h3", {}, "Task"), el("p", {}, job.brief)) : null,
     worker.status !== "stopped" ? el("div", { class: "actions detail-note" },
-      button("Interrupt", () => {
+      ["running", "awaiting_approval"].includes(worker.status) ? button("Interrupt", () => {
         document.getElementById("worker-dialog").close();
         return act("POST", `/workers/${encodeURIComponent(worker.id)}/interrupt`, {}, "Interrupt this worker?",
           "The current job will stop; the worker can take another job later.");
-      }),
+      }) : null,
       button("Stop", () => {
         document.getElementById("worker-dialog").close();
         return act("POST", `/workers/${encodeURIComponent(worker.id)}/stop`, {}, "Stop this worker?",
@@ -285,7 +290,7 @@ function workerRow(thread, item) {
   return el("button", { class: "work-worker", onclick: () => openWorker(thread, item) },
     el("span", { class: "worker-glyph " + status }, (worker.role || "W").slice(0, 1).toUpperCase()),
     el("span", { class: "worker-copy" },
-      el("strong", {}, job?.brief || worker.summary || "No recent job"),
+      el("strong", {}, shortTitle(job?.brief || worker.summary || "No recent job")),
       el("small", {}, [worker.role || "Worker", age].filter(Boolean).join(" · "))),
     el("span", { class: "worker-location" }, el("small", {}, "SERVER / ENVIRONMENT"),
       el("strong", {}, place.host), el("em", {}, place.environment)),
@@ -293,7 +298,7 @@ function workerRow(thread, item) {
     el("span", { class: "worker-chevron" }, "›"));
 }
 function overview(data) {
-  const items = attention(data), jobs = data.jobs || [], latest = latestJobs(jobs);
+  const latest = latestJobs(data.jobs || []);
   const all = (data.threads || []).map((thread) => {
     const workers = workItems(thread, data, latest);
     return { thread, workers, flags: workFlags(thread, workers) };
@@ -316,8 +321,8 @@ function overview(data) {
   const selectedFlags = selectedEntry?.flags;
   const selectedItems = selectedEntry?.workers || [];
   const counts = workCounts(selectedItems);
-  const current = selectedItems.filter((item) => !["done", "idle"].includes(item.status));
-  const past = selectedItems.filter((item) => ["done", "idle"].includes(item.status));
+  const current = selectedFlags?.completed ? [] : selectedItems.filter((item) => !["done", "idle"].includes(item.status));
+  const past = selectedFlags?.completed ? selectedItems : selectedItems.filter((item) => ["done", "idle"].includes(item.status));
   return [el("div", { class: "work-layout" },
     el("aside", { class: "parent-pane", "aria-label": "Parent agents" },
       el("div", { class: "eyebrow" }, "WORK GRAPH"), el("h1", {}, "Parents"),
@@ -326,7 +331,7 @@ function overview(data) {
         [["current", "Current"], ["running", "Running"], ["queued", "Queued"],
           ["blocked", "Blocked"], ["waiting", "Waiting"], ["completed", "Completed"], ["all", "All loaded"]]
           .map(([key, label]) => [key, `${label} (${all.filter((entry) => key === "all" || entry.flags[key]).length})`]),
-        (value) => { state.workFilter = value; state.historyOpen = value === "completed"; render(); }, "Filter parents")),
+        (value) => { state.workFilter = value; state.historyOpen = value === "completed"; render(); window.scrollTo(0, 0); }, "Filter parents")),
       el("div", { class: "parent-cards" }, visible.length ? visible.map(({ thread, workers, flags }) =>
         parentCard(thread, workers, flags, thread.id === state.selectedParent)) :
         empty("No matching parent agents.")),
@@ -345,8 +350,7 @@ function overview(data) {
         el("div", { class: "work-summary-head" },
           el("div", {}, el("h2", {}, "At a glance"),
             el("p", { class: "sub small" }, "Worker states, not percent complete.")),
-          items.length ? button(`${items.length} need you →`, () => go("inbox"), "attention-button") :
-            statusPill(parentStatus(selected, selectedFlags))),
+          statusPill(parentStatus(selected, selectedFlags))),
         el("div", { class: "work-track" },
           selectedItems.length ? selectedItems.map((item) => el("span", { class: item.status })) : el("span", { class: "idle" })),
         el("div", { class: "work-legend" }, ["running", "queued", "blocked", "done", "idle"].filter((status) => counts[status]).map((status) =>
@@ -413,7 +417,8 @@ function select(value, options, change, label = "") {
 }
 function searchBox() {
   return el("input", { class: "search", type: "search", placeholder: "Search, then press Enter", value: state.query,
-    onkeydown: (event) => { if (event.key === "Enter") { state.query = event.target.value.trim(); render(); event.preventDefault(); } } });
+    onkeydown: (event) => { if (event.key === "Enter") { state.query = event.target.value.trim(); render();
+      if (state.view === "overview") window.scrollTo(0, 0); event.preventDefault(); } } });
 }
 function filteredThreads(threads, filter, query) {
   return threads.filter((item) => (filter === "all" || (filter === "active" ? item.control === "active" : item.control === filter)) &&
@@ -596,10 +601,13 @@ function showUnlock() {
 function render() {
   const data = state.data;
   if (!data.status) return;
+  const detailScroll = document.querySelector(".work-main")?.scrollTop || 0;
+  const selected = state.selectedParent;
   const content = state.view === "threads" && state.thread ? (data.detail ? threadDetail(data.detail) : [empty("Loading conversation…")])
     : ({ overview, inbox, threads: threadsView, machines: machinesView,
       activity: activityView, settings: settingsView })[state.view](data);
   document.getElementById("view").replaceChildren(...content.flat().filter(Boolean));
+  if (selected === state.selectedParent && state.view === "overview") document.querySelector(".work-main")?.scrollTo(0, detailScroll);
 }
 async function refresh(force = false) {
   if (state.refreshing) { if (force) state.pending = true; return; }

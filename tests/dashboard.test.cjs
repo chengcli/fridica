@@ -100,7 +100,7 @@ test("work graph shows parent, worker, server and environment; detail explains f
   const detail = app.workerDetail(data.threads[0], item).filter(Boolean).map((node) => node.textContent).join(" ");
   assert(detail.includes("worker_401"));
   assert(detail.includes("dungeon3"));
-  assert(detail.includes("Interrupt") && detail.includes("Stop"), "worker controls stay available in detail");
+  assert(!detail.includes("Interrupt") && detail.includes("Stop"), "idle workers cannot be interrupted");
   assert(!content.includes("Running 13m"), "a finished job must not show a running timer");
 });
 
@@ -146,7 +146,16 @@ test("parent filters follow worker state without marking paused work as running"
   assert.deepStrictEqual(app.workFlags(paused, [{ status: "done" }]),
     { current: true, running: false, queued: false, blocked: true, waiting: false, completed: false });
   const failed = app.workFlags(complete, [{ status: "blocked" }]);
-  assert(failed.current && failed.blocked && !failed.completed);
-  assert.strictEqual(app.parentStatus(complete, failed), "blocked");
+  assert(!failed.current && !failed.blocked && failed.completed);
+  assert.strictEqual(app.parentStatus(complete, failed), "complete");
+  assert(app.workFlags(complete, [{ status: "running" }]).running);
   assert(app.workFlags(complete, [{ status: "done" }]).completed);
+  const approval = app.workItems({ ...complete, id: "t" }, { workers: [{ id: "w", session_id: "t", status: "awaiting_approval" }],
+    jobs: [], machines: [] }, new Map([["w", { status: "running", error: "old_error" }]]))[0];
+  assert.strictEqual(approval.status, "blocked");
+  const detail = app.workerDetail(complete, approval).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(detail.includes("Approval pending") && !detail.includes("old_error"));
+  const queued = app.workerDetail(complete, { worker: { status: "queued" }, job: { status: "queued" },
+    status: "queued", place: { host: "local", environment: "local" } }).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(!queued.includes("Interrupt"));
 });
