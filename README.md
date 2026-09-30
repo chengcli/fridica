@@ -63,9 +63,15 @@ workers, install and sign in to the backends you list for it there, on the login
 shell's `PATH`.
 
 ```bash
-pip install fridica              # or: git clone … && pip install -e '.[dev]'
+pip install fridica              # or: pipx install fridica
 fridica init                     # ~/.config/fridica/config.toml, contract.md, manifest.yaml
 ```
+
+The wheel contains the native `fridica` and `fridica-overseer` executables (no Python
+code), built for Linux x86_64/aarch64 (glibc 2.28+) and macOS arm64/x86_64; one wheel
+per platform serves every Python version. Elsewhere pip builds from the source
+distribution, which needs a Rust toolchain (1.88+). Worker helpers still run the
+system `/usr/bin/python3`.
 
 ### Sandbox dependencies on Linux
 
@@ -648,8 +654,10 @@ module that runs DDL, and migrations are versioned.
 ## Development
 
 ```bash
-pip install -e '.[dev]'
+cargo test --locked --all-targets     # the native daemon
+pip install -r requirements-dev.txt
 python -m pytest -q                   # no network; fake Slack, fake claude/codex/ssh/bwrap executables
+maturin build --release --out dist    # a wheel for this machine; scripts/smoke_wheel.sh dist/*.whl
 node --test tests/dashboard.test.cjs
 ruff check src tests
 ```
@@ -659,12 +667,15 @@ A data-backed design document (layers, context management, security, mapping to 
 with the previous design) is in [`docs/fridica-design.pdf`](docs/fridica-design.pdf); see [`docs/README.md`](docs/README.md)
 to rebuild it.
 
-**Continuous integration** (`.github/workflows/ci.yml`) runs pytest and the node
-test on Ubuntu and macOS, and builds and checks the wheel.
+**Continuous integration** (`.github/workflows/ci.yml`) runs the Rust suite, pytest and
+the node test on Ubuntu and macOS, and builds and smoke-tests a manylinux wheel and the sdist.
 
 **Releases:**
 - When a pull request is merged, `cd.yml` tags the next version using its
   `release:*` label, then creates a GitHub release.
-- `release.yml` publishes a tag to PyPI after `scripts/release.py verify` confirms
-  that the wheel bundles the Slack manifest, the contract, the repository list, the
-  configuration template, and the dashboard.
+- `release.yml` (run by hand with a tag and `Both`, `MacOS` or `Ubuntu`) reruns CI on
+  the tag, stamps the tag's version with `scripts/release.py stamp`, builds a wheel per
+  platform (manylinux 2_28 x86_64 and aarch64, macOS arm64 and x86_64) plus the sdist,
+  smoke-tests the natively built wheels, and publishes after `scripts/release.py verify`
+  confirms one `py3-none` wheel per selected platform, each with both executables, and
+  matching versions.

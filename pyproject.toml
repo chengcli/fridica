@@ -1,39 +1,30 @@
 [build-system]
-requires = ["hatchling>=1.25", "hatch-vcs>=0.4"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
 
 [project]
 name = "fridica"
-dynamic = ["version"]
+# Stamped from the release tag by `scripts/release.py stamp` before wheels are built.
+version = "0.4.0.dev0"
 description = "Your Slack presence: a parent agent per person, a session per thread, and Claude Code / Codex workers on your machines"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["slack-sdk>=3.33,<4", "aiohttp>=3.10,<4", "tomlkit>=0.13,<1"]
+classifiers = [
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Rust",
+]
 
-[project.optional-dependencies]
-dev = ["pytest>=8", "build>=1.2", "hatchling>=1.25", "hatch-vcs>=0.4", "twine>=5"]
-docs = ["matplotlib>=3.8", "rst2pdf>=0.100"]
-
-[tool.hatch.version]
-source = "vcs"
-tag-pattern = '^v(?P<version>\d+\.\d+\.\d+)$'
-
-[tool.hatch.version.raw-options]
-git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
-
-[project.scripts]
-fridica = "fridica.cli.main:main"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/fridica"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"slack/manifest.yaml" = "fridica/manifest.yaml"
+[tool.maturin]
+# The wheel carries the native `fridica` and `fridica-overseer` executables only; it
+# links no Python ABI, so one py3-none-<platform> wheel serves every Python version.
+bindings = "bin"
+strip = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
-pythonpath = ["tests"]
+pythonpath = ["src", "tests"]
 
 [tool.ruff]
 # The pre-commit hook lints with ruff's default rules only (pyflakes and the

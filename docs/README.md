@@ -33,7 +33,7 @@ Numbers and charts come from Fridica's own state database.
 ## Rebuilding
 
 ```sh
-python -m pip install -e '.[docs]'     # matplotlib and rst2pdf
+python -m pip install -r requirements-docs.txt   # matplotlib and rst2pdf
 python docs/scripts/build.py           # figures, generated RST, then docs/fridica-design.pdf
 ```
 

@@ -18,7 +18,7 @@ impl Build {
                 .unwrap_or("unpackaged")
                 .into(),
             target: option_env!("FRIDICA_BUILD_TARGET")
-                .unwrap_or("unpackaged")
+                .unwrap_or(env!("FRIDICA_COMPILE_TARGET"))
                 .into(),
         }
     }

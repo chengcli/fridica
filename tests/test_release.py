@@ -47,29 +47,33 @@ def test_parse_tag_valid():
     assert release.parse_tag("v0.12.345") == (0, 12, 345)
 
 
-def make_artifacts(directory, wheel_name="fridica", source_name="fridica",
-                   wheel_version="1.2.3", source_version="1.2.3",
-                   manifest=True, contract=True, repos=True, wheel_metadata=True, source_metadata=True):
-    wheel = directory / "fridica-1.2.3-py3-none-any.whl"
-    source = directory / "fridica-1.2.3.tar.gz"
+PLATFORM_TAGS = ["py3-none-manylinux_2_28_x86_64", "py3-none-manylinux_2_28_aarch64",
+                 "py3-none-macosx_10_13_x86_64", "py3-none-macosx_11_0_arm64"]
+
+
+def make_wheel(directory, tag, name="fridica", version="1.2.3", scripts=("fridica", "fridica-overseer"),
+               metadata=True):
+    wheel = directory / f"fridica-1.2.3-{tag}.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
-        if wheel_metadata:
-            archive.writestr("fridica-1.2.3.dist-info/METADATA", f"Name: {wheel_name}\nVersion: {wheel_version}\n")
-        if manifest:
-            archive.writestr("fridica/manifest.yaml", "display_information: {}\n")
-        if contract:
-            archive.writestr("fridica/parent/contract.md", "## Participation\n\n## Replies\n")
-        if repos:
-            archive.writestr("fridica/parent/repos.toml", "[[repos]]\nname='x'\nurl='https://github.com/a/x'\ncollaborators=['o']\n")
-        archive.writestr("fridica/config/template.toml", "")
-        archive.writestr("fridica/dashboard/static/index.html", "")
+        if metadata:
+            archive.writestr("fridica-1.2.3.dist-info/METADATA", f"Name: {name}\nVersion: {version}\n")
+            archive.writestr("fridica-1.2.3.dist-info/WHEEL", f"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: {tag}\n")
+        for script in scripts:
+            archive.writestr(f"fridica-1.2.3.data/scripts/{script}", "binary")
+    return wheel
+
+
+def make_artifacts(directory, tags=PLATFORM_TAGS, source_name="fridica", source_version="1.2.3",
+                   source_metadata=True, **wheel):
+    wheels = [make_wheel(directory, tag, **wheel) for tag in tags]
+    source = directory / "fridica-1.2.3.tar.gz"
     with tarfile.open(source, "w:gz") as archive:
         if source_metadata:
             metadata = f"Name: {source_name}\nVersion: {source_version}\n".encode()
             member = tarfile.TarInfo("fridica-1.2.3/PKG-INFO")
             member.size = len(metadata)
             archive.addfile(member, io.BytesIO(metadata))
-    return wheel, source
+    return wheels, source
 
 
 def test_verify_artifacts(tmp_path):
@@ -77,16 +81,25 @@ def test_verify_artifacts(tmp_path):
     release.verify_artifacts(tmp_path, "v1.2.3")
 
 
+@pytest.mark.parametrize("os_choice, tags", [
+    ("Ubuntu", PLATFORM_TAGS[:2]), ("Linux", PLATFORM_TAGS[:2]), ("MacOS", PLATFORM_TAGS[2:]),
+])
+def test_verify_artifacts_for_one_os(tmp_path, os_choice, tags):
+    make_artifacts(tmp_path, tags=tags)
+    release.verify_artifacts(tmp_path, "v1.2.3", os_choice)
+
+
 @pytest.mark.parametrize("changes, error", [
-    ({"manifest": False}, "Slack manifest"),
-    ({"contract": False}, "agent contract"),
-    ({"repos": False}, "repository list"),
-    ({"wheel_metadata": False}, "wheel metadata"),
+    ({"scripts": ("fridica",)}, "executables"),
+    ({"metadata": False}, "wheel metadata"),
     ({"source_metadata": False}, "source distribution metadata"),
-    ({"wheel_name": "other"}, "name/version"),
+    ({"name": "other"}, "name/version"),
     ({"source_name": "other"}, "name/version"),
-    ({"wheel_version": "1.2.4"}, "name/version"),
+    ({"version": "1.2.4"}, "name/version"),
     ({"source_version": "1.2.3.dev1"}, "name/version"),
+    ({"tags": PLATFORM_TAGS[:3]}, "missing macosx arm64"),
+    ({"tags": PLATFORM_TAGS + ["py3-none-any"]}, "exactly one required platform"),
+    ({"tags": PLATFORM_TAGS[:3] + ["cp311-cp311-macosx_11_0_arm64"]}, "exactly one required platform"),
 ])
 def test_verify_artifacts_rejects_bad_content(tmp_path, changes, error):
     make_artifacts(tmp_path, **changes)
@@ -94,17 +107,39 @@ def test_verify_artifacts_rejects_bad_content(tmp_path, changes, error):
         release.verify_artifacts(tmp_path, "v1.2.3")
 
 
-@pytest.mark.parametrize("suffix", ["whl", "tar.gz"])
-@pytest.mark.parametrize("duplicate", [False, True])
-def test_verify_requires_one_of_each_distribution(tmp_path, suffix, duplicate):
+def test_verify_rejects_duplicate_platform_and_wrong_os(tmp_path):
     make_artifacts(tmp_path)
-    artifact = next(tmp_path.glob(f"*.{suffix}"))
-    if duplicate:
-        (tmp_path / f"extra.{suffix}").write_bytes(artifact.read_bytes())
-    else:
-        artifact.unlink()
-    with pytest.raises(ValueError, match="exactly one"):
+    make_wheel(tmp_path, "py3-none-manylinux_2_17_x86_64")
+    with pytest.raises(ValueError, match="exactly one wheel for manylinux x86_64"):
         release.verify_artifacts(tmp_path, "v1.2.3")
+    with pytest.raises(ValueError, match="--os"):
+        release.verify_artifacts(tmp_path, "v1.2.3", "Windows")
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_verify_requires_one_source_distribution(tmp_path, duplicate):
+    _, source = make_artifacts(tmp_path)
+    if duplicate:
+        (tmp_path / "extra.tar.gz").write_bytes(source.read_bytes())
+    else:
+        source.unlink()
+    with pytest.raises(ValueError, match="exactly one source distribution"):
+        release.verify_artifacts(tmp_path, "v1.2.3")
+
+
+def test_stamp_sets_one_version_everywhere(tmp_path):
+    root = Path(__file__).parents[1]
+    for name in ("pyproject.toml", "Cargo.toml", "Cargo.lock"):
+        (tmp_path / name).write_text((root / name).read_text())
+    assert release.stamp(tmp_path, "v2.3.4") == "2.3.4"
+    assert '\nversion = "2.3.4"\n' in (tmp_path / "pyproject.toml").read_text()
+    assert (tmp_path / "Cargo.toml").read_text().startswith('[package]\nname = "fridica"\nversion = "2.3.4"\n')
+    assert 'name = "fridica"\nversion = "2.3.4"\n' in (tmp_path / "Cargo.lock").read_text()
+    with pytest.raises(ValueError, match="vMAJOR"):
+        release.stamp(tmp_path, "2.3.4")
+    (tmp_path / "Cargo.lock").write_text("")
+    with pytest.raises(ValueError, match="Cargo.lock"):
+        release.stamp(tmp_path, "v2.3.5")
 
 
 @pytest.mark.parametrize("current, expected", [
