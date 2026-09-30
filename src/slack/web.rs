@@ -238,6 +238,11 @@ impl WebClient {
             }
         }
         let names = json!(names).to_string();
+        let team = auth["team"]
+            .as_str()
+            .filter(|n| n.len() <= 80)
+            .unwrap_or("")
+            .to_string();
         let identity = Identity {
             owner: self.config.owner.slack_user.clone(),
             workspace: self.config.slack.workspace.clone(),
@@ -251,6 +256,7 @@ impl WebClient {
         self.store.call(move|c| {
             c.execute("INSERT INTO meta VALUES('slack_scopes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[stored])?;
             c.execute("INSERT INTO meta VALUES('slack_channel_names',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[names])?;
+            c.execute("INSERT INTO meta VALUES('slack_workspace_name',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[team])?;
             Ok(())
         }).await.map_err(|_|Failure::Recording)?;
         *self.file_scopes.write().map_err(|_| Failure::Recording)? = identity.scopes.clone();

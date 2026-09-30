@@ -77,6 +77,7 @@ pub enum Commands {
     },
     /// List threads, show one, or apply a control.
     Threads {
+        /// Thread as `#channel:TS` (shown as `name`) or its full ID.
         id: Option<String>,
         #[arg(value_parser=["pause","resume","close","archive","restore","clean"], requires="id")]
         action: Option<String>,
@@ -136,7 +137,8 @@ pub enum Commands {
     ///
     /// After an uncertain response, retry with the printed client_id.
     Instruct {
-        /// Channel name (`ai-human-plume` or `#ai-human-plume`) or ID, or a thread ID.
+        /// Channel (`#ai-human-plume`, name or ID) for its latest thread, or a
+        /// thread as `#channel:TS` or its full ID.
         target: String,
         /// The instruction, e.g. "approve cloning compressible_plume for this run".
         text: String,
@@ -146,6 +148,10 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
+}
+/// A thread ID or its readable `#channel:TS` form; the daemon resolves names.
+fn thread(value: &str) -> Result<&str> {
+    segment(value.trim_start_matches('#'))
 }
 fn segment(value: &str) -> Result<&str> {
     if value.is_empty()
@@ -172,13 +178,13 @@ impl Commands {
                 (Some(id), Some(action)) => (
                     connection,
                     "POST",
-                    format!("/threads/{}/{}", segment(&id)?, action),
+                    format!("/threads/{}/{}", thread(&id)?, action),
                     Some(json!({})),
                 ),
                 (Some(id), None) => (
                     connection,
                     "GET",
-                    format!("/threads/{}", segment(&id)?),
+                    format!("/threads/{}", thread(&id)?),
                     None,
                 ),
                 (None, None) => (connection, "GET", "/threads".into(), None),
@@ -266,15 +272,14 @@ impl Commands {
             } => {
                 let client_id =
                     client_id.unwrap_or_else(|| format!("cli-{}", uuid::Uuid::new_v4()));
-                // Thread IDs are workspace:channel:ts; channel names never contain ':'.
-                let route = if target.contains(':') {
-                    format!("/threads/{}/instruct", segment(&target)?)
+                // Threads contain ':' (`#channel:TS` or a full ID); channel names never do.
+                let target = segment(target.trim_start_matches('#'))?;
+                let kind = if target.contains(':') {
+                    "threads"
                 } else {
-                    format!(
-                        "/channels/{}/instruct",
-                        segment(target.trim_start_matches('#'))?
-                    )
+                    "channels"
                 };
+                let route = format!("/{kind}/{target}/instruct");
                 let body = json!({"text":text,"client_id":client_id});
                 let sent = async {
                     Ok::<_, anyhow::Error>(

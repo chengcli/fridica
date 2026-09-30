@@ -1,5 +1,5 @@
 //! One SQLite transaction per response. Never select blobs or private replay data.
-use crate::config::Config;
+use crate::{config::Config, slack::names::Names};
 use anyhow::{bail, Result};
 use rusqlite::{types::ValueRef, Connection, Params};
 use serde_json::{json, Value};
@@ -72,10 +72,20 @@ fn rows(c: &Connection, sql: &str, params: impl Params) -> Result<Vec<Value>> {
     }
     Ok(result)
 }
-fn threads(mut values: Vec<Value>) -> Vec<Value> {
+/// Adds the readable `#channel:TS` beside each thread reference.
+fn label(values: &mut [Value], names: &Names) {
+    for v in values {
+        if let Some(session) = v["session_id"].as_str() {
+            v["thread"] = json!(names.thread(session));
+        }
+    }
+}
+fn threads(mut values: Vec<Value>, names: &Names) -> Vec<Value> {
     for v in &mut values {
-        v["key"] =
-            json!({"workspace":v["workspace"],"channel":v["channel"],"root_ts":v["root_ts"]});
+        v["name"] = json!(names.thread(v["id"].as_str().unwrap_or("")));
+        v["key"] = json!({"workspace":v["workspace"],"workspace_name":names.workspace_name,
+            "channel":v["channel"],"channel_name":names.channels.get(v["channel"].as_str().unwrap_or("")),
+            "root_ts":v["root_ts"]});
         for k in ["workspace", "channel", "root_ts"] {
             v.as_object_mut().unwrap().remove(k);
         }
@@ -126,7 +136,8 @@ pub fn get(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(if parts == ["activity"] { 200 } else { 100 });
     let parts: Vec<_> = parts.iter().map(String::as_str).collect();
-    let values = match parts.as_slice() {
+    let names = Names::load(c, &config.slack)?;
+    let mut values = match parts.as_slice() {
         ["status"] => {
             let runtime = rows(c, "SELECT started_at,slack_status FROM runtime WHERE id=1", [])?
                 .pop().unwrap_or(json!({"started_at":0.,"slack_status":"stopped"}));
@@ -146,11 +157,11 @@ pub fn get(
         ["threads"] => {
             let (clause, values) = filter("control", query.get("control").map(String::as_str), "");
             threads(rows(c, &format!("{THREAD}{clause} ORDER BY updated DESC,id LIMIT {limit}"),
-                rusqlite::params_from_iter(values))?)
+                rusqlite::params_from_iter(values))?, &names)
         }
         ["attention", "threads"] => threads(rows(c,
-            &format!("{THREAD} WHERE control='paused' OR (control='active' AND status='blocked') ORDER BY updated DESC,id"), [])?),
-        ["threads", id] => return thread(c, id, query, processes),
+            &format!("{THREAD} WHERE control='paused' OR (control='active' AND status='blocked') ORDER BY updated DESC,id"), [])?, &names),
+        ["threads", id] => return thread(c, id, query, processes, &names),
         ["workers"] => {
             let (clause, values) = filter("status", query.get("status").map(String::as_str), "");
             workers(rows(c, &format!("{WORKER}{clause} ORDER BY updated DESC,id LIMIT {limit}"),
@@ -185,6 +196,7 @@ pub fn get(
         ["machines"] => machines(c, config, processes)?,
         _ => return Ok(None),
     };
+    label(&mut values, &names);
     Ok(Some(json!(values)))
 }
 fn thread(
@@ -192,8 +204,10 @@ fn thread(
     id: &str,
     query: &BTreeMap<String, String>,
     processes: &BTreeMap<String, String>,
+    names: &Names,
 ) -> Result<Option<Value>> {
-    let Some(session) = threads(rows(c, &format!("{THREAD} WHERE id=?"), [id])?).pop() else {
+    let Some(session) = threads(rows(c, &format!("{THREAD} WHERE id=?"), [id])?, names).pop()
+    else {
         return Ok(None);
     };
     let limit = query

@@ -12,7 +12,6 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
-use unicode_casefold::UnicodeCaseFold;
 
 #[derive(Default)]
 pub(super) struct Work {
@@ -150,11 +149,9 @@ pub(super) fn prepare(
         } else {
             let granted = workspace
                 .policy
-                .fetch_repos
-                .iter()
-                .find(|r| r.as_str().case_fold().eq(d.fetch_repo.as_str().case_fold()))
+                .fetch_grant(&d.fetch_repo)
                 .context("fetch_repo is not granted in this workspace's fetch_repos; leave fetch_repo and fetch_ref empty so the worker clones or reuses a checkout itself")?
-                .clone();
+                .to_string();
             if !valid_fetch_ref(&d.fetch_ref) {
                 bail!("invalid fetch_ref; use refs/heads/BRANCH, refs/pull/N/head, a commit SHA or HEAD");
             }

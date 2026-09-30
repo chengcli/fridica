@@ -2,10 +2,10 @@
 //! line per notable event to stderr, in v0.3's `time LEVEL name: message` form.
 //! It only reads; it never prints message text, briefs, tokens or paths.
 //! `FRIDICA_LOG=off` silences it.
-use crate::store::Store;
+use crate::{config::schema::Slack, slack::names::Names, store::Store};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 use tokio::sync::watch;
 
 pub fn enabled() -> bool {
@@ -21,7 +21,7 @@ pub fn line(level: &str, name: &str, message: &str) {
 }
 
 /// Print events recorded after the call until `finished` turns true, then drain.
-pub async fn follow(store: Store, mut finished: watch::Receiver<bool>) {
+pub async fn follow(store: Store, slack: Slack, mut finished: watch::Receiver<bool>) {
     if !enabled() {
         return;
     }
@@ -38,7 +38,8 @@ pub async fn follow(store: Store, mut finished: watch::Receiver<bool>) {
     loop {
         let done = *finished.borrow();
         let after = seq;
-        if let Ok((last, lines)) = store.call(move |c| read(c, after)).await {
+        let slack = slack.clone();
+        if let Ok((last, lines)) = store.call(move |c| read(c, &slack, after)).await {
             seq = last;
             for (level, name, message) in lines {
                 line(level, name, &message);
@@ -56,16 +57,8 @@ pub async fn follow(store: Store, mut finished: watch::Receiver<bool>) {
 
 type Line = (&'static str, &'static str, String);
 
-fn read(c: &mut Connection, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
-    let names: BTreeMap<String, String> = c
-        .query_row(
-            "SELECT value FROM meta WHERE key='slack_channel_names'",
-            [],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default();
+fn read(c: &mut Connection, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
+    let names = Names::load(c, slack)?;
     let rows: Vec<(i64, String, String)> = c
         .prepare(
             "SELECT seq,kind,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT 500",
@@ -105,29 +98,10 @@ fn short(id: &str) -> &str {
         id
     }
 }
-fn channel(names: &BTreeMap<String, String>, id: &str) -> String {
-    names
-        .get(id)
-        .map_or_else(|| id.to_string(), |n| format!("#{n}"))
-}
-/// `WORKSPACE:CHANNEL:TS` as `#channel TS`.
-fn thread(names: &BTreeMap<String, String>, session: &str) -> String {
-    let mut parts = session.splitn(3, ':');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(_), Some(c), Some(ts)) => format!("{} {ts}", channel(names, c)),
-        _ => session.to_string(),
-    }
-}
-
 /// Outbox post kind and thread for a delivery, looked up by outbox ID.
 type Post<'a> = &'a dyn Fn(i64) -> Option<(String, String)>;
 
-pub(crate) fn describe(
-    post: Post<'_>,
-    names: &BTreeMap<String, String>,
-    kind: &str,
-    p: &Value,
-) -> Option<Line> {
+pub(crate) fn describe(post: Post<'_>, names: &Names, kind: &str, p: &Value) -> Option<Line> {
     Some(match kind {
         "service_start" => (
             "INFO",
@@ -184,8 +158,8 @@ pub(crate) fn describe(
                 "INFO",
                 "intake",
                 format!(
-                    "{} {root} from {}{source}",
-                    channel(names, text(&m["channel"])),
+                    "{}:{root} from {}{source}",
+                    names.channel(text(&m["channel"])),
                     text(&m["sender"])
                 ),
             )
@@ -220,7 +194,7 @@ pub(crate) fn describe(
                 "parent",
                 format!(
                     "{}: {}",
-                    thread(names, text(&p["request"]["session"]["id"])),
+                    names.thread(text(&p["request"]["session"]["id"])),
                     parts.join("; ")
                 ),
             )
@@ -265,7 +239,7 @@ pub(crate) fn describe(
         "delivery" => {
             let found = post(p["outbox_id"].as_i64().unwrap_or(-1));
             let (what, session) = found.unwrap_or_else(|| ("post".into(), String::new()));
-            let place = thread(names, &session);
+            let place = names.thread(&session);
             match text(&p["result"]["outcome"]) {
                 "sent" => ("INFO", "slack", format!("posted {what} in {place}")),
                 outcome => (
@@ -306,7 +280,11 @@ mod tests {
     #[test]
     fn describes_notable_events_without_message_text() {
         let post = |id: i64| (id == 7).then(|| ("reply".to_string(), "T:C1:100.1".to_string()));
-        let names = BTreeMap::from([("C1".to_string(), "ai-human-plume".to_string())]);
+        let names = Names {
+            workspace: "T".into(),
+            channels: [("C1".to_string(), "ai-human-plume".to_string())].into(),
+            ..Names::default()
+        };
         let say = |kind: &str, p: Value| {
             describe(&post, &names, kind, &p).map(|(l, n, m)| format!("{l} {n}: {m}"))
         };
@@ -316,10 +294,10 @@ mod tests {
         );
         let intake = json!({"owner":"UO","message":{"channel":"C1","ts":"100.1","thread_ts":null,"sender":"UA","source":"socket","text":"private words","meta":null}});
         let line = say("intake", intake).unwrap();
-        assert_eq!(line, "INFO intake: #ai-human-plume 100.1 from UA");
+        assert_eq!(line, "INFO intake: #ai-human-plume:100.1 from UA");
         assert!(say("intake", json!({"owner":"UO","message":{"channel":"C1","ts":"1","sender":"UO","meta":{"kind":"reply"}}})).is_none());
         let commit = json!({"request":{"session":{"id":"T:C1:100.1"}},"decision":{"reply":{"send":true,"text":"secret reply","status":"complete"},"delegations":[{"machine":"dart10"},{"machine":"","tags":["cuda"]}]}});
-        assert_eq!(say("actor_commit", commit).unwrap(), "INFO parent: #ai-human-plume 100.1: replied (complete); delegated 2 job(s) to dart10, cuda");
+        assert_eq!(say("actor_commit", commit).unwrap(), "INFO parent: #ai-human-plume:100.1: replied (complete); delegated 2 job(s) to dart10, cuda");
         assert_eq!(
             say("worker_call", json!({"request":{"job_id":"job-c5ebde2a-7a39-4a0e-af86-1eb487ec49ec"},"spec":{"machine":{"name":"dart11"},"backend":"codex","slot":1}})).unwrap(),
             "INFO worker: job 1eb487 started on dart11 (codex, slot 1)"
@@ -334,7 +312,7 @@ mod tests {
                 json!({"outbox_id":7,"result":{"outcome":"sent"}})
             )
             .unwrap(),
-            "INFO slack: posted reply in #ai-human-plume 100.1"
+            "INFO slack: posted reply in #ai-human-plume:100.1"
         );
         assert_eq!(
             say(
@@ -342,7 +320,7 @@ mod tests {
                 json!({"outbox_id":7,"result":{"outcome":"rejected","code":"invalid_arguments"}})
             )
             .unwrap(),
-            "WARNING slack: reply in #ai-human-plume 100.1 rejected (invalid_arguments)"
+            "WARNING slack: reply in #ai-human-plume:100.1 rejected (invalid_arguments)"
         );
         assert_eq!(
             say(

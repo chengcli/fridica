@@ -839,6 +839,11 @@ async fn instruct_cli_takes_a_channel_and_text_and_always_shows_the_retry_key() 
             "/threads/TTEAM:CROOM:100.1/instruct",
             true,
         ),
+        (
+            vec!["instruct", "#ai-human-plume:100.1", "Approve the clone"],
+            "/threads/ai-human-plume:100.1/instruct",
+            true,
+        ),
     ] {
         let output = run(&args).await;
         assert_eq!(
