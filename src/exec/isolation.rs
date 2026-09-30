@@ -7,7 +7,7 @@ use super::{
     ssh::{LaunchOptions, SshTransport},
 };
 use crate::config::{
-    isolation::{remote_path, validate_identities, validate_remote_files},
+    isolation::{remote_path, validate_identities},
     registry::Machine,
     Config,
 };
@@ -55,7 +55,6 @@ pub struct Isolation {
 #[derive(Clone, PartialEq, Eq)]
 struct RemoteFiles {
     host: String,
-    private: Vec<String>,
     settings_files: Vec<String>,
     inventory_complete: bool,
 }
@@ -72,7 +71,6 @@ impl Isolation {
         private.extend(config.owner.contract.iter().cloned());
         private.extend(config.parent.repos.iter().cloned());
         private.extend_from_slice(additional);
-        private.extend(config.isolation.private_files.iter().cloned());
         if private
             .iter()
             .any(|p| !safe_path(p) || p.parent() == Some(Path::new("/")))
@@ -97,7 +95,6 @@ impl Isolation {
                 name.clone(),
                 RemoteFiles {
                     host: machine.host.clone(),
-                    private: inventory.private_files.clone(),
                     settings_files: inventory.settings_files.clone(),
                     inventory_complete: inventory.mcp_inventory_complete,
                 },
@@ -112,30 +109,6 @@ impl Isolation {
         validate_identities(aliases, urls)?;
         self.mcp_aliases = aliases.to_vec();
         self.mcp_urls = urls.to_vec();
-        Ok(self)
-    }
-    /// Trusted construction must inventory ALL private files visible on this
-    /// target, including shared daemon paths and remote control/capability files.
-    /// Paths are absolute or relative to the remote owner's home (`~/`). Their
-    /// parent directories must exist. Local paths are never guessed or forwarded.
-    /// Until provisioning supplies this inventory, confined SSH fails closed.
-    pub fn with_remote_files(mut self, machine: &Machine, private: &[String]) -> Result<Self> {
-        if machine.transport != "ssh"
-            || !crate::config::registry::ssh_host(&machine.host)
-            || self.remote.contains_key(&machine.name)
-        {
-            bail!("worker isolation requires a unique SSH target and private-file inventory");
-        }
-        validate_remote_files(private)?;
-        self.remote.insert(
-            machine.name.clone(),
-            RemoteFiles {
-                host: machine.host.clone(),
-                private: private.to_vec(),
-                settings_files: vec![],
-                inventory_complete: false,
-            },
-        );
         Ok(self)
     }
     /// Target-side discovery for unrestricted Codex. No private-file inventory,
@@ -292,13 +265,14 @@ impl Isolation {
         preflight: bool,
         probe_backend: Option<&str>,
     ) -> Result<Launch> {
-        let Some(profile) = self.remote.get(&transport.machine.name) else {
-            bail!("confined SSH requires a target private-file inventory");
-        };
-        if profile.private.is_empty() || profile.host != transport.machine.host || !remote_path(cwd)
-        {
+        // Workers keep the target's normal files (SSH keys, git and gh credentials)
+        // so they can commit and push; confinement bounds writes and devices only.
+        let profile = self.remote.get(&transport.machine.name);
+        if profile.is_some_and(|p| p.host != transport.machine.host) || !remote_path(cwd) {
             bail!("confined SSH target or workspace does not match its inventory");
         }
+        let no_settings = vec![];
+        let settings_files = profile.map_or(&no_settings, |p| &p.settings_files);
         shell::validate(&command)?;
         let mut argv = vec![
             "/usr/bin/python3".into(),
@@ -307,9 +281,9 @@ impl Isolation {
             "-c".into(),
             BOOTSTRAP.into(),
             HELPER.into(),
-            json!({"home":null,"workspace":cwd,"private":profile.private,
+            json!({"home":null,"workspace":cwd,"private":[],
                 "create":create,"preflight":preflight,"probe_backend":probe_backend,"excluded_env":transport.excluded_env,
-                "settings_files":profile.settings_files,"mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
+                "settings_files":settings_files,"mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
             .to_string(),
         ];
         argv.extend(command);
@@ -409,7 +383,6 @@ fn safe_path(path: &Path) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum Check {
     Passed,
-    MissingRemoteInventory,
     UnsupportedTransport,
     LaunchConfigurationRefused,
     InventoryRefused,

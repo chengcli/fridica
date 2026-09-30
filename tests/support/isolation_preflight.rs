@@ -118,17 +118,6 @@ async fn probe_refuses_missing_inventory_directories_and_never_creates_workspace
     );
     assert!(!f.workspace.exists());
     std::fs::create_dir(&f.workspace).unwrap();
-    // A separate missing directory (not nested in an already masked parent).
-    let outside = tempfile::tempdir_in("/var/tmp").unwrap();
-    f.config
-        .isolation
-        .private_files
-        .push(outside.path().join("missing/key"));
-    assert_eq!(
-        doctor::run_probe(launch(&f), Duration::from_secs(10)).await,
-        Check::InventoryRefused
-    );
-    assert!(!outside.path().join("missing").exists());
 }
 
 #[tokio::test]
@@ -162,7 +151,7 @@ async fn bounded_probe_requires_exact_success_and_exit_status() {
 }
 
 #[tokio::test]
-async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchdog() {
+async fn remote_doctor_probes_target_home_through_watchdog_without_a_private_inventory() {
     let mut f = Fixture::new();
     let remote_home = f.home.with_file_name("target-home");
     std::fs::create_dir_all(remote_home.join("private")).unwrap();
@@ -171,26 +160,13 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
     machine.transport = "ssh".into();
     machine.host = "owner@synthetic".into();
     machine.workspaces[0].path = "~/project".into();
-    let report = doctor::isolation(
-        &f.config,
-        &context(&f),
-        BTreeMap::new(),
-        "local",
-        "project",
-        Duration::from_secs(10),
-    )
-    .await
-    .unwrap();
-    assert_eq!(report.check, Check::MissingRemoteInventory);
-    assert_eq!(std::fs::read_dir(&f.home).unwrap().count(), 0);
-
+    // The remote table only binds the MCP review to this exact SSH target.
     f.config.isolation.remote.insert(
         "local".into(),
         fridica::config::isolation::Remote {
             settings_files: vec![],
-            mcp_inventory_complete: false,
+            mcp_inventory_complete: true,
             host: "owner@synthetic".into(),
-            private_files: vec!["~/private/state.db".into()],
         },
     );
     let tools = tempfile::tempdir().unwrap();
@@ -233,15 +209,12 @@ async fn remote_doctor_requires_inventory_then_probes_target_home_through_watchd
     changed.machines.machines[0].host = "owner@replacement".into();
     changed.isolation.remote.get_mut("local").unwrap().host = "owner@replacement".into();
     assert!(launcher.validate_config(&changed).is_err());
+    // Nothing on the target is masked, so the owner's files need no provisioning.
     std::fs::remove_dir(remote_home.join("private")).unwrap();
-    assert_eq!(
-        launcher
-            .admit(std::sync::Arc::new(f.config.clone()), spec)
-            .await
-            .unwrap_err()
-            .code,
-        "worker_isolation_inventory_refused"
-    );
+    launcher
+        .admit(std::sync::Arc::new(f.config.clone()), spec)
+        .await
+        .unwrap();
     assert!(!remote_home.join(".codex").exists());
     assert!(!remote_home.join(".claude").exists());
     assert!(!remote_home.join("private/state.db").exists());
@@ -318,8 +291,8 @@ async fn immutable_launcher_rejects_inventory_identity_and_private_path_changes(
         match index {
             0 => config
                 .isolation
-                .private_files
-                .push(f.home.join("private/key")),
+                .settings_files
+                .push(f.home.join("private/extra.toml")),
             1 => config.isolation.mcp_aliases.push("owner-wrapper".into()),
             2 => config
                 .isolation

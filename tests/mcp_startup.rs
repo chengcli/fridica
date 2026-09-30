@@ -290,7 +290,6 @@ async fn ssh_startup_scans_target_settings_without_a_confinement_inventory() {
         "local".into(),
         fridica::config::isolation::Remote {
             host: "owner@fixture".into(),
-            private_files: vec![],
             settings_files: vec!["~/extra.json".into()],
             mcp_inventory_complete: true,
         },

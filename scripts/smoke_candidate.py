@@ -77,7 +77,6 @@ def smoke(archive, expected, report):
         assert config.stat().st_mode & 0o777 == 0o600
         command("configure", "--config", config, "--owner-id", "UOWNER", "--workspace-id", "TTEAM", "--channel-id", "CROOM")
         # Complete target and inventory with synthetic deployment inputs.
-        credentials = root / "private/credentials.env"
         config.write_text(f'''# installed smoke fixture
 [owner]
 slack_user="UOWNER"
@@ -99,7 +98,6 @@ control_socket="control.sock"
 enabled=false
 [isolation]
 mcp_inventory_complete=true
-private_files=[{json.dumps(str(credentials))}]
 ''')
         fake = root / "bin/claude"
         fake.write_text(BACKEND)

@@ -38,7 +38,9 @@ def main():
 
     workspace = target(request["workspace"])
     private = [target(p) for p in request["private"]]
-    if home == "/" or not private or not sys.argv[2:]:
+    # Remote targets mask nothing: workers keep their normal credentials. Local
+    # launches always carry the daemon's own config, state and socket.
+    if home == "/" or not sys.argv[2:]:
         raise Refused()
     environment = worker_environment(request.get("excluded_env", []))
     # Resolve private aliases too, but never use them as worker mount sources.

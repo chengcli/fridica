@@ -54,9 +54,9 @@ configured Slack credentials; it is unnecessary for an offline rehearsal.
 
 `init-state` creates a fresh v6 database without credentials or network calls;
 legacy schemas require explicit migration. `check-config` returns the config
-fingerprint. Record it with `build-info` in the deployment checklist. Add the
-credentials file to `isolation.private_files` **before** finishing configuration. Complete private-file and MCP inventories for every
-enabled execution target; unrestricted workers remain within the trusted-owner
+fingerprint. Record it with `build-info` in the deployment checklist. Complete the MCP
+inventory for every enabled execution target. Workers see the target's normal files,
+including SSH keys and git/`gh` credentials, so keep other secrets off worker hosts; unrestricted workers remain within the trusted-owner
 model. No automatic SSH agent forwarding is introduced.
 
 ## Observe-only service, controls and logs

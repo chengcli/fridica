@@ -240,12 +240,23 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         default: parent.default_machine.clone(),
     };
     registry.validate()?;
+    // Workers see the target's normal files so git push/commit and gh work; only
+    // Fridica's own daemon files are hidden, automatically.
+    if let Some(table) = root.get("isolation").and_then(Item::as_table_like) {
+        let remote = table.get("remote").and_then(Item::as_table_like);
+        if table.contains_key("private_files")
+            || remote.is_some_and(|r| {
+                r.iter().any(|(_, t)| {
+                    t.as_table_like()
+                        .is_some_and(|t| t.contains_key("private_files"))
+                })
+            })
+        {
+            bail!("isolation private_files was removed: workers now see the target's normal files; delete the setting");
+        }
+    }
     let mut isolation: super::isolation::Settings = decode(root.get("isolation"))?;
-    for path in isolation
-        .private_files
-        .iter_mut()
-        .chain(isolation.settings_files.iter_mut())
-    {
+    for path in isolation.settings_files.iter_mut() {
         *path = resolve_path(path, base, &context.home)?;
     }
     isolation.validate(&registry)?;
@@ -474,11 +485,6 @@ fn protect(config: &Config, context: &LoadContext) -> Result<()> {
             continue;
         }
         for workspace in &machine.workspaces {
-            for path in &config.isolation.private_files {
-                if within(path, &workspace.path, context)? {
-                    bail!("isolation.private_files must be outside every local workspace");
-                }
-            }
             if within(&config.state.path, &workspace.path, context)? {
                 bail!(
                     "state.path must be outside workspace {}:{}",

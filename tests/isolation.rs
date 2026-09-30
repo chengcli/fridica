@@ -382,16 +382,16 @@ async fn system_launcher_applies_isolation_only_to_confined_local_workers() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn configured_private_files_and_mcp_identities_reach_the_local_launcher() {
+async fn owner_files_stay_visible_while_mcp_identities_reach_the_local_launcher() {
     use fridica::workers::{
         jsonl::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     };
     let mut f = Fixture::new();
     let separate = tempfile::tempdir_in("/var/tmp").unwrap();
+    // Owner credentials outside Fridica's own files (git/gh/ssh) stay readable.
     let private = separate.path().join("control.key");
     std::fs::write(&private, "control-secret").unwrap();
-    f.config.isolation.private_files.push(private.clone());
     f.config.isolation.mcp_aliases.push("opaque".into());
     std::fs::create_dir_all(f.home.join(".codex")).unwrap();
     let settings = "[mcp_servers.opaque]\ncommand='wrapper'\nenv={KEY='mcp-secret'}\n";
@@ -406,7 +406,7 @@ async fn configured_private_files_and_mcp_identities_reach_the_local_launcher() 
     .unwrap();
     let mut spec:WorkerSpec=serde_json::from_value(serde_json::json!({"worker_id":"w","machine":f.config.machines.machines[0],"workspace":f.config.machines.machines[0].workspaces[0],"backend":"codex","instructions":"","model":"","reasoning_effort":"","job_timeout":30,"idle_timeout":30,"excluded_env":[],"slot":0})).unwrap();
     spec.workspace.policy.gpu_confine = Some(true);
-    let code=format!("import pathlib, os; assert not pathlib.Path({}).exists(); assert not pathlib.Path('key-alias').exists(); text=(pathlib.Path(os.environ['HOME'])/'.codex/config.toml').read_text(); assert 'mcp-secret' not in text; assert '/bin/false' in text",serde_json::json!(private));
+    let code=format!("import pathlib, os; assert pathlib.Path({}).read_text() == 'control-secret'; assert pathlib.Path('key-alias').read_text() == 'control-secret'; text=(pathlib.Path(os.environ['HOME'])/'.codex/config.toml').read_text(); assert 'mcp-secret' not in text; assert '/bin/false' in text",serde_json::json!(private));
     let launch = launcher
         .launch(
             &spec,
