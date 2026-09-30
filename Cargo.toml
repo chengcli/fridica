@@ -4,6 +4,8 @@ version = "0.4.0-dev.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Durable Slack agent coordination"
+license = "MIT"
+repository = "https://github.com/chengcli/fridica"
 default-run = "fridica"
 
 [lib]

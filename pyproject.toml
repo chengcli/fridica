@@ -8,6 +8,8 @@ name = "fridica"
 version = "0.4.0.dev0"
 description = "Your Slack presence: a parent agent per person, a session per thread, and Claude Code / Codex workers on your machines"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 classifiers = [
     "Operating System :: MacOS",
