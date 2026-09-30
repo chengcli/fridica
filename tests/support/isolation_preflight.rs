@@ -110,7 +110,7 @@ async fn probe_validates_settings_without_executing_or_rewriting_them() {
 
 #[tokio::test]
 async fn probe_refuses_missing_inventory_directories_and_never_creates_workspace() {
-    let mut f = Fixture::new();
+    let f = Fixture::new();
     std::fs::remove_dir(&f.workspace).unwrap();
     assert_eq!(
         doctor::run_probe(launch(&f), Duration::from_secs(10)).await,
