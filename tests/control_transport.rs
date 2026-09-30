@@ -424,6 +424,14 @@ fn frozen_python_control_views_preserve_legacy_fields_and_attention_selection() 
             .unwrap();
         legacy(&actual, &case["expected"], path);
     }
+    db.execute("UPDATE jobs SET status='done' WHERE id='job-2'", [])
+        .unwrap();
+    let (parts, query) = target("/jobs?status=all&limit=4").unwrap();
+    let recent = views::get(&db, &f.config, &parts, &query, &processes, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recent.as_array().unwrap().len(), 4);
+    assert_eq!(recent[3]["id"], "job-2");
 }
 
 #[tokio::test]

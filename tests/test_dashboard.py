@@ -53,6 +53,8 @@ def test_api_requires_the_key_and_an_allowed_route(config):
         response = await http.get("/api/threads?control=active", headers=auth)
         assert response.status == 200 and (await response.json())["path"] == "/threads?control=active"
         assert (await http.get("/api/jobs", headers=auth)).status == 200
+        recent = await http.get("/api/jobs?status=all&limit=200", headers=auth)
+        assert recent.status == 200 and (await recent.json())["path"] == "/jobs?status=all&limit=200"
         assert (await http.get("/api/attention/threads", headers=auth)).status == 200
         assert (await http.get("/api/config", headers=auth)).status == 200
         assert (await http.patch("/api/config/parent", json={"model": "gpt-5.6-sol"}, headers=auth)).status == 200

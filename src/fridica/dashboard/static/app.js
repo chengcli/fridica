@@ -2,8 +2,9 @@
 
 const state = {
   view: "overview", thread: null, key: "", auto: true, data: {},
-  query: "", threadFilter: "active", workerFilter: "current", threadLayout: "list", threadLimit: 200,
-  refreshing: false, pending: false, instructionDraft: null,
+  query: "", workFilter: "current", threadFilter: "active", threadLayout: "list", threadLimit: 200,
+  refreshing: false, pending: false, instructionDraft: null, lastSync: null,
+  selectedParent: null, historyOpen: false, descriptionOpen: false,
 };
 
 function readKey() {
@@ -37,11 +38,66 @@ function el(tag, attributes = {}, ...children) {
     else if (name === "value") node.value = value;
     else node.setAttribute(name, value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return node;
+}
+
+function inlineMarkdown(text) {
+  const parts = [];
+  const tokens = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|`([^`]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
+  let start = 0;
+  for (const match of text.matchAll(tokens)) {
+    parts.push(text.slice(start, match.index));
+    if (match[1]) parts.push(el("a", { href: match[2], target: "_blank", rel: "noopener noreferrer" }, match[1]));
+    else if (match[3]) parts.push(el("code", {}, match[3]));
+    else if (match[4]) parts.push(el("strong", {}, match[4]));
+    else parts.push(el("em", {}, match[5]));
+    start = match.index + match[0].length;
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function markdown(text) {
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  const listLine = (line) => line.match(/^(?:([-*])|(\d+)\.)\s+(.+)$/);
+  for (let i = 0; i < lines.length;) {
+    if (!lines[i].trim()) { i++; continue; }
+    if (lines[i].startsWith("```")) {
+      const code = [];
+      for (i++; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
+      blocks.push(el("pre", {}, el("code", {}, code.join("\n"))));
+      if (i < lines.length) i++;
+      continue;
+    }
+    const heading = lines[i].match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      blocks.push(el("h" + (heading[1].length + 1), {}, inlineMarkdown(heading[2])));
+      i++;
+      continue;
+    }
+    const list = listLine(lines[i]);
+    if (list) {
+      const ordered = Boolean(list[2]);
+      const items = [];
+      let match;
+      while (i < lines.length && (match = listLine(lines[i])) && Boolean(match[2]) === ordered) {
+        items.push(el("li", {}, inlineMarkdown(match[3])));
+        i++;
+      }
+      blocks.push(el(ordered ? "ol" : "ul", {}, items));
+      continue;
+    }
+    const paragraph = [];
+    while (i < lines.length && lines[i].trim() && !lines[i].startsWith("```") &&
+      !/^(#{1,3})\s+.+$/.test(lines[i]) && !listLine(lines[i])) paragraph.push(lines[i++]);
+    blocks.push(el("p", {}, inlineMarkdown(paragraph.join("\n"))));
+  }
+  return el("div", { class: "rich-text" }, blocks);
 }
 
 function when(seconds) { return seconds ? new Date(seconds * 1000).toLocaleString() : ""; }
@@ -108,8 +164,8 @@ function go(view, thread = null) {
   state.view = view;
   state.thread = thread;
   state.query = "";
-  document.getElementById("current-view").textContent = ({ inbox: "Inbox", threads: "Threads", workers: "Workers",
-    machines: "Machines & access", activity: "Activity", settings: "Settings" })[view] || "Overview";
+  document.getElementById("current-view").textContent = ({ inbox: "Needs you", threads: "Conversations",
+    machines: "Machines & access", activity: "Activity", settings: "Settings" })[view] || "Work";
   for (const tab of document.querySelectorAll("[data-view]")) tab.classList.toggle("active", tab.dataset.view === view);
   refresh(true);
 }
@@ -126,14 +182,20 @@ function panel(title, body, action = null) {
 }
 
 function empty(message) { return el("div", { class: "empty" }, message); }
-function metric(label, value, note, view, tone = "", mark = "↗") {
-  return el("button", { class: "metric " + tone, onclick: () => go(view) },
-    el("span", { class: "metric-label" }, label, el("span", { class: "metric-mark" }, mark)),
-    el("strong", {}, value), el("small", {}, note));
-}
-
 function threadTitle(thread) {
   return thread.summary || [thread.context?.repo, thread.context?.workspace].filter(Boolean).join(" · ") || "Slack conversation";
+}
+function shortTitle(text) {
+  const full = (text || "").trim();
+  const first = full.split("\n")[0].match(/^.*?[.!?](?=\s|$)/)?.[0] || full.split("\n")[0];
+  return first.length > 105 ? first.slice(0, 102).trimEnd() + "…" : first + (first.length < full.length ? "…" : "");
+}
+function workTitle(thread) {
+  const summary = threadTitle(thread).replace(/\s+/g, " ").trim();
+  const repo = thread.context?.repo || thread.context?.workspace;
+  const refs = [...new Set(summary.match(/#\d+/g) || [])];
+  if (repo && refs.length) return `${repo} · ${refs.slice(0, 2).join(", ")}${refs.length > 2 ? ` +${refs.length - 2}` : ""}`;
+  return summary.split(/[.!?;:]/)[0].split(" ").slice(0, 7).join(" ");
 }
 function threadContext(thread) {
   return [thread.context?.repo || thread.context?.workspace, thread.context?.branch, ago(thread.updated)].filter(Boolean).join(" · ");
@@ -168,36 +230,201 @@ function attentionCard(item) {
     el("div", { class: "item-meta" }, threadLink(item.session_id, "Review →")));
 }
 
-function activeJobRow(job, workers) {
-  const worker = workers.find((item) => item.id === job.worker_id);
-  const meta = [worker ? `${worker.role} · ${worker.machine}` : "Worker", jobAge(job)].filter(Boolean).join(" · ");
-  return el("div", { class: "list-row" },
-    el("div", {}, threadLink(job.session_id, job.brief || "Untitled job"), el("p", {}, meta)), statusPill(job.status));
+function latestJobs(jobs) {
+  const latest = new Map();
+  const rank = (job) => job.status === "running" ? 2 : job.status === "queued" ? 1 : 0;
+  for (const job of jobs) {
+    const previous = latest.get(job.worker_id);
+    if (!previous || rank(job) > rank(previous) ||
+      (rank(job) === rank(previous) && (job.queued_at || 0) > (previous.queued_at || 0))) latest.set(job.worker_id, job);
+  }
+  return latest;
 }
-
+function workerState(worker, job) {
+  if (worker.status === "awaiting_approval") return "blocked";
+  const status = job?.status || worker.status;
+  if (["running", "queued"].includes(status)) return status;
+  if (["failed", "blocked", "lost"].includes(status)) return "blocked";
+  if (["done", "complete", "stopped"].includes(status)) return "done";
+  return "idle";
+}
+function workerPlace(worker, machines) {
+  const machine = (machines || []).find((item) => item.name === worker.machine);
+  const workspace = machine?.workspace_details?.find((item) => item.name === worker.workspace);
+  return { host: worker.machine || "Unknown host", environment: [machine?.transport?.toUpperCase() ||
+    (worker.machine === "local" ? "LOCAL" : ""), worker.workspace, workspace?.mode].filter(Boolean).join(" · ") || "Environment not recorded" };
+}
+function workItems(thread, data, latest) {
+  return (data.workers || []).filter((worker) => worker.session_id === thread.id).map((worker) => {
+    const job = latest.get(worker.id);
+    return { worker, job, status: workerState(worker, job), place: workerPlace(worker, data.machines) };
+  });
+}
+function workFlags(thread, items) {
+  const closed = ["closed", "archived", "cleaned"].includes(thread.control);
+  const live = items.some((item) => ["running", "queued"].includes(item.status) ||
+    item.worker?.status === "awaiting_approval");
+  const completed = closed || (thread.control === "active" && thread.status === "complete" && !live);
+  const running = !completed && (items.some((item) => item.status === "running") ||
+    (thread.control === "active" && thread.status === "working"));
+  const queued = !completed && items.some((item) => item.status === "queued");
+  const blocked = !completed && (thread.control === "paused" || thread.status === "blocked" ||
+    items.some((item) => item.status === "blocked"));
+  const waiting = !completed && thread.status === "waiting" && !running && !queued && !blocked;
+  return { current: running || queued || blocked || waiting, running, queued, blocked, waiting, completed };
+}
+function workCounts(items) {
+  const counts = { running: 0, queued: 0, blocked: 0, done: 0, idle: 0 };
+  for (const item of items) counts[item.status]++;
+  return counts;
+}
+function parentStatus(thread, flags) {
+  if (thread.control !== "active") return thread.control;
+  return flags.blocked ? "blocked" : flags.running ? "running" : flags.queued ? "queued" : thread.status;
+}
+function parentCard(thread, items, flags, selected) {
+  const counts = workCounts(items);
+  const hosts = [...new Set(items.map((item) => item.place.host))];
+  return el("button", { class: "parent-card" + (selected ? " selected" : ""), "aria-pressed": String(selected),
+    onclick: () => { document.querySelector(".work-main").scrollTop = 0; state.selectedParent = thread.id;
+      state.historyOpen = state.workFilter === "completed"; state.descriptionOpen = false; render(); } },
+    el("div", { class: "parent-card-top" }, el("span", { class: "eyebrow" }, "PARENT AGENT"),
+      statusPill(parentStatus(thread, flags))),
+    el("strong", { class: "parent-name" }, workTitle(thread)),
+    el("div", { class: "parent-context" }, [thread.context?.repo || thread.context?.workspace, ago(thread.updated)].filter(Boolean).join(" · ") || "Conversation"),
+    el("div", { class: "parent-graph" },
+      el("span", { class: "work-ring" },
+        el("strong", {}, items.length)),
+      el("span", { class: "graph-key" },
+        ["running", "queued", "blocked", "done"].map((status) =>
+          el("span", {}, el("i", { class: "state-dot " + status }), status, el("b", {}, counts[status]))))),
+    el("div", { class: "parent-card-foot" }, hosts.length ? hosts.slice(0, 2).join(" · ") + (hosts.length > 2 ? ` +${hosts.length - 2}` : "") : "No worker host",
+      el("span", {}, "View →")));
+}
+function workerDetail(thread, item) {
+  const { worker, job, status, place } = item;
+  return [el("div", { class: "eyebrow" }, "WORKER DETAIL"),
+    el("h2", {}, shortTitle(job?.brief || worker.summary || worker.role || "Worker")),
+    el("p", { class: "sub" }, workTitle(thread)),
+    el("div", { class: "worker-facts" },
+      [["Status", worker.status === "awaiting_approval" ? "awaiting approval" : job?.status || worker.status || "idle"], ["Role", worker.role || "Worker"],
+        ["Server", place.host], ["Environment", place.environment], ["Backend", worker.backend || "—"],
+        ["Started", job?.started_at ? when(job.started_at) : "—"], ["Finished", job?.finished_at ? when(job.finished_at) : "—"]]
+        .map(([label, value]) => el("div", {}, el("small", {}, label), el("strong", {}, value)))),
+    status === "blocked" || thread.pause_reason ?
+      el("section", { class: "detail-note alert" }, el("h3", {}, worker.status === "awaiting_approval" ? "Approval pending" : "Why it stopped"),
+        markdown(worker.status === "awaiting_approval" ? "Review the request in Needs you." :
+          job?.error || thread.pause_reason || "No reason recorded.")) : null,
+    job?.result?.summary ? el("section", { class: "detail-note" }, el("h3", {}, "Result"), markdown(job.result.summary)) : null,
+    job?.brief ? el("section", { class: "detail-note" }, el("h3", {}, "Task"), markdown(job.brief)) : null,
+    worker.status !== "stopped" ? el("div", { class: "actions detail-note" },
+      ["running", "awaiting_approval"].includes(worker.status) ? button("Interrupt", () => {
+        document.getElementById("worker-dialog").close();
+        return act("POST", `/workers/${encodeURIComponent(worker.id)}/interrupt`, {}, "Interrupt this worker?",
+          "The current job will stop; the worker can take another job later.");
+      }) : null,
+      button("Stop", () => {
+        document.getElementById("worker-dialog").close();
+        return act("POST", `/workers/${encodeURIComponent(worker.id)}/stop`, {}, "Stop this worker?",
+          "The worker process will stop.", "", true);
+      }, "danger")) : null,
+    el("div", { class: "detail-note" }, threadLink(thread.id, "Open conversation →"))];
+}
+function openWorker(thread, item) {
+  try {
+    document.getElementById("worker-detail").replaceChildren(...workerDetail(thread, item).filter(Boolean));
+    const dialog = document.getElementById("worker-dialog");
+    dialog.showModal();
+    dialog.scrollTop = 0;
+  } catch (error) { toast(`Could not show worker detail: ${error.message}`, true); }
+}
+function workerRow(thread, item) {
+  const { worker, job, status, place } = item;
+  const age = status === "running" || status === "queued" ? jobAge(job) :
+    job?.finished_at ? `Finished ${ago(job.finished_at)}` : worker.updated ? `Last active ${ago(worker.updated)}` : "";
+  return el("button", { class: "work-worker", onclick: () => openWorker(thread, item) },
+    el("span", { class: "worker-glyph " + status }, (worker.role || "W").slice(0, 1).toUpperCase()),
+    el("span", { class: "worker-copy" },
+      el("strong", {}, shortTitle(job?.brief || worker.summary || "No recent job")),
+      el("small", {}, [worker.role || "Worker", age].filter(Boolean).join(" · "))),
+    el("span", { class: "worker-location" }, el("small", {}, "SERVER / ENVIRONMENT"),
+      el("strong", {}, place.host), el("em", {}, place.environment)),
+    el("span", { class: "worker-status " + status }, status === "done" ? "Completed" : status),
+    el("span", { class: "worker-chevron" }, "›"));
+}
 function overview(data) {
-  const items = attention(data), jobs = data.jobs || [], threads = data.threads || [];
-  const paused = (data.attentionThreads || threads.filter((item) => item.control === "paused" || item.status === "blocked")).length;
-  const failed = (data.outbox || []).length;
-  const running = jobs.filter((item) => item.status === "running").length;
-  const queued = jobs.filter((item) => item.status === "queued").length;
-  return [page("Overview", "What's running and what needs you."),
-    el("div", { class: "stats" },
-      metric("Needs approval", data.approvals.length, "Review before work continues", "inbox", data.approvals.length ? "warn" : "", "◇"),
-      metric("Active work", jobs.length, `${running} running · ${queued} queued`, "workers", "", "↗"),
-      metric("Paused threads", paused, "Ready for your direction", "inbox", paused ? "warn" : "", "Ⅱ"),
-      metric("Delivery issues", failed, "Posts to check", "inbox", failed ? "bad" : "", "!")),
-    el("div", { class: "overview-grid" },
-      panel("Needs your attention", items.length ? items.slice(0, 5).map(attentionCard) : empty("All clear. Nothing needs a decision right now."),
-        button("Open inbox →", () => go("inbox"), "section-link")),
-      el("div", { class: "stack" },
-        panel("Work in progress", jobs.length ? jobs.slice(0, 5).map((job) => activeJobRow(job, data.workers))
-          : empty("No jobs are running or queued."),
-        button("View workers →", () => go("workers"), "section-link")),
-        panel("Recent conversations", threads.length ? threads.slice(0, 5).map((thread) => el("div", { class: "list-row" },
-          el("div", {}, threadLink(thread.id, threadTitle(thread)), el("p", {}, threadContext(thread))),
-          statusPill(thread.control === "active" ? thread.status : thread.control))) : empty("No conversations yet."),
-        button("View all →", () => go("threads"), "section-link"))))];
+  const latest = latestJobs(data.jobs || []);
+  const all = (data.threads || []).map((thread) => {
+    const workers = workItems(thread, data, latest);
+    return { thread, workers, flags: workFlags(thread, workers) };
+  });
+  const query = state.query.toLowerCase();
+  const priority = ({ workers, flags }) => Number(flags.blocked) * 3 + Number(flags.running) * 2 +
+    Number(flags.queued) + (workers.some((item) => item.status === "blocked") ? 2 : Number(workers.length > 0));
+  const visible = all.filter(({ thread, workers, flags }) =>
+    (state.workFilter === "all" || flags[state.workFilter]) && (!query ||
+      [threadTitle(thread), thread.context?.repo, ...workers.map((item) => item.job?.brief)]
+        .some((value) => (value || "").toLowerCase().includes(query))))
+    .sort((a, b) => priority(b) - priority(a) || (b.thread.updated || 0) - (a.thread.updated || 0));
+  if (!visible.some(({ thread }) => thread.id === state.selectedParent)) {
+    state.selectedParent = visible[0]?.thread.id || null;
+    state.historyOpen = state.workFilter === "completed";
+    state.descriptionOpen = false;
+  }
+  const selectedEntry = visible.find(({ thread }) => thread.id === state.selectedParent);
+  const selected = selectedEntry?.thread;
+  const selectedFlags = selectedEntry?.flags;
+  const selectedItems = selectedEntry?.workers || [];
+  const counts = workCounts(selectedItems);
+  const current = selectedFlags?.completed ? [] : selectedItems.filter((item) => !["done", "idle"].includes(item.status));
+  const past = selectedFlags?.completed ? selectedItems : selectedItems.filter((item) => ["done", "idle"].includes(item.status));
+  return [el("div", { class: "work-layout" },
+    el("aside", { class: "parent-pane", "aria-label": "Parent agents" },
+      el("div", { class: "eyebrow" }, "WORK GRAPH"), el("h1", {}, "Parents"),
+      el("p", { class: "sub small" }, "Select a parent to see its workers."),
+      el("div", { class: "parent-filter" }, searchBox(), select(state.workFilter,
+        [["current", "Current"], ["running", "Running"], ["queued", "Queued"],
+          ["blocked", "Blocked"], ["waiting", "Waiting"], ["completed", "Completed"], ["all", "All loaded"]]
+          .map(([key, label]) => [key, `${label} (${all.filter((entry) => key === "all" || entry.flags[key]).length})`]),
+        (value) => { state.workFilter = value; state.historyOpen = value === "completed"; render(); window.scrollTo(0, 0); }, "Filter parents")),
+      el("div", { class: "parent-cards" }, visible.length ? visible.map(({ thread, workers, flags }) =>
+        parentCard(thread, workers, flags, thread.id === state.selectedParent)) :
+        empty("No matching parent agents.")),
+      data.threads.length === state.threadLimit ? button("Load older", () => { state.threadLimit += 200; return refresh(true); }, "button") : null),
+    el("div", { class: "work-main" }, selected ? [
+      el("div", { class: "work-main-head" },
+        el("div", {}, el("div", { class: "eyebrow" }, state.workFilter === "completed" ? "PARENT / WORK HISTORY" : "PARENT / CURRENT WORK"),
+          el("h1", {}, workTitle(selected)),
+          el("p", { class: "sub" }, threadContext(selected) || "Slack conversation"),
+          el("div", { class: "parent-description" },
+            el("button", { class: "section-link", onclick: () => { state.descriptionOpen = !state.descriptionOpen; render(); } },
+              state.descriptionOpen ? "Hide full description −" : "Read full description +"),
+            state.descriptionOpen ? markdown(threadTitle(selected)) : null)),
+        el("span", { class: "head-count" }, el("strong", {}, selectedItems.length), " workers")),
+      el("section", { class: "work-summary" },
+        el("div", { class: "work-summary-head" },
+          el("div", {}, el("h2", {}, "At a glance"),
+            el("p", { class: "sub small" }, "Worker states, not percent complete.")),
+          statusPill(parentStatus(selected, selectedFlags))),
+        el("div", { class: "work-track" },
+          selectedItems.length ? selectedItems.map((item) => el("span", { class: item.status })) : el("span", { class: "idle" })),
+        el("div", { class: "work-legend" }, ["running", "queued", "blocked", "done", "idle"].filter((status) => counts[status]).map((status) =>
+          el("span", {}, el("i", { class: "state-dot " + status }), `${counts[status]} ${status}`)))),
+      selectedFlags.blocked ? el("div", { class: "parent-alert" },
+        el("strong", {}, selected.control === "paused" ? "Parent paused" : "Parent blocked"),
+        el("span", {}, selected.pause_reason || "Open a blocked worker for the error, or review the conversation."),
+        threadLink(selected.id, "Review →")) : null,
+      state.workFilter !== "completed" || current.length ? [
+        el("div", { class: "work-section-head" }, el("h2", {}, "Current workers"),
+          el("span", {}, `${current.length} shown`)),
+        el("div", { class: "work-worker-list" }, current.length ? current.map((item) => workerRow(selected, item)) :
+          empty("No worker is running, queued, or blocked."))] : null,
+      el("button", { class: "history-toggle", "aria-expanded": String(state.historyOpen),
+        onclick: () => { state.historyOpen = !state.historyOpen; render(); } },
+        `Completed & idle workers · ${past.length}`, state.historyOpen ? "−" : "+"),
+      state.historyOpen ? el("div", { class: "work-worker-list" }, past.map((item) => workerRow(selected, item))) : null,
+      el("div", { class: "work-footer" }, threadLink(selected.id, "Open conversation →"))
+    ] : empty("No parents match this filter. Try All loaded.")))];
 }
 
 function approvalActions(item) {
@@ -239,13 +466,14 @@ function inbox(data) {
       : empty("All posts are accounted for."))];
 }
 
-function select(value, options, change) {
-  return el("select", { onchange: (event) => change(event.target.value) },
+function select(value, options, change, label = "") {
+  return el("select", { onchange: (event) => change(event.target.value), ...(label ? { "aria-label": label } : {}) },
     options.map(([key, label]) => el("option", { value: key, ...(key === value ? { selected: "selected" } : {}) }, label)));
 }
 function searchBox() {
   return el("input", { class: "search", type: "search", placeholder: "Search, then press Enter", value: state.query,
-    onkeydown: (event) => { if (event.key === "Enter") { state.query = event.target.value.trim(); render(); event.preventDefault(); } } });
+    onkeydown: (event) => { if (event.key === "Enter") { state.query = event.target.value.trim(); render();
+      if (state.view === "overview") window.scrollTo(0, 0); event.preventDefault(); } } });
 }
 function filteredThreads(threads, filter, query) {
   return threads.filter((item) => (filter === "all" || (filter === "active" ? item.control === "active" : item.control === filter)) &&
@@ -273,8 +501,8 @@ function threadsView(data) {
     el("td", {}, [item.context?.repo || item.context?.workspace, item.context?.branch].filter(Boolean).join(" · ")),
     el("td", {}, statusPill(item.control === "active" ? item.status : item.control)),
     el("td", {}, item.turns), el("td", {}, ago(item.updated)))));
-  return [page("Threads", "Slack threads and their jobs. Search covers loaded threads.",
-    el("span", { class: "small muted" }, `${threads.length} shown`)), toolbar,
+  return [page("Conversations", "Slack threads and their jobs. Search covers loaded threads.",
+    [el("span", { class: "small muted" }, `${threads.length} shown`), button("Activity log →", () => go("activity"), "section-link")]), toolbar,
     threads.length ? (state.threadLayout === "cards" ? el("div", { class: "grid-cards" }, cards) : panel("Conversations", list))
       : empty("No conversations match these filters."),
     data.threads.length === state.threadLimit ? el("div", { class: "form-actions" },
@@ -330,15 +558,15 @@ function threadDetail(detail) {
   const members = new Map();
   for (const message of detail.messages) if (message.source !== "self" && !members.has(message.sender))
     members.set(message.sender, `Member ${members.size + 1}`);
-  return [el("div", { class: "detail-head" }, button("← Threads", () => go("threads"), "button"), statusPill(session.control === "active" ? session.status : session.control)),
+  return [el("div", { class: "detail-head" }, button("← Conversations", () => go("threads"), "button"), statusPill(session.control === "active" ? session.status : session.control)),
     page(threadTitle(session), threadContext(session) || "Slack conversation"),
     el("div", { class: "detail-grid" },
       el("div", { class: "stack" },
-        panel("Summary", [el("p", { class: "sub" }, session.summary || "No summary yet."),
+        panel("Summary", [markdown(session.summary || "No summary yet."),
           session.decisions?.length ? el("div", {}, el("h3", {}, "Decisions"), el("ul", {}, session.decisions.map((decision) => el("li", {}, decision)))) : null]),
         panel(`Messages · ${detail.messages.length}`, detail.messages.length ? detail.messages.map((message) =>
           el("div", { class: "message" + (message.source === "self" ? " self" : "") },
-            el("div", { class: "small" }, message.source === "self" ? "Fridica" : members.get(message.sender), " · ", when(Number(message.ts))), message.text || "[No text]")) : empty("No message text is stored.")),
+            el("div", { class: "small" }, message.source === "self" ? "Fridica" : members.get(message.sender), " · ", when(Number(message.ts))), markdown(message.text || "[No text]"))) : empty("No message text is stored.")),
         detail.jobs.length ? panel("Jobs", table(["Work", "Status", "Result"], detail.jobs.map((job) =>
           el("tr", {}, el("td", {}, job.brief), el("td", {}, statusPill(job.status)),
             el("td", {}, job.result?.summary || job.error || "—"))))) : null),
@@ -351,31 +579,6 @@ function threadDetail(detail) {
         panel("Workers", detail.workers.length ? detail.workers.map((worker) => el("div", { class: "list-row" },
           el("div", {}, el("strong", {}, `${worker.role} · ${worker.machine}`), el("p", {}, worker.summary || worker.workspace)),
           statusPill(worker.status))) : empty("No workers in this conversation."))))];
-}
-
-function workersView(data) {
-  const workers = data.workers.filter((worker) =>
-    (state.workerFilter === "all" || (state.workerFilter === "current" ? worker.status !== "stopped" : worker.status === state.workerFilter)) &&
-    (!state.query || [worker.machine, worker.workspace, worker.role, worker.summary, worker.backend]
-      .some((value) => (value || "").toLowerCase().includes(state.query.toLowerCase()))));
-  const cards = workers.map((worker) => {
-    const job = data.jobs.find((item) => item.worker_id === worker.id);
-    return el("article", { class: "worker-card" },
-      el("div", { class: "item-top" }, el("h3", {}, `${worker.role} on ${worker.machine}`), statusPill(worker.status)),
-      el("p", {}, worker.summary || job?.brief || "No current summary"),
-      el("div", { class: "item-meta" }, worker.workspace, worker.backend, worker.process, job ? jobAge(job) : null),
-      el("div", { class: "card-foot" }, threadLink(worker.session_id, "Open conversation →"),
-        worker.status === "stopped" ? null : el("div", { class: "actions" },
-          button("Interrupt", () => act("POST", `/workers/${encodeURIComponent(worker.id)}/interrupt`, {}, "Interrupt this worker?",
-            "The current job will be interrupted; the worker can take another job later.")),
-          button("Stop", () => act("POST", `/workers/${encodeURIComponent(worker.id)}/stop`, {}, "Stop this worker?",
-            "The worker process will stop.", "", true), "danger"))));
-  });
-  return [page("Workers", "See where work is running and which conversation owns it."),
-    el("div", { class: "toolbar" }, searchBox(), select(state.workerFilter,
-      [["current", "Current"], ["running", "Running"], ["queued", "Queued"], ["awaiting_approval", "Awaiting approval"], ["all", "All workers"]],
-      (value) => { state.workerFilter = value; render(); })),
-    workers.length ? el("div", { class: "grid-cards" }, cards) : empty("No workers match these filters.")];
 }
 
 function networkSummary(machine, workspace) {
@@ -453,10 +656,13 @@ function showUnlock() {
 function render() {
   const data = state.data;
   if (!data.status) return;
+  const detailScroll = document.querySelector(".work-main")?.scrollTop || 0;
+  const selected = state.selectedParent;
   const content = state.view === "threads" && state.thread ? (data.detail ? threadDetail(data.detail) : [empty("Loading conversation…")])
-    : ({ overview, inbox, threads: threadsView, workers: workersView, machines: machinesView,
+    : ({ overview, inbox, threads: threadsView, machines: machinesView,
       activity: activityView, settings: settingsView })[state.view](data);
   document.getElementById("view").replaceChildren(...content.flat().filter(Boolean));
+  if (selected === state.selectedParent && state.view === "overview") document.querySelector(".work-main")?.scrollTo(0, detailScroll);
 }
 async function refresh(force = false) {
   if (state.refreshing) { if (force) state.pending = true; return; }
@@ -466,11 +672,11 @@ async function refresh(force = false) {
   try {
     const [status, approvals, outbox, threads, jobs, workers, attentionThreads] = await Promise.all([
       api("GET", "/status"), api("GET", "/approvals"), api("GET", "/outbox"),
-      api("GET", `/threads?limit=${state.threadLimit}`), api("GET", "/jobs"), api("GET", "/workers"),
+      api("GET", `/threads?limit=${state.threadLimit}`), api("GET", "/jobs?status=all&limit=200"), api("GET", "/workers?limit=1000"),
       api("GET", "/attention/threads")]);
     const view = state.view, thread = state.thread;
     const extra = view === "threads" && thread ? { detail: await api("GET", "/threads/" + encodeURIComponent(thread)) }
-      : view === "machines" ? { machines: await api("GET", "/machines") }
+      : view === "machines" || view === "overview" ? { machines: await api("GET", "/machines") }
       : view === "activity" ? { activity: await api("GET", "/activity") }
       : view === "settings" ? { config: await api("GET", "/config") } : {};
     if (view !== state.view || thread !== state.thread) { state.pending = true; return; }
@@ -478,13 +684,16 @@ async function refresh(force = false) {
     document.getElementById("status").textContent = status.slack === "connected" ? "Connected" : status.slack;
     document.getElementById("status").className = "connection " + (status.slack === "connected" ? "ok" : "bad");
     document.getElementById("inbox-count").textContent = attention(state.data).length || "";
-    document.getElementById("last-sync").textContent = "Updated just now";
+    state.lastSync = new Date();
+    document.getElementById("last-sync").textContent = "Updated " + state.lastSync.toLocaleTimeString();
     document.getElementById("unlock").hidden = true;
     render();
   } catch (error) {
     if (error.message !== "locked") {
       document.getElementById("status").textContent = "Offline";
       document.getElementById("status").className = "connection bad";
+      document.getElementById("last-sync").textContent = state.lastSync ?
+        "Last updated " + state.lastSync.toLocaleTimeString() : "Never updated";
       document.getElementById("view").replaceChildren(page("Connection lost", "Fridica is not responding."),
         empty(error.message), button("Retry", () => refresh(true), "button"));
     }
@@ -512,9 +721,10 @@ function start() {
     event.currentTarget.setAttribute("aria-pressed", String(state.auto));
     if (state.auto) refresh(true);
   });
+  document.getElementById("worker-close").addEventListener("click", () => document.getElementById("worker-dialog").close());
   if (state.key) refresh(true);
   setInterval(() => refresh(), 10000);
 }
 
 if (typeof document !== "undefined") start();
-if (typeof module !== "undefined") module.exports = { el, ago, statusPill, filteredThreads, attention, networkSummary, settingsView };
+if (typeof module !== "undefined") module.exports = { el, markdown, ago, statusPill, filteredThreads, attention, networkSummary, settingsView, overview, latestJobs, workItems, workFlags, parentStatus, workerDetail };

@@ -25,6 +25,20 @@ test("el builds nested nodes and skips empty children", () => {
   assert.strictEqual(node.textContent, "abc");
 });
 
+test("long text renders basic Markdown as safe DOM", () => {
+  const rich = app.markdown("## Review\n\n- **Passed** `check`\n- [PR](https://github.com/chengcli/fridica)\n\n```\n<unsafe>\n```");
+  const nodes = (node) => [node, ...node.children.filter((child) => child instanceof Node).flatMap(nodes)];
+  const all = nodes(rich);
+  for (const tag of ["h3", "ul", "li", "strong", "code", "a", "pre"]) assert(all.some((node) => node.tag === tag), tag);
+  assert.strictEqual(all.find((node) => node.tag === "a").attributes.href, "https://github.com/chengcli/fridica");
+  assert(rich.textContent.includes("<unsafe>"));
+  assert(!all.some((node) => node.tag === "unsafe"));
+  const blocked = app.markdown("[click](javascript:alert(1)) <img src=x>");
+  assert(!nodes(blocked).some((node) => ["a", "img"].includes(node.tag)));
+  assert(blocked.textContent.includes("[click](javascript:alert(1)) <img src=x>"));
+  assert.strictEqual(app.markdown("# ").textContent, "# ");
+});
+
 test("statusPill picks a tone", () => {
   assert.strictEqual(app.statusPill("failed").className, "pill bad");
   assert.strictEqual(app.statusPill("complete").className, "pill ok");
@@ -78,4 +92,95 @@ test("settings omit removed loop limits while retaining Python compatibility", (
   const python = inputs(app.settingsView({ config: { parent, limits: { ...limits, max_wait_replies: 3, max_no_progress: 3 } } }));
   assert(python.includes("max_wait_replies"));
   assert(python.includes("max_no_progress"));
+});
+
+test("work graph shows parent, worker, server and environment; detail explains failure", () => {
+  const now = Date.now() / 1000;
+  const data = {
+    status: {}, approvals: [], outbox: [], attentionThreads: [],
+    threads: [{ id: "t1", summary: "Review snapy", status: "working", control: "active", updated: now - 60,
+      context: { repo: "snapy" } }],
+    workers: [{ id: "w1", session_id: "t1", role: "reviewer", machine: "dungeon3", workspace: "snapy",
+      status: "idle", updated: now - 30 }],
+    machines: [{ name: "dungeon3", transport: "ssh", workspace_details: [{ name: "snapy", mode: "sandbox" }] }],
+    jobs: [{ id: "j1", worker_id: "w1", session_id: "t1", brief: "Check CUDA regression",
+      status: "failed", error: "worker_401", queued_at: now - 900, started_at: now - 800, finished_at: now - 120 }],
+  };
+  const content = app.overview(data).filter(Boolean).map((node) => node.textContent).join(" ");
+  for (const expected of ["Review snapy", "Parent", "reviewer", "Check CUDA regression", "dungeon3", "SSH",
+    "sandbox", "blocked"]) assert(content.includes(expected), expected);
+  assert(!content.includes("worker_401"), "keep full error in worker detail");
+  const item = app.workItems(data.threads[0], data, app.latestJobs(data.jobs))[0];
+  const detail = app.workerDetail(data.threads[0], item).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(detail.includes("worker_401"));
+  assert(detail.includes("dungeon3"));
+  assert(!detail.includes("Interrupt") && detail.includes("Stop"), "idle workers cannot be interrupted");
+  assert(!content.includes("Running 13m"), "a finished job must not show a running timer");
+});
+
+test("worker detail formats task and result", () => {
+  const thread = { id: "t1", summary: "Review" };
+  const item = { worker: { status: "idle", role: "reviewer" }, job: { status: "done",
+    brief: "- **Check** `x1`", result: { summary: "## Result\nPassed" } },
+  status: "done", place: { host: "local", environment: "sandbox" } };
+  const nodes = app.workerDetail(thread, item).filter(Boolean);
+  const descendants = (node) => [node, ...node.children.filter((child) => child instanceof Node).flatMap(descendants)];
+  const tags = nodes.flatMap(descendants).map((node) => node.tag);
+  for (const tag of ["ul", "strong", "code", "h3"]) assert(tags.includes(tag), tag);
+});
+
+test("work graph uses the latest job and keeps completed workers collapsed", () => {
+  const data = {
+    status: {}, approvals: [], outbox: [], attentionThreads: [],
+    threads: [{ id: "t1", summary: "Review", status: "working", control: "active", context: {} }],
+    workers: [{ id: "w1", session_id: "t1", role: "tester", machine: "local", workspace: "repo", status: "idle" }],
+    machines: [{ name: "local", transport: "local", workspace_details: [] }],
+    jobs: [
+      { id: "old", worker_id: "w1", session_id: "t1", brief: "Old attempt", status: "failed", error: "old_error", queued_at: 10 },
+      { id: "new", worker_id: "w1", session_id: "t1", brief: "Retry passed", status: "done", queued_at: 20 },
+    ],
+  };
+  const content = app.overview(data).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(content.includes("Completed & idle workers · 1"));
+  assert(!content.includes("Retry passed"));
+  assert(!content.includes("old_error"));
+  const item = app.workItems(data.threads[0], data, app.latestJobs(data.jobs))[0];
+  assert.strictEqual(item.job.brief, "Retry passed");
+  assert.strictEqual(item.status, "done");
+});
+
+test("work view shows a running job before later queued jobs on the same worker", () => {
+  const data = {
+    status: {}, approvals: [], outbox: [], attentionThreads: [],
+    threads: [{ id: "t1", summary: "Build", status: "working", control: "active", context: {} }],
+    workers: [{ id: "w1", session_id: "t1", role: "builder", machine: "stormy", workspace: "snapy", status: "running" }],
+    machines: [{ name: "stormy", transport: "ssh", workspace_details: [] }],
+    jobs: [
+      { id: "j1", worker_id: "w1", session_id: "t1", brief: "Build GPU", status: "running", queued_at: 10, started_at: 11 },
+      { id: "j2", worker_id: "w1", session_id: "t1", brief: "Run tests", status: "queued", queued_at: 20 },
+    ],
+  };
+  const content = app.overview(data).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(content.includes("Build GPU"));
+  assert(!content.includes("Last: Run tests"));
+});
+
+test("parent filters follow worker state without marking paused work as running", () => {
+  const paused = { control: "paused", status: "working" };
+  const complete = { control: "active", status: "complete" };
+  assert.deepStrictEqual(app.workFlags(paused, [{ status: "done" }]),
+    { current: true, running: false, queued: false, blocked: true, waiting: false, completed: false });
+  const failed = app.workFlags(complete, [{ status: "blocked" }]);
+  assert(!failed.current && !failed.blocked && failed.completed);
+  assert.strictEqual(app.parentStatus(complete, failed), "complete");
+  assert(app.workFlags(complete, [{ status: "running" }]).running);
+  assert(app.workFlags(complete, [{ status: "done" }]).completed);
+  const approval = app.workItems({ ...complete, id: "t" }, { workers: [{ id: "w", session_id: "t", status: "awaiting_approval" }],
+    jobs: [], machines: [] }, new Map([["w", { status: "running", error: "old_error" }]]))[0];
+  assert.strictEqual(approval.status, "blocked");
+  const detail = app.workerDetail(complete, approval).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(detail.includes("Approval pending") && !detail.includes("old_error"));
+  const queued = app.workerDetail(complete, { worker: { status: "queued" }, job: { status: "queued" },
+    status: "queued", place: { host: "local", environment: "local" } }).filter(Boolean).map((node) => node.textContent).join(" ");
+  assert(!queued.includes("Interrupt"));
 });
