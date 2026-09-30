@@ -3,7 +3,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::{collections::HashMap, io::Read, path::Path};
 pub const LIMIT: usize = 64 * 1024;
-pub const DEFAULT: &str = include_str!("../fridica/parent/contract.md");
+pub const DEFAULT: &str = include_str!("../../assets/contract.md");
 pub fn whitespace(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }

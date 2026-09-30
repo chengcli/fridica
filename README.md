@@ -52,8 +52,8 @@ configured channels) can start work on your machines.
 
 ## Install
 
-Upgrading from v0.2? The config and database formats changed; see
-[`docs/upgrade-v0.2.md`](docs/upgrade-v0.2.md).
+Upgrading from v0.2 or v0.3? Stop the old daemon, back up its config and database,
+then run `fridica migrate` (see [`docs/v0.4-setup.md`](docs/v0.4-setup.md)).
 
 Use macOS or Linux with Python 3.11 or newer. On the machine that runs the daemon,
 install and sign in to the CLI the parent uses:
@@ -599,24 +599,16 @@ denies its pending request at once.
 ## Dashboard and CLI
 
 The daemon serves a control API on a Unix socket that only you can open (mode 0600).
-The CLI and the dashboard both use it and never write the database.
+The CLI uses it and never writes the database.
 
 ```bash
 fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
-fridica dashboard --port 8765           # prints http://127.0.0.1:8765/#key=…
 ```
 
-Work groups workers by parent thread, with status filters and clickable job
-details including server and environment. Needs you collects approvals, stalled
-threads,
-and failed posts. Conversations links to the activity log and lets the owner give
-a thread a private instruction under the normal scopes and approvals. Settings
-controls the parent model and workload limits. Live refresh can be switched off;
-viewing the page makes no model calls.
-
-It listens on 127.0.0.1 only, rejects cross-origin requests, and requires the
-printed key for every API call.
+The dashboard's page (`assets/dashboard/`) is embedded in the binary
+(`fridica assets --export DIR`); serving it from the v0.4 daemon is not implemented
+yet. The v0.3 Python server that served it was removed with the v0.3 sources.
 
 ## State, recovery, and guarantees
 

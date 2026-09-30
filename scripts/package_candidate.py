@@ -20,8 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Native (system, machine) -> Rust host triple. Cross-compilation is not supported.
 TARGETS = {("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
            ("Darwin", "arm64"): "aarch64-apple-darwin"}
-EVIDENCE = ("docs/v0.4-cli-control-compatibility.md", "docs/v0.4-recovery-verification.md",
-            "docs/v0.4-regression-accounting.md", "spec/baseline.json")
+EVIDENCE = ("docs/v0.4-cli-control-compatibility.md", "docs/v0.4-recovery-verification.md")
 
 
 def digest(data):
@@ -43,11 +42,10 @@ def sources():
     paths.update(ROOT.glob("src/workers/*.json"))
     paths.update(ROOT.glob("src/workers/*.txt"))
     paths.update(ROOT.glob("src/store/migrations/*.sql"))
-    paths.update(ROOT.glob("src/fridica/dashboard/static/*"))
+    paths.update(ROOT.glob("assets/**/*"))
     paths.update(ROOT.glob("packaging/*.py"))
     paths.update(ROOT.glob("packaging/*.md"))
-    paths.update(ROOT / name for name in ("src/config/template.toml", "src/fridica/parent/contract.md",
-                                         "src/fridica/parent/repos.toml", "slack/manifest.yaml"))
+    paths.update(ROOT / name for name in ("src/config/template.toml", "slack/manifest.yaml"))
     return {str(path.relative_to(ROOT)): digest(path.read_bytes()) for path in sorted(paths) if path.is_file()}
 
 

@@ -1,10 +1,7 @@
 # Experimental Rust worker isolation configuration
 
-Use these settings in a separate experimental Rust configuration. The installed
-Python daemon rejects the new `[isolation]` section. Do not add it to a live Python
-configuration or migrate a live database to v6 to try these settings. These
-settings configure the worker launcher, offline validation and the explicit target
-runtime probe.
+Use these settings in the Rust daemon's configuration. They configure the worker
+launcher, offline validation and the explicit target runtime probe.
 
 Existing configurations remain valid without this section. Confined workers see
 the target's normal files, including SSH keys, git configuration and `gh`
