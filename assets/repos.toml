@@ -79,6 +79,12 @@ collaborators = ["Zoey Hu", "Cheng Li", "Tianhao Le"]
 notes = "DISORT radiative transfer solver"
 
 [[repos]]
+name = "commux-zyh"
+url = "https://github.com/zoeyzyhu/commux"
+collaborators = ["Zoey Hu", "Cheng Li"]
+notes = "PyTorch backend over UCX for communication"
+
+[[repos]]
 name = "pydisort-thl"
 url = "https://github.com/happysky19/pydisort"
 collaborators = ["Tianhao Le"]

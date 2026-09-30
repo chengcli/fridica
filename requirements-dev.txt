@@ -1,7 +1,4 @@
-# Python spec/regression tests and capture scripts (the wheel itself has no Python dependencies).
+# Tests for the release, packaging and helper scripts (the wheel has no Python dependencies).
 pytest>=8
-slack-sdk>=3.33,<4
-aiohttp>=3.10,<4
-tomlkit>=0.13,<1
 maturin>=1.7,<2
 twine>=5

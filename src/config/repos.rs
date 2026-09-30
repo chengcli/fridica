@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::{collections::HashSet, path::Path};
 use toml_edit::{DocumentMut, TableLike};
-pub const DEFAULT: &str = include_str!("../fridica/parent/repos.toml");
+pub const DEFAULT: &str = include_str!("../../assets/repos.toml");
 #[derive(Clone, Serialize)]
 pub struct Repo {
     pub name: String,

@@ -24,7 +24,6 @@ strip = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
-pythonpath = ["src", "tests"]
 
 [tool.ruff]
 # The pre-commit hook lints with ruff's default rules only (pyflakes and the

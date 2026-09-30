@@ -15,7 +15,7 @@ global.Node = Node;
 global.document = undefined;
 const documentStub = { createElement: (tag) => new Node(tag), createTextNode: (text) => new Text(text) };
 
-const app = (() => { global.document = undefined; const exported = require("../src/fridica/dashboard/static/app.js"); return exported; })();
+const app = (() => { global.document = undefined; const exported = require("../assets/dashboard/app.js"); return exported; })();
 global.document = documentStub;
 
 test("el builds nested nodes and skips empty children", () => {

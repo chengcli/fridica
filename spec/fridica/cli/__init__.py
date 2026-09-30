@@ -1,1 +1,0 @@
-"""The fridica command line."""

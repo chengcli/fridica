@@ -23,7 +23,7 @@ plus CI or local results for the build being deployed:
 2. Confinement/credential inventory and actual backend/SSH transport fixtures:
    full Rust regression suite; repeat conformance on each deployment target.
 3. CLI/control compatibility: `docs/v0.4-cli-control-compatibility.md` audit in the
-   matching source; Python frozen baseline/regression ledger is retained.
+   matching source.
 4. Replay/recovery: `docs/v0.4-recovery-verification.md` matrix in the matching
    source; full deterministic fixtures and restart tests.
 5. Packaging: reproducible archive, verified payload/embedded assets, isolated
@@ -37,7 +37,7 @@ publishing are not covered by candidate packaging.
 
 ## Deployment checks before active operation
 
-- Verify artifact identity and platform requirements; keep existing Python launcher.
+- Verify artifact identity and platform requirements.
 - For every enabled target: real backend auth/protocol doctor, SSH disconnect and
   approval cancellation handling, isolation preflight, MCP inventory.
 - Fresh install: initialize v6 and rehearse snapshot restoration. Existing install:

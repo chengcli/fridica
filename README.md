@@ -52,8 +52,8 @@ configured channels) can start work on your machines.
 
 ## Install
 
-Upgrading from v0.2? The config and database formats changed; see
-[`docs/upgrade-v0.2.md`](docs/upgrade-v0.2.md).
+Upgrading from v0.2 or v0.3? Stop the old daemon, back up its config and database,
+then run `fridica migrate` (see [`docs/v0.4-setup.md`](docs/v0.4-setup.md)).
 
 Use macOS or Linux with Python 3.11 or newer. On the machine that runs the daemon,
 install and sign in to the CLI the parent uses:
@@ -254,7 +254,7 @@ using `SLACK_USER_TOKEN` only. It posts nothing. `configure` keeps the comments 
 ## Configure machines
 
 `config.toml` has a fixed set of tables, and unknown keys are errors. Defaults live
-in `fridica/config/schema.py`. A complete example:
+in `src/config/schema.rs` (the template is `src/config/template.toml`). A complete example:
 
 ```toml
 [owner]
@@ -611,34 +611,26 @@ denies its pending request at once.
 ## Dashboard and CLI
 
 The daemon serves a control API on a Unix socket that only you can open (mode 0600).
-The CLI and the dashboard both use it and never write the database.
+The CLI uses it and never writes the database.
 
 ```bash
 fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
 fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
-fridica dashboard --port 8765           # prints http://127.0.0.1:8765/#key=…
 ```
 
 `instruct` tells the parent something as you, in the channel's most recently active
 thread (a thread ID instead targets that thread). It prints the `client_id` it used;
 after an uncertain response, rerun with `--client-id` so it is not queued twice.
 
-Work groups workers by parent thread, with status filters and clickable job
-details including server and environment. Needs you collects approvals, stalled
-threads,
-and failed posts. Conversations links to the activity log and lets the owner give
-a thread a private instruction under the normal scopes and approvals. Settings
-controls the parent model and workload limits. Live refresh can be switched off;
-viewing the page makes no model calls.
-
-It listens on 127.0.0.1 only, rejects cross-origin requests, and requires the
-printed key for every API call.
+The dashboard's page (`assets/dashboard/`) is embedded in the binary
+(`fridica assets --export DIR`); serving it from the v0.4 daemon is not implemented
+yet. The v0.3 Python server that served it was removed with the v0.3 sources.
 
 ## State, recovery, and guarantees
 
-The daemon owns a single SQLite database. `fridica/store/schema.py` is the only
-module that runs DDL, and migrations are versioned.
+The daemon owns a single SQLite database. `src/store/` (`schema.rs` and the
+versioned `migrations/`) is the only code that runs DDL.
 
 - **Persist before acknowledging.** A Slack event is stored, together with its
   thread and inbox row, before Socket Mode is acked. Catch-up re-reads each channel

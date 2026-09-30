@@ -1,5 +1,8 @@
 # Architecture
 
+> Historical: this describes v0.3, the Python daemon removed on 2026-09-30. See the
+> `v0.4-*.md` notes and the README for the Rust daemon.
+
 > For the full, current design with statistics from live use, see the design document
 > [`fridica-design.pdf`](fridica-design.pdf) (sources and rebuild steps in [`README.md`](README.md)).
 

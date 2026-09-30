@@ -47,34 +47,11 @@ jobs:
             sudo apparmor_parser -r /etc/apparmor.d/bwrap
           fi
           bwrap --unshare-user --ro-bind / / -- /bin/true
-      - name: Formatting, layering, migrations and replay
+      - name: Formatting, lints and tests
         run: |
           cargo fmt --all --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets -- --test-threads=2
-          python scripts/verify_baseline.py
-          PYTHONPATH=spec python scripts/capture_gates.py
-          python -m pip install -r requirements-dev.txt
-          PYTHONPATH=spec python scripts/capture_outbox.py
-          PYTHONPATH=spec python scripts/capture_config.py
-          PYTHONPATH=spec python scripts/capture_placement.py
-          PYTHONPATH=spec python scripts/capture_supervisor.py
-          PYTHONPATH=spec python scripts/capture_transport.py
-          PYTHONPATH=spec python scripts/capture_workers.py
-          PYTHONPATH=spec python scripts/capture_approval_instructions.py
-          PYTHONPATH=spec python scripts/capture_fetch.py
-          PYTHONPATH=spec python scripts/capture_flow.py
-          PYTHONPATH=spec python scripts/capture_parent.py
-          PYTHONPATH=spec python scripts/capture_attachments.py
-          PYTHONPATH=spec python scripts/capture_links.py
-          PYTHONPATH=spec python scripts/capture_github.py
-          PYTHONPATH=spec python scripts/capture_control.py
-          PYTHONPATH=spec python scripts/capture_control_cli.py
-          PYTHONPATH=spec python scripts/capture_reply_policy.py
-          PYTHONPATH=spec python scripts/capture_reply_rendering.py
-          PYTHONPATH=spec python scripts/capture_thread_lifecycle.py
-          PYTHONPATH=spec python scripts/capture_slack.py
-          git diff --exit-code -- tests/corpus/
 
   native-candidate:
     name: Native candidate packaging (Linux x86_64)
