@@ -763,3 +763,40 @@ async fn cli_lost_or_invalid_responses_never_retry_or_print_private_content() {
         server.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn bind_waits_out_transiently_duplicated_lock_and_listener_descriptors() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = Fixture::new();
+    let e = Arc::new(Echo::default());
+    let path = f.config.state.control_socket.clone();
+    let parent = path.parent().unwrap();
+    std::fs::create_dir(parent).unwrap();
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // What a child forked mid-spawn holds until exec: the lock and a listener.
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path.with_extension("sock.lock"))
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&lock).unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        drop(lock);
+        drop(listener);
+    });
+    let started = std::time::Instant::now();
+    let server = f.bind(e, Access::OwnerPeer, Options::default()).await;
+    assert!(started.elapsed() >= Duration::from_millis(250));
+    release.join().unwrap();
+    f.client(None)
+        .request("GET", "/status", None)
+        .await
+        .unwrap();
+    server.close().await.unwrap();
+    assert!(!path.exists());
+}
