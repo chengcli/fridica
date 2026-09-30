@@ -21,6 +21,11 @@ on:
           - Both
           - MacOS
           - Ubuntu
+      publish:
+        description: Upload to PyPI (off builds and verifies only)
+        type: boolean
+        required: true
+        default: true
 
 permissions:
   contents: read
@@ -215,6 +220,7 @@ jobs:
           python -m twine check dist/*
           python scripts/release.py verify --tag "$RELEASE_TAG" --os "$BUILD_OS"
       - name: Publish wheels and source distribution
+        if: ${{ inputs.publish }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
