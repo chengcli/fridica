@@ -505,6 +505,18 @@ fridica start --observe-only        # store messages, call nothing, post nothing
 fridica start
 ```
 
+`start` logs one line per notable event to the terminal, for example:
+
+```text
+2026-09-30 14:02:11 INFO slack: connected
+2026-09-30 14:02:40 INFO intake: #ai-human-plume 1790791454.276899 from U0C5CAJQ2UA
+2026-09-30 14:02:52 INFO parent: #ai-human-plume 1790791454.276899: replied (working); delegated 1 job(s) to dart11
+2026-09-30 14:02:53 INFO worker: job 1eb487 started on dart11 (codex, slot 1)
+2026-09-30 14:07:20 INFO slack: posted report in #ai-human-plume 1790791454.276899
+```
+
+It never prints message text, briefs or credentials. Set `FRIDICA_LOG=off` to silence it.
+
 `doctor` checks the following without calling a model:
 
 - that each SSH machine is reachable without a prompt;
