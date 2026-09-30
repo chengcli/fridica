@@ -49,7 +49,6 @@ max_gpu_memory = 0.9              # a machine whose declared GPUs are all in use
 
 [isolation]
 mcp_inventory_complete = false   # set only after reviewing all local MCP sources
-# private_files = ["~/.config/fridica/credentials.env"]
 # settings_files = ["~/.codex/config.toml"]
 # mcp_aliases = ["fridica"]        # all configured Fridica server identities
 # SSH targets need their own [isolation.remote.NAME] inventory; see worker-isolation.md.

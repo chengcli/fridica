@@ -6,15 +6,17 @@ configuration or migrate a live database to v6 to try these settings. Active Rus
 startup remains gated; this configures the worker launcher library and offline
 validation, with an explicit target runtime probe.
 
-Existing configurations remain valid without this section. Confined SSH workers
-require an explicit target inventory before they can start. Local workers already
-mask the daemon config, state, control socket and configured contract/repository
-files; `private_files` adds capability files outside those directories.
+Existing configurations remain valid without this section. Confined workers see
+the target's normal files, including SSH keys, git configuration and `gh`
+credentials, so they can commit and push; confinement bounds writes and devices.
+Local confined workers still have the daemon config, state, control socket and
+configured contract/repository files masked automatically. There is no
+`private_files` setting (it was removed; configurations that still set it are
+rejected with an explicit message).
 
 ```toml
 [isolation]
 # Relative paths resolve beside this configuration; ~/ uses the daemon's home.
-private_files = ["credentials/mcp.key", "credentials/overseer.key"]
 # Additional MCP configuration sources outside the automatically scanned layers.
 # Explicit sources are required to exist and must be TOML or JSON.
 settings_files = ["backend-settings/extra.toml"]
@@ -32,28 +34,13 @@ host = "owner@compute"
 settings_files = ["~/.config/owner/extra-mcp.json"]
 # This declaration applies only to the exact SSH machine/host above.
 mcp_inventory_complete = true
-# These are TARGET paths. ~/ expands on the target, never on the daemon host.
-private_files = [
-  "~/.config/fridica/config.toml",
-  "~/.local/state/fridica/state.sqlite3",
-  "~/.local/state/fridica/control.sock",
-  "~/.local/state/fridica/mcp.key",
-  "/shared/fridica/control.key",
-]
 ```
 
-Replace the example inventory with all private files visible on that target,
-including daemon files on shared storage and remote capability/control files.
-The launcher does not copy the local inventory to remote hosts. Changing an SSH
-host requires changing its inventory binding too; a stale binding rejects the
-configuration. This does not create an SSH key or enable agent forwarding.
-
-Inventory entries denote files. Their parent directories are masked to cover
-sidecars such as SQLite WAL files, and the selected mask directories must exist
-before launch. Keep them outside worker workspaces and writable backend state.
-The launch helper also rejects unsafe symlinks/hard links and overlapping mount
-sources on the execution target. Missing files may be inventoried before they are
-created; the parent directory still supplies the boundary.
+The remote table records the MCP review for that exact SSH target; changing an
+SSH host requires changing its binding too, and a stale binding rejects the
+configuration. This does not create an SSH key or enable agent forwarding. The
+launch helper still rejects unsafe symlinks/hard links and overlapping mount
+sources on the execution target.
 
 MCP aliases and endpoints supplement the launch helper's default-layer discovery.
 They apply to local and remote workers constructed from this configuration.
@@ -69,9 +56,8 @@ remote paths must be absolute or start with `~/` and expand on that target.
 Missing, malformed, oversized or linked explicit files refuse discovery. Confined
 launches sanitize these sources in their mount view; unrestricted Codex discovers
 aliases and appends disable overrides without editing the files. Claude uses its
-strict empty MCP configuration. Inventory sources hidden by a private-directory
-mask are refused rather than silently omitted. Source-only SSH profiles are
-allowed for unrestricted workers; confinement still requires `private_files`.
+strict empty MCP configuration. Inventory sources hidden by a masked daemon
+directory are refused rather than silently omitted.
 
 `mcp_inventory_complete` defaults to false. It asserts that the owner has reviewed
 all effective sources, including dynamic/cloud configuration and opaque wrappers,
@@ -155,7 +141,6 @@ failed check exits nonzero without printing subprocess output or private paths:
 | `check` | Meaning |
 | --- | --- |
 | `passed` | Inventory/settings checks and namespace probe succeeded. |
-| `missing_remote_inventory` | Provision an inventory for the selected SSH target. |
 | `inventory_refused` | Missing/unsafe paths, hard links, or overlapping mount sources. |
 | `settings_refused` | Unsafe/malformed settings or an unsupported backend home. |
 | `namespace_failed` | Bubblewrap could not establish or validate the mount view. |
@@ -188,7 +173,7 @@ namespace probe while retaining their existing policies.
 
 The launcher and backend MCP startup options are bound to their construction
 configuration. Runtime startup validates those bindings before recovery writes;
-supervisor reconfiguration rejects incompatible private-file inventories, remote
+supervisor reconfiguration rejects incompatible remote
 host bindings, control/config/rule paths, and MCP identities before publishing
 new configuration or changing approval policy. Rebuild the runtime adapters to
 apply those changes. This is a fail-closed restriction, not live isolation reload.

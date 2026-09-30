@@ -364,20 +364,21 @@ fn isolation_inventory_resolves_only_local_paths_and_preserves_source_and_legacy
     let root = &dir.path().canonicalize().unwrap();
     setup(root);
     let path = root.join("etc/config.toml");
-    let source = format!("{}{}\n# Owner-provisioned, no tokens stored here.\n[isolation]\nprivate_files=['keys/control.key']\nmcp_aliases=['opaque-wrapper']\nmcp_urls=['http://localhost:8123/fridica']\n[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/.local/state/fridica/control.sock','/shared/private/state.db']\n",basic(root),remote_machine());
+    let source = format!("{}{}\n# Owner-provisioned, no tokens stored here.\n[isolation]\nmcp_aliases=['opaque-wrapper']\nmcp_urls=['http://localhost:8123/fridica']\n[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true\n",basic(root),remote_machine());
     std::fs::write(&path, &source).unwrap();
     let parsed = config::load(&path, &context(root)).unwrap();
-    assert_eq!(
-        parsed.isolation.private_files,
-        vec![root.join("etc/keys/control.key")]
-    );
-    assert_eq!(
-        parsed.isolation.remote["remote"].private_files[0],
-        "~/.local/state/fridica/control.sock"
-    );
+    assert_eq!(parsed.isolation.mcp_aliases, ["opaque-wrapper"]);
+    assert!(parsed.isolation.remote["remote"].mcp_inventory_complete);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
     assert!(!root.join("db").exists());
-    assert!(!root.join("etc/keys").exists());
+    // The removed private_files setting is rejected, never silently ignored.
+    for fragment in [
+        "[isolation]\nprivate_files=['keys/control.key']",
+        "[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true\nprivate_files=['~/secret/key']",
+    ] {
+        let error = loader::parse(&format!("{}{}\n{fragment}\n", basic(root), remote_machine()), &path, &context(root)).unwrap_err();
+        assert!(format!("{error:#}").contains("private_files was removed"), "{error:#}");
+    }
     let legacy = loader::parse(&basic(root), &path, &context(root)).unwrap();
     assert!(legacy.isolation.is_empty());
     assert!(serde_json::to_value(&legacy)
@@ -410,28 +411,20 @@ fn isolation_configuration_rejects_wrong_hosts_unsafe_paths_and_embedded_credent
         "[isolation]\nmcp_urls=['http://']",
         "[isolation]\nmcp_urls=['http:host']",
         "[isolation]\nprivate_files=['/private-secret']",
-        "[isolation.remote.remote]\nhost='changed-host'\nprivate_files=['~/private/secret']",
-        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=[]",
-        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/../private/secret']",
-        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['relative/secret']",
-        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['/secret']",
-        "[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/private/secret']\nunknown=true",
-        "[isolation.remote.missing]\nhost='owner@target'\nprivate_files=['~/private/secret']",
-        "[isolation.remote.local]\nhost='owner@target'\nprivate_files=['~/private/secret']",
+        "[isolation.remote.remote]\nhost='changed-host'\nmcp_inventory_complete=true",
+        "[isolation.remote.remote]\nhost='owner@target'",
+        "[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/../private-secret.toml']",
+        "[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true\nunknown=true",
+        "[isolation.remote.missing]\nhost='owner@target'\nmcp_inventory_complete=true",
+        "[isolation.remote.local]\nhost='owner@target'\nmcp_inventory_complete=true",
     ] {
         let error = loader::parse(&format!("{base}\n{fragment}\n"), &root.join("etc/config.toml"), &context(root)).unwrap_err();
         assert!(!format!("{error:#}").contains("private-secret"));
     }
-    // Private files cannot be exposed even through a read-only local workspace.
-    let source = format!(
-        "{}\n[policy]\nmode='read-only'\n[isolation]\nprivate_files=['../project/control.key']\n",
-        basic(root)
-    );
-    assert!(loader::parse(&source, &root.join("etc/config.toml"), &context(root)).is_err());
 }
 
 #[test]
-fn offline_cli_reports_missing_and_configured_inventory_without_probe_or_private_values() {
+fn offline_cli_reports_remote_mcp_review_without_probe_or_private_values() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     setup(root);
@@ -439,7 +432,7 @@ fn offline_cli_reports_missing_and_configured_inventory_without_probe_or_private
     let base = format!("{}{}", basic(root), remote_machine());
     for configured in [false, true] {
         let inventory = if configured {
-            "\n[isolation]\nmcp_aliases=['private-alias']\n[isolation.remote.remote]\nhost='owner@target'\nprivate_files=['~/private/hidden-capability.key']\n"
+            "\n[isolation]\nmcp_aliases=['private-alias']\n[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/private/hidden-capability.json']\nmcp_inventory_complete=true\n"
         } else {
             ""
         };
@@ -459,8 +452,12 @@ fn offline_cli_reports_missing_and_configured_inventory_without_probe_or_private
         let text = String::from_utf8(output.stdout).unwrap();
         let report: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
-            report["isolation"]["remote"][0]["inventory"],
-            if configured { "configured" } else { "missing" }
+            report["isolation"]["remote"][0]["mcp_inventory_complete"],
+            configured
+        );
+        assert_eq!(
+            report["isolation"]["remote"][0]["settings_file_count"],
+            usize::from(configured)
         );
         assert_eq!(report["isolation"]["runtime_checks"], "not_run");
         assert!(
@@ -489,7 +486,6 @@ fn mcp_source_inventory_resolves_local_files_and_requires_safe_target_paths() {
         config.isolation.remote["remote"].settings_files,
         vec!["~/sources/managed.json"]
     );
-    assert!(config.isolation.remote["remote"].private_files.is_empty());
     let summary = config.isolation.summary(&config.machines).to_string();
     assert!(!summary.contains("managed.json"));
     assert!(!summary.contains("extra.toml"));

@@ -279,7 +279,6 @@ async fn remote_readiness_uses_target_sources_without_forwarding_local_inventory
         "local".into(),
         config::isolation::Remote {
             host: "owner@fixture".into(),
-            private_files: vec![],
             settings_files: vec!["~/extra.json".into()],
             mcp_inventory_complete: true,
         },
@@ -344,7 +343,6 @@ async fn stopping_readiness_reaps_the_current_probe_and_skips_remaining_backends
         "local".into(),
         config::isolation::Remote {
             host: "owner@fixture".into(),
-            private_files: vec![],
             settings_files: vec![],
             mcp_inventory_complete: true,
         },

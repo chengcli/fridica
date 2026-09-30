@@ -39,7 +39,7 @@ publishing are not covered by candidate packaging.
 
 - Verify artifact identity and platform requirements; keep existing Python launcher.
 - For every enabled target: real backend auth/protocol doctor, SSH disconnect and
-  approval cancellation handling, isolation preflight, private-file/MCP inventory.
+  approval cancellation handling, isolation preflight, MCP inventory.
 - Fresh install: initialize v6 and rehearse snapshot restoration. Existing install:
   stop Python, rehearse upgrade/rollback on copies, retain the old environment.
 - Check readiness and doctor with the final configuration and deployment credentials.

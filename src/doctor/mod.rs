@@ -70,10 +70,6 @@ pub async fn isolation_backend(
         check: Check::LaunchConfigurationRefused,
         active_launch_ready: false,
     };
-    if machine.transport == "ssh" && !config.isolation.remote.contains_key(&machine.name) {
-        report.check = Check::MissingRemoteInventory;
-        return Ok(report);
-    }
     let isolation = Isolation::new(config, &[])?;
     let excluded_env = vec![
         config.slack.app_token_env.clone(),

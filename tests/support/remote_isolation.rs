@@ -7,7 +7,7 @@ use fridica::{
         protocol::WorkerSpec,
     },
 };
-use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 struct Remote {
@@ -51,14 +51,8 @@ impl Remote {
             machine.name.clone(),
             fridica::config::isolation::Remote {
                 settings_files: vec![],
-                mcp_inventory_complete: false,
+                mcp_inventory_complete: true,
                 host: machine.host.clone(),
-                private_files: vec![
-                    local.config.path.to_str().unwrap().into(),
-                    local.config.state.path.to_str().unwrap().into(),
-                    "~/private/state.db".into(),
-                    "~/private/control.sock".into(),
-                ],
             },
         );
         let launcher = SystemLauncher::from_config(
@@ -131,21 +125,18 @@ async fn complete(launch: process::Launch) -> (i32, String, String) {
 }
 
 #[tokio::test]
-async fn remote_inventory_masks_shared_and_target_files_and_scrubs_target_environment() {
+async fn remote_worker_keeps_owner_files_but_scrubs_environment_and_mcp_settings() {
     let r = Remote::new();
     std::fs::create_dir_all(r.home.join(".codex")).unwrap();
     let remote_settings =
         "[mcp_servers.target_alias]\ncommand='fridica'\nenv={TOKEN='remote-mcp-secret'}\n";
     std::fs::write(r.home.join(".codex/config.toml"), remote_settings).unwrap();
-    std::fs::write(&r.local.config.state.path, "shared database").unwrap();
+    // The owner's files on the target (git/gh/ssh credentials, data) stay visible.
     std::fs::write(r.home.join("private/state.db"), "remote database").unwrap();
     std::fs::write(r.home.join("private/state.db-wal"), "remote WAL").unwrap();
-    let socket = r.home.join("private/control.sock");
-    let listener = UnixListener::bind(&socket).unwrap();
-    listener.set_nonblocking(true).unwrap();
     let code = format!(
         r#"
-import os, pathlib, socket, sys
+import os, pathlib, sys
 assert sys.stdin.readline() == 'request\n'
 home = pathlib.Path(os.environ['HOME'])
 assert home == pathlib.Path({home})
@@ -156,17 +147,8 @@ settings = (home/'.codex/config.toml').read_text()
 assert 'remote-mcp-secret' not in settings and '"enabled" = false' in settings
 for key in ['FRIDICA_MCP_KEY', 'fridica_control_token', 'OWNER_CONTROL_SECRET', 'SLACK_TOKEN', 'UNNAMED_TOKEN']:
     assert key not in os.environ
-for p in [home/'private/state.db', home/'private/state.db-wal', pathlib.Path({shared}), pathlib.Path({config})]:
-    assert not p.exists()
-s = socket.socket(socket.AF_UNIX)
-try:
-    s.connect({socket})
-except OSError:
-    pass
-else:
-    raise AssertionError('remote control socket reachable')
-finally:
-    s.close()
+assert (home/'private/state.db').read_text() == 'remote database'
+assert (home/'private/state.db-wal').read_text() == 'remote WAL'
 pathlib.Path('result').write_text('remote workspace writable')
 (home/'.codex/session').write_text('remote session writable')
 try:
@@ -188,9 +170,6 @@ sys.exit(42)
 "#,
         home = serde_json::json!(r.home),
         workspace = serde_json::json!(r.workspace),
-        shared = serde_json::json!(r.local.config.state.path),
-        config = serde_json::json!(r.local.config.path),
-        socket = serde_json::json!(socket)
     );
     let result = complete(r.launch(&code)).await;
     assert_eq!(result, (42, "remote isolated\n".into(), String::new()));
@@ -205,70 +184,36 @@ sys.exit(42)
     );
     assert!(!r.home.join("INJECTED").exists());
     assert!(!r.local.home.join(".codex").exists());
-    assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
 }
 
 #[test]
-fn missing_mismatched_and_invalid_remote_inventories_refuse_without_affecting_unrestricted_workers()
-{
+fn mismatched_remote_bindings_refuse_and_confinement_needs_no_private_inventory() {
     let mut r = Remote::new();
     let command = vec!["/bin/true".into()];
     r.spec.machine.host = "different-target".into();
     assert!(r.launcher.launch(&r.spec, command.clone()).is_err());
     r.spec.machine.host = "owner@target".into();
+    // No [isolation.remote] table at all: confined SSH still launches.
     r.launcher.isolation = Isolation::new(&r.local.config, &[]).unwrap();
-    assert!(r.launcher.launch(&r.spec, command.clone()).is_err());
+    assert!(r.launcher.launch(&r.spec, command.clone()).is_ok());
     r.spec.workspace.policy.gpu_confine = Some(false);
     assert!(r.launcher.launch(&r.spec, command).is_ok());
-    for inventory in [
-        vec![],
-        vec!["relative/file".into()],
-        vec!["/secret".into()],
-        vec!["~/../secret".into()],
-        vec!["~/private/".into()],
-    ] {
-        assert!(Isolation::new(&r.local.config, &[])
-            .unwrap()
-            .with_remote_files(&r.spec.machine, &inventory)
-            .is_err());
-    }
 }
 
 #[tokio::test]
-async fn remote_missing_inventory_directory_and_symlinked_workspace_refuse_before_backend_start() {
-    for kind in ["directory", "workspace", "private_workspace"] {
-        let mut r = Remote::new();
-        if kind == "directory" {
-            r.launcher.isolation = Isolation::new(&r.local.config, &[])
-                .unwrap()
-                .with_remote_files(&r.spec.machine, &["~/absent-private/secret".into()])
-                .unwrap();
-        } else if kind == "workspace" {
-            std::fs::create_dir_all(r.workspace.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink(r.home.join("private"), &r.workspace).unwrap();
-        } else {
-            r.launcher.isolation = Isolation::new(&r.local.config, &[])
-                .unwrap()
-                .with_remote_files(
-                    &r.spec.machine,
-                    &[format!("{}/control.sock", r.spec.workspace.path.display())],
-                )
-                .unwrap();
-        }
-        let result = complete(r.launch("print('backend started')")).await;
-        assert_eq!(
-            result,
-            (
-                97,
-                String::new(),
-                "fridica worker isolation: setup refused\n".into()
-            ),
-            "{kind}"
-        );
-    }
+async fn remote_symlinked_workspace_refuses_before_backend_start() {
+    let r = Remote::new();
+    std::fs::create_dir_all(r.workspace.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(r.home.join("private"), &r.workspace).unwrap();
+    let result = complete(r.launch("print('backend started')")).await;
+    assert_eq!(
+        result,
+        (
+            97,
+            String::new(),
+            "fridica worker isolation: setup refused\n".into()
+        )
+    );
 }
 
 #[tokio::test]

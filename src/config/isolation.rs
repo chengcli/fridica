@@ -5,13 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
-    pub private_files: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub settings_files: Vec<PathBuf>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -25,8 +24,6 @@ pub struct Settings {
 #[serde(deny_unknown_fields)]
 pub struct Remote {
     pub host: String,
-    #[serde(default)]
-    pub private_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub settings_files: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -39,11 +36,6 @@ impl Settings {
     }
     pub fn validate(&self, machines: &Registry) -> Result<()> {
         validate_identities(&self.mcp_aliases, &self.mcp_urls)?;
-        if self.private_files.len() > 256 || self.private_files.iter().any(|p| !private_path(p)) {
-            bail!(
-                "isolation.private_files requires absolute file paths below dedicated directories"
-            );
-        }
         validate_settings_files(
             &self
                 .settings_files
@@ -62,14 +54,8 @@ impl Settings {
             {
                 bail!("isolation.remote host must match its configured SSH machine");
             }
-            if inventory.private_files.is_empty()
-                && inventory.settings_files.is_empty()
-                && !inventory.mcp_inventory_complete
-            {
-                bail!("remote isolation requires a private-file or MCP source inventory");
-            }
-            if !inventory.private_files.is_empty() {
-                validate_remote_files(&inventory.private_files)?;
+            if inventory.settings_files.is_empty() && !inventory.mcp_inventory_complete {
+                bail!("remote isolation requires an MCP source inventory");
             }
             validate_settings_files(&inventory.settings_files, true)?;
         }
@@ -81,13 +67,10 @@ impl Settings {
         let targets: Vec<_> = machines.machines.iter()
             .filter(|m| m.transport == "ssh")
             .map(|m| {
-                let required = m.workspaces.iter().any(|w| w.policy.gpu_confine == Some(true));
                 let inventory = self.remote.get(&m.name);
-                json!({"machine":m.name, "inventory":if inventory.is_some_and(|i| !i.private_files.is_empty()){"configured"}else if required{"missing"}else{"not_required"},
-                    "private_file_count":inventory.map_or(0, |v| v.private_files.len()), "settings_file_count":inventory.map_or(0, |v| v.settings_files.len()), "mcp_inventory_complete":inventory.is_some_and(|v| v.mcp_inventory_complete)})
+                json!({"machine":m.name, "settings_file_count":inventory.map_or(0, |v| v.settings_files.len()), "mcp_inventory_complete":inventory.is_some_and(|v| v.mcp_inventory_complete)})
             }).collect();
-        json!({"additional_private_file_count":self.private_files.len(),
-            "settings_file_count":self.settings_files.len(),"mcp_inventory_complete":self.mcp_inventory_complete,
+        json!({"settings_file_count":self.settings_files.len(),"mcp_inventory_complete":self.mcp_inventory_complete,
             "mcp_identity_count":self.mcp_aliases.len()+self.mcp_urls.len(),
             "remote":targets,"runtime_checks":"not_run"})
     }
@@ -117,18 +100,6 @@ pub fn validate_identities(aliases: &[String], urls: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_remote_files(files: &[String]) -> Result<()> {
-    if files.is_empty()
-        || files.len() > 256
-        || files
-            .iter()
-            .any(|p| !remote_path(p) || Path::new(p).parent() == Some(Path::new("/")))
-    {
-        bail!("remote isolation requires private file paths below dedicated directories");
-    }
-    Ok(())
-}
-
 pub fn remote_path(value: &str) -> bool {
     let expanded = value
         .strip_prefix("~/")
@@ -140,17 +111,6 @@ pub fn remote_path(value: &str) -> bool {
         && value.len() <= 4096
         && !value.chars().any(char::is_control)
         && !value.split('/').any(|part| part == "." || part == "..")
-}
-
-fn private_path(path: &Path) -> bool {
-    path.is_absolute()
-        && path.parent().is_some_and(|p| p != Path::new("/"))
-        && path
-            .to_str()
-            .is_some_and(|s| s.len() <= 4096 && !s.chars().any(char::is_control))
-        && path
-            .components()
-            .all(|p| matches!(p, Component::RootDir | Component::Normal(_)))
 }
 
 pub fn validate_settings_files(files: &[String], remote: bool) -> Result<()> {
