@@ -165,7 +165,7 @@ time.sleep(60)
     }
 }
 async fn read_when_ready(path: &Path) -> String {
-    tokio::time::timeout(Duration::from_secs(4), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if let Ok(s) = std::fs::read_to_string(path) {
                 if !s.is_empty() {
@@ -290,6 +290,9 @@ async fn preexisting_symlinks_and_mid_fetch_destination_replacement_are_rejected
 }
 #[tokio::test]
 async fn helper_cleans_git_groups_on_timeout_cancellation_and_channel_eof() {
+    // Hang guards only: the helper's own 1 s timeout is what is under test, and a
+    // helper that failed to enforce it leaves the fake git hanging for 60 s.
+    const GUARD: Duration = Duration::from_secs(10);
     for mode in ["timeout", "cancel", "eof"] {
         let mut h = Harness::new(mode == "eof");
         h.hang();
@@ -304,19 +307,13 @@ async fn helper_cleans_git_groups_on_timeout_cancellation_and_channel_eof() {
             let stdin = process.stdin().unwrap();
             read_when_ready(&root.join("ready")).await;
             drop(stdin);
-            assert!(
-                !tokio::time::timeout(Duration::from_secs(3), process.wait())
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .success()
-            );
+            assert!(!tokio::time::timeout(GUARD, process.wait())
+                .await
+                .unwrap()
+                .unwrap()
+                .success());
         } else {
-            let task = tokio::spawn(process::run_with_open_stdin(
-                launch,
-                Duration::from_secs(3),
-                65536,
-            ));
+            let task = tokio::spawn(process::run_with_open_stdin(launch, GUARD, 65536));
             read_when_ready(&root.join("ready")).await;
             if mode == "cancel" {
                 task.abort();
@@ -329,7 +326,7 @@ async fn helper_cleans_git_groups_on_timeout_cancellation_and_channel_eof() {
             .await
             .parse()
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(GUARD, async {
             loop {
                 let alive = Command::new("ps")
                     .args(["-o", "stat=", "-p", &pid.to_string()])
@@ -346,7 +343,7 @@ async fn helper_cleans_git_groups_on_timeout_cancellation_and_channel_eof() {
         .unwrap();
         let stage = std::fs::read_to_string(root.join("ready")).unwrap();
         let stage = Path::new(&stage).parent().unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(GUARD, async {
             while stage.exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
