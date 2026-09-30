@@ -25,6 +25,20 @@ test("el builds nested nodes and skips empty children", () => {
   assert.strictEqual(node.textContent, "abc");
 });
 
+test("long text renders basic Markdown as safe DOM", () => {
+  const rich = app.markdown("## Review\n\n- **Passed** `check`\n- [PR](https://github.com/chengcli/fridica)\n\n```\n<unsafe>\n```");
+  const nodes = (node) => [node, ...node.children.filter((child) => child instanceof Node).flatMap(nodes)];
+  const all = nodes(rich);
+  for (const tag of ["h3", "ul", "li", "strong", "code", "a", "pre"]) assert(all.some((node) => node.tag === tag), tag);
+  assert.strictEqual(all.find((node) => node.tag === "a").attributes.href, "https://github.com/chengcli/fridica");
+  assert(rich.textContent.includes("<unsafe>"));
+  assert(!all.some((node) => node.tag === "unsafe"));
+  const blocked = app.markdown("[click](javascript:alert(1)) <img src=x>");
+  assert(!nodes(blocked).some((node) => ["a", "img"].includes(node.tag)));
+  assert(blocked.textContent.includes("[click](javascript:alert(1)) <img src=x>"));
+  assert.strictEqual(app.markdown("# ").textContent, "# ");
+});
+
 test("statusPill picks a tone", () => {
   assert.strictEqual(app.statusPill("failed").className, "pill bad");
   assert.strictEqual(app.statusPill("complete").className, "pill ok");
@@ -102,6 +116,17 @@ test("work graph shows parent, worker, server and environment; detail explains f
   assert(detail.includes("dungeon3"));
   assert(!detail.includes("Interrupt") && detail.includes("Stop"), "idle workers cannot be interrupted");
   assert(!content.includes("Running 13m"), "a finished job must not show a running timer");
+});
+
+test("worker detail formats task and result", () => {
+  const thread = { id: "t1", summary: "Review" };
+  const item = { worker: { status: "idle", role: "reviewer" }, job: { status: "done",
+    brief: "- **Check** `x1`", result: { summary: "## Result\nPassed" } },
+  status: "done", place: { host: "local", environment: "sandbox" } };
+  const nodes = app.workerDetail(thread, item).filter(Boolean);
+  const descendants = (node) => [node, ...node.children.filter((child) => child instanceof Node).flatMap(descendants)];
+  const tags = nodes.flatMap(descendants).map((node) => node.tag);
+  for (const tag of ["ul", "strong", "code", "h3"]) assert(tags.includes(tag), tag);
 });
 
 test("work graph uses the latest job and keeps completed workers collapsed", () => {

@@ -45,6 +45,61 @@ function el(tag, attributes = {}, ...children) {
   return node;
 }
 
+function inlineMarkdown(text) {
+  const parts = [];
+  const tokens = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|`([^`]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
+  let start = 0;
+  for (const match of text.matchAll(tokens)) {
+    parts.push(text.slice(start, match.index));
+    if (match[1]) parts.push(el("a", { href: match[2], target: "_blank", rel: "noopener noreferrer" }, match[1]));
+    else if (match[3]) parts.push(el("code", {}, match[3]));
+    else if (match[4]) parts.push(el("strong", {}, match[4]));
+    else parts.push(el("em", {}, match[5]));
+    start = match.index + match[0].length;
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function markdown(text) {
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  const listLine = (line) => line.match(/^(?:([-*])|(\d+)\.)\s+(.+)$/);
+  for (let i = 0; i < lines.length;) {
+    if (!lines[i].trim()) { i++; continue; }
+    if (lines[i].startsWith("```")) {
+      const code = [];
+      for (i++; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
+      blocks.push(el("pre", {}, el("code", {}, code.join("\n"))));
+      if (i < lines.length) i++;
+      continue;
+    }
+    const heading = lines[i].match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      blocks.push(el("h" + (heading[1].length + 1), {}, inlineMarkdown(heading[2])));
+      i++;
+      continue;
+    }
+    const list = listLine(lines[i]);
+    if (list) {
+      const ordered = Boolean(list[2]);
+      const items = [];
+      let match;
+      while (i < lines.length && (match = listLine(lines[i])) && Boolean(match[2]) === ordered) {
+        items.push(el("li", {}, inlineMarkdown(match[3])));
+        i++;
+      }
+      blocks.push(el(ordered ? "ol" : "ul", {}, items));
+      continue;
+    }
+    const paragraph = [];
+    while (i < lines.length && lines[i].trim() && !lines[i].startsWith("```") &&
+      !/^(#{1,3})\s+.+$/.test(lines[i]) && !listLine(lines[i])) paragraph.push(lines[i++]);
+    blocks.push(el("p", {}, inlineMarkdown(paragraph.join("\n"))));
+  }
+  return el("div", { class: "rich-text" }, blocks);
+}
+
 function when(seconds) { return seconds ? new Date(seconds * 1000).toLocaleString() : ""; }
 function ago(seconds) {
   if (!seconds) return "";
@@ -258,10 +313,10 @@ function workerDetail(thread, item) {
         .map(([label, value]) => el("div", {}, el("small", {}, label), el("strong", {}, value)))),
     status === "blocked" || thread.pause_reason ?
       el("section", { class: "detail-note alert" }, el("h3", {}, worker.status === "awaiting_approval" ? "Approval pending" : "Why it stopped"),
-        el("p", {}, worker.status === "awaiting_approval" ? "Review the request in Needs you." :
+        markdown(worker.status === "awaiting_approval" ? "Review the request in Needs you." :
           job?.error || thread.pause_reason || "No reason recorded.")) : null,
-    job?.result?.summary ? el("section", { class: "detail-note" }, el("h3", {}, "Result"), el("p", {}, job.result.summary)) : null,
-    job?.brief ? el("section", { class: "detail-note" }, el("h3", {}, "Task"), el("p", {}, job.brief)) : null,
+    job?.result?.summary ? el("section", { class: "detail-note" }, el("h3", {}, "Result"), markdown(job.result.summary)) : null,
+    job?.brief ? el("section", { class: "detail-note" }, el("h3", {}, "Task"), markdown(job.brief)) : null,
     worker.status !== "stopped" ? el("div", { class: "actions detail-note" },
       ["running", "awaiting_approval"].includes(worker.status) ? button("Interrupt", () => {
         document.getElementById("worker-dialog").close();
@@ -344,7 +399,7 @@ function overview(data) {
           el("div", { class: "parent-description" },
             el("button", { class: "section-link", onclick: () => { state.descriptionOpen = !state.descriptionOpen; render(); } },
               state.descriptionOpen ? "Hide full description −" : "Read full description +"),
-            state.descriptionOpen ? el("p", {}, threadTitle(selected)) : null)),
+            state.descriptionOpen ? markdown(threadTitle(selected)) : null)),
         el("span", { class: "head-count" }, el("strong", {}, selectedItems.length), " workers")),
       el("section", { class: "work-summary" },
         el("div", { class: "work-summary-head" },
@@ -507,11 +562,11 @@ function threadDetail(detail) {
     page(threadTitle(session), threadContext(session) || "Slack conversation"),
     el("div", { class: "detail-grid" },
       el("div", { class: "stack" },
-        panel("Summary", [el("p", { class: "sub" }, session.summary || "No summary yet."),
+        panel("Summary", [markdown(session.summary || "No summary yet."),
           session.decisions?.length ? el("div", {}, el("h3", {}, "Decisions"), el("ul", {}, session.decisions.map((decision) => el("li", {}, decision)))) : null]),
         panel(`Messages · ${detail.messages.length}`, detail.messages.length ? detail.messages.map((message) =>
           el("div", { class: "message" + (message.source === "self" ? " self" : "") },
-            el("div", { class: "small" }, message.source === "self" ? "Fridica" : members.get(message.sender), " · ", when(Number(message.ts))), message.text || "[No text]")) : empty("No message text is stored.")),
+            el("div", { class: "small" }, message.source === "self" ? "Fridica" : members.get(message.sender), " · ", when(Number(message.ts))), markdown(message.text || "[No text]"))) : empty("No message text is stored.")),
         detail.jobs.length ? panel("Jobs", table(["Work", "Status", "Result"], detail.jobs.map((job) =>
           el("tr", {}, el("td", {}, job.brief), el("td", {}, statusPill(job.status)),
             el("td", {}, job.result?.summary || job.error || "—"))))) : null),
@@ -672,4 +727,4 @@ function start() {
 }
 
 if (typeof document !== "undefined") start();
-if (typeof module !== "undefined") module.exports = { el, ago, statusPill, filteredThreads, attention, networkSummary, settingsView, overview, latestJobs, workItems, workFlags, parentStatus, workerDetail };
+if (typeof module !== "undefined") module.exports = { el, markdown, ago, statusPill, filteredThreads, attention, networkSummary, settingsView, overview, latestJobs, workItems, workFlags, parentStatus, workerDetail };
