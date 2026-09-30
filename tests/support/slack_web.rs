@@ -775,6 +775,34 @@ async fn credential_echoes_are_scrubbed_from_json_bytes_headers_and_scope_metada
 }
 
 #[tokio::test]
+async fn startup_records_channel_names_for_owner_controls() {
+    for (name, expected) in [
+        (json!("ai-human-plume"), json!({"CROOM":"ai-human-plume"})),
+        (json!("x".repeat(81)), json!({})),
+        (Value::Null, json!({})),
+    ] {
+        let h = Harness::new(Duration::from_secs(2)).await;
+        h.server
+            .json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}));
+        h.server
+            .json(json!({"ok":true,"channel":{"id":"CROOM","is_member":true,"name":name}}));
+        h.web.validate().await.unwrap();
+        let names: String = h
+            .store
+            .call(|c| {
+                Ok(c.query_row(
+                    "SELECT value FROM meta WHERE key='slack_channel_names'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&names).unwrap(), expected);
+    }
+}
+
+#[tokio::test]
 async fn streaming_response_bounds_apply_without_content_length_and_reject_partial_bodies() {
     for (chunked, truncated, size) in [(true, false, ENVELOPE_LIMIT + 1), (false, true, 8)] {
         let h = Harness::new(Duration::from_secs(2)).await;

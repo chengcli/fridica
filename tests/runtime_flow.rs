@@ -1114,6 +1114,98 @@ async fn control_call(
         .await
 }
 #[tokio::test]
+async fn channel_instructions_reach_the_most_recent_thread_by_name_or_id() {
+    let h = Harness::new(vec![], false).await;
+    let route = |channel: &str| format!("/channels/{channel}/instruct");
+    let body = |id: &str| json!({"text":"Approve the clone for this run","client_id":id});
+    // No thread in the channel yet: nothing to attach an instruction to.
+    let none = control_call(
+        &h,
+        "POST",
+        &route("CROOM"),
+        body("channel-0000"),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (none.status, none.body["error"].clone()),
+        (404, json!("no_thread_in_channel"))
+    );
+    h.intake(false).await;
+    let later = Message {
+        files: vec![],
+        event_id: "e2".into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: "200.1".into(),
+        thread_ts: None,
+        sender: "UALICE".into(),
+        text: "<@UOWNER> another question".into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![],
+    };
+    assert!(h.runtime.intake(later).await.unwrap().is_some());
+    // Startup records channel names from conversations.info.
+    h.store
+        .call(|c| {
+            c.execute(
+                "INSERT INTO meta VALUES('slack_channel_names','{\"CROOM\":\"ai-human-plume\"}')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    for (channel, id) in [
+        ("CROOM", "channel-1111"),
+        ("ai-human-plume", "channel-2222"),
+    ] {
+        let reply = control_call(&h, "POST", &route(channel), body(id), Authority::Owner).await;
+        assert_eq!(reply.status, 200, "{channel}: {:?}", reply.body);
+        assert_eq!(reply.body["thread"], "TTEAM:CROOM:200.1", "{channel}");
+        assert_eq!(reply.body["queued"], true);
+    }
+    // The same client ID is idempotent through the channel route too.
+    let retry = control_call(
+        &h,
+        "POST",
+        &route("ai-human-plume"),
+        body("channel-2222"),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(retry.status, 200);
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction' AND session_id='TTEAM:CROOM:200.1'")
+            .await,
+        "2"
+    );
+    for (channel, authority, status, code) in [
+        ("general", Authority::Owner, 404, "unknown_channel"),
+        ("CUNLISTED", Authority::Owner, 404, "unknown_channel"),
+        ("CROOM", Authority::Overseer, 403, "owner_required"),
+    ] {
+        let reply =
+            control_call(&h, "POST", &route(channel), body("channel-3333"), authority).await;
+        assert_eq!(
+            (reply.status, reply.body["error"].clone()),
+            (status, json!(code)),
+            "{channel}"
+        );
+    }
+    let extra = control_call(
+        &h,
+        "POST",
+        &route("CROOM"),
+        json!({"text":"x","client_id":"channel-4444","thread":"elsewhere"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(extra.status, 400);
+}
+
+#[tokio::test]
 async fn authenticated_controls_protect_owner_pause_and_deduplicate_instructions() {
     let h = Harness::new(vec![], false).await;
     h.intake(false).await;

@@ -604,8 +604,13 @@ The CLI and the dashboard both use it and never write the database.
 ```bash
 fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
+fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
 fridica dashboard --port 8765           # prints http://127.0.0.1:8765/#key=…
 ```
+
+`instruct` tells the parent something as you, in the channel's most recently active
+thread (a thread ID instead targets that thread). It prints the `client_id` it used;
+after an uncertain response, rerun with `--client-id` so it is not queued twice.
 
 Work groups workers by parent thread, with status filters and clickable job
 details including server and environment. Needs you collects approvals, stalled
