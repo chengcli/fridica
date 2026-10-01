@@ -360,23 +360,38 @@ async fn the_egress_gate_holds_back_private_terms_and_ai_trailers_without_naming
     assert_eq!(health, 1);
 }
 
-/// The PR heads a fake GitHub reports; any other PR is unreadable.
-struct Heads(Vec<(u64, &'static str)>);
+/// A fake GitHub: each PR's head, title and commit messages, with a compare
+/// against base `BASE`. Any other PR is unreadable.
+const BASE: &str = "1111111111111111111111111111111111111111";
+struct Heads(Vec<(u64, &'static str, &'static str, Vec<&'static str>)>);
 impl fridica::github::client::Api for Heads {
     fn get(
         &self,
         request: fridica::github::client::Request,
     ) -> AdapterFuture<'_, Result<Value, fridica::github::client::Failure>> {
+        use fridica::github::client::{Failure, Operation};
         Box::pin(async move {
-            let fridica::github::client::Operation::Pull { number } = request.operation else {
-                return Err(fridica::github::client::Failure::Invalid);
-            };
             assert_eq!(request.repo, "owner/project");
-            self.0
-                .iter()
-                .find(|(n, _)| *n == number)
-                .map(|(_, sha)| json!({"head":{"sha":sha}}))
-                .ok_or(fridica::github::client::Failure::Unavailable)
+            match request.operation {
+                Operation::Pull { number } => self
+                    .0
+                    .iter()
+                    .find(|(n, ..)| *n == number)
+                    .map(|(_, sha, title, _)| {
+                        json!({"head":{"sha":sha},"base":{"sha":BASE},"title":title,"body":null})
+                    })
+                    .ok_or(Failure::Unavailable),
+                Operation::Compare { base, head } => {
+                    assert_eq!(base, BASE);
+                    let (.., messages) = self.0.iter().find(|(_, sha, ..)| *sha == head).unwrap();
+                    let commits: Vec<Value> = messages
+                        .iter()
+                        .map(|m| json!({"commit":{"message":m}}))
+                        .collect();
+                    Ok(json!({"total_commits":commits.len(),"commits":commits}))
+                }
+                _ => Err(Failure::Invalid),
+            }
         })
     }
 }
@@ -442,7 +457,7 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
     }
     let fake = Arc::new(Fake::default());
     let d = dispatcher(&s, fake.clone(), Arc::new(ReplayClock::new(10.)));
-    let heads = Heads(vec![(7, head)]);
+    let heads = Heads(vec![(7, head, "Fix the solver", vec!["Fix the solver"])]);
     assert_eq!(d.drain_with(10, None, Some(&heads)).await.unwrap(), 3);
     assert_eq!(*fake.calls.lock().unwrap(), ["plain", "live", "full"]);
     let errors: Vec<String> = s
@@ -470,4 +485,75 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
     outbox::enqueue(&s, p, 11.).await.unwrap();
     assert_eq!(d.drain(10).await.unwrap(), 0);
     assert_eq!(fake.calls.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn a_sign_off_clears_only_a_pr_whose_text_passes_the_egress_gate() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    let deny = dir.path().join("deny.txt");
+    std::fs::write(&deny, "Jane Q\\. Private\n").unwrap();
+    std::fs::set_permissions(&deny, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let clean = "0123456789abcdef0123456789abcdef01234567";
+    let named = "2222222222222222222222222222222222222222";
+    let trailer = "3333333333333333333333333333333333333333";
+    let heads = Heads(vec![
+        (
+            1,
+            clean,
+            "Fix the solver",
+            vec!["Fix the solver", "Add a test"],
+        ),
+        (2, named, "Data from Jane Q. Private", vec!["Fix"]),
+        (
+            3,
+            trailer,
+            "Fix",
+            vec!["Fix\n\nCo-Authored-By: Claude <noreply@anthropic.com>"],
+        ),
+    ]);
+    for (n, thread, sha) in [
+        (1, "100.1", clean),
+        (2, "100.2", named),
+        (3, "100.3", trailer),
+    ] {
+        s.call(move |c| {
+            c.execute(
+                "INSERT INTO threads(id,workspace,channel,root_ts,created,updated,context_json)
+                 VALUES(?,'TTEAM','CROOM',?,1,1,'{\"repo\":\"owner/project\"}')",
+                rusqlite::params![format!("TTEAM:CROOM:{thread}"), thread],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let mut p = post(&format!("pr{n}"), thread, "");
+        p.text = format!("SIGN-OFF #{n} {sha} approve");
+        outbox::enqueue(&s, p, 1.).await.unwrap();
+    }
+    let fake = Arc::new(Fake::default());
+    let d = dispatcher(&s, fake.clone(), Arc::new(ReplayClock::new(10.)));
+    assert_eq!(
+        d.drain_with(10, Some(&deny), Some(&heads)).await.unwrap(),
+        1
+    );
+    assert_eq!(*fake.calls.lock().unwrap(), ["pr1"]);
+    let errors: Vec<String> = s
+        .call(|c| {
+            Ok(
+                c.prepare("SELECT error FROM outbox WHERE state='failed' ORDER BY id")?
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        errors,
+        [
+            "egress_signoff_pr_deny_list_1",
+            "egress_signoff_pr_ai_trailer"
+        ]
+    );
 }

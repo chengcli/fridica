@@ -229,6 +229,36 @@ print('isolated')
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn confined_worker_cannot_read_the_egress_deny_list() {
+    let mut f = Fixture::new();
+    let dir = f.config.path.parent().unwrap().join("egress");
+    std::fs::create_dir_all(&dir).unwrap();
+    let deny = dir.join("deny.txt");
+    std::fs::write(&deny, "Jane Q\\. Private\n").unwrap();
+    f.config.egress.deny_list = Some(deny.clone());
+    let checks = format!(
+        r#"
+import pathlib
+try:
+    pathlib.Path({deny}).read_bytes()
+except (FileNotFoundError, PermissionError):
+    print('hidden')
+"#,
+        deny = serde_json::json!(deny)
+    );
+    let result = process::run_once(f.command(&checks), vec![], Duration::from_secs(10), 16384)
+        .await
+        .unwrap();
+    assert_eq!(
+        result.stdout,
+        b"hidden\n",
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn symlinked_workspaces_settings_and_private_remounts_refuse_before_backend_start() {
     for case in [
         "workspace",
