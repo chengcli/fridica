@@ -18,10 +18,13 @@ class InterruptTests(unittest.TestCase):
     def test_first_signal_interrupts_and_later_ones_are_ignored(self):
         for number in helper.STOP_SIGNALS:
             signal.signal(number, helper.interrupt)
-        with self.assertRaises(InterruptedError):
+        with self.assertRaises(helper.Interrupted):
             helper.interrupt(signal.SIGTERM, None)
         for number in helper.STOP_SIGNALS:
             self.assertIs(signal.getsignal(number), signal.SIG_IGN)
+        # selectors swallow InterruptedError as a retried EINTR, which would let
+        # communicate() run to its deadline instead of stopping Git at once.
+        self.assertFalse(issubclass(helper.Interrupted, InterruptedError))
 
 
 if __name__ == "__main__":

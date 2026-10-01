@@ -1285,3 +1285,32 @@ async fn onboarding_discovery_redacts_echoes_and_never_follows_redirects_or_retr
         assert!(!error.contains(bad));
     }
 }
+#[tokio::test]
+async fn the_client_resolves_and_saves_a_file_to_disk() {
+    use fridica_slack::files::Downloader;
+    let h = Harness::new(Duration::from_secs(2)).await;
+    h.ready().await;
+    // files.info names the real host; the bytes come from the loopback server.
+    let private = "https://files.slack.com/files-pri/TTEAM-F1/data.nc";
+    h.server.json(
+        json!({"ok":true,"file":{"id":"F1","created":1,"timestamp":1,"name":"data.nc",
+        "mimetype":"application/octet-stream","url_private":private}}),
+    );
+    let mut data = Reply::json(json!(null));
+    data.body = b"CDF\x01netcdf bytes".to_vec();
+    h.server.add(data);
+    assert_eq!(h.web.resolve("F1".into()).await.unwrap(), private);
+    let url = h.server.base.join("/files-pri/TTEAM-F1/data.nc").unwrap();
+    let target = h._dir.path().join("saved.nc");
+    assert_eq!(
+        h.web
+            .save(url.to_string(), target.clone(), 1 << 20)
+            .await
+            .unwrap(),
+        16
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"CDF\x01netcdf bytes");
+    let ledger = h.ledger().await;
+    assert!(ledger.contains("\"save\":true"), "{ledger}");
+    assert!(!ledger.contains("xoxp-private-test-secret"));
+}

@@ -228,9 +228,10 @@ impl JobIo for ScopedJobIo {
         job: Job,
     ) -> AdapterFuture<'_, Result<String, WorkerFailure>> {
         Box::pin(async move {
+            let layout = inputs::layout(&spec);
             let files = self.files(&spec, &job).await?;
             let rest = self.fetch(spec, job).await?;
-            Ok(format!("{files}{rest}"))
+            Ok(format!("{layout}{files}{rest}"))
         })
     }
     fn place(

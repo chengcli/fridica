@@ -182,6 +182,11 @@ starts, and tells the worker the path. Workers never talk to Slack themselves. A
 file that cannot be fetched fails the job visibly rather than letting it run without
 the data.
 
+Every worker is told its layout: its own slot folder (`worker1`, `worker2`, …) is the
+only place it writes, and the shared workspace around it, including the other slots,
+`data_in` and anything a person copied there, is readable in full. A worker searches
+that shared workspace before reporting a file missing.
+
 Workers never hold the Slack token, and it is only ever sent to `files.slack.com`.
 Cleaning a thread erases its attachments along with its text.
 

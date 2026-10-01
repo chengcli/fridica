@@ -53,6 +53,14 @@ impl Downloader for SlackClient {
     fn resolve(&self, file_id: String) -> BoxFuture<'_, Result<String, FileFailure>> {
         self.0.resolve(file_id)
     }
+    fn save(
+        &self,
+        url: String,
+        path: std::path::PathBuf,
+        limit: u64,
+    ) -> BoxFuture<'_, Result<u64, FileFailure>> {
+        self.0.save(url, path, limit)
+    }
 }
 
 /// The owner, workspace and channels a client for `config` may use.

@@ -17,12 +17,18 @@ import threading
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
 
+class Interrupted(Exception):
+    """A stop signal arrived. Not InterruptedError: Python's selectors treat
+    that one as a retried EINTR, so communicate() would run to its deadline
+    and a SIGKILLed helper would leave the Git process group running."""
+
+
 def interrupt(_signal, _frame):
     # The first signal starts shutdown; later ones (stdin EOF plus the owner's or
     # watchdog's SIGTERM) must not interrupt removal of the staging directory.
     for number in STOP_SIGNALS:
         signal.signal(number, signal.SIG_IGN)
-    raise InterruptedError("fetch interrupted")
+    raise Interrupted("fetch interrupted")
 
 
 def watch_input():

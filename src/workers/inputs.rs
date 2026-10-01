@@ -114,6 +114,22 @@ fn file_directory(id: &str) -> Result<String> {
     }
     Ok(format!("{DIRECTORY}/{id}"))
 }
+/// What the worker is told about where it works: its own folder, and the
+/// shared workspace around it that it may read in full. Files people drop
+/// off for workers land in that shared workspace, beside the slots.
+pub fn layout(spec: &WorkerSpec) -> String {
+    let own = spec.workspace.path.display();
+    let shared = root(spec);
+    if shared == spec.workspace.path {
+        return format!(
+            "\n\nWorkspace: {own}. Files placed there for you may sit in any subfolder; search it before reporting a file missing."
+        );
+    }
+    format!(
+        "\n\nWorkspace layout: your working folder is {own}; write only there. It is one slot of the shared workspace {}, which you may read in full: other worker slots, {DIRECTORY} (files handed to workers, read-only) and anything people placed there for you. Search it, folders and subfolders, before reporting a file missing.",
+        shared.display()
+    )
+}
 /// What the worker is told: where its files are. Paths only; no Slack detail.
 pub fn context(placed: &[Placed]) -> String {
     if placed.is_empty() {
