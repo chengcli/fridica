@@ -114,7 +114,8 @@ pub fn prepare(
                 scope.machines,
                 &Selector {
                     machine: d.machine.clone(),
-                    tags: d.tags.clone(),
+                    // The schema allows "" (no tag) alongside known tags.
+                    tags: d.tags.iter().filter(|t| !t.is_empty()).cloned().collect(),
                     workspace: d.workspace.clone(),
                     backend: d.backend.clone(),
                 },

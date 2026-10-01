@@ -1,13 +1,20 @@
 //! Safe settlement for unavailable or invalid model answers. Infrastructure and
 //! recording faults still propagate; no unrecorded effect is acknowledged.
 use crate::parent::{Decision, ParentFailure};
-use serde_json::json;
+use serde_json::{json, Value};
 pub const UNAVAILABLE: &str =
     "I couldn't get to this just now; I'll need to look at it myself before anyone retries.";
 pub const INVALID: &str = "I couldn't produce a valid action after one repair attempt. Owner review is needed before retrying.";
+/// The turn's stand-in decision when the parent fails. An action that stayed
+/// invalid after repair is not posted: the thread waits for owner review.
 pub fn blocked(invalid: bool) -> Decision {
     let text = if invalid { INVALID } else { UNAVAILABLE };
-    serde_json::from_value(json!({"reply":{"text":text,"status":"blocked"},
+    let reply = if invalid {
+        Value::Null
+    } else {
+        json!({"text":text,"status":"blocked"})
+    };
+    serde_json::from_value(json!({"reply":reply,
         "note":{"kind":"status","blocker":text,"next_step":"Owner review before retrying"}}))
     .expect("fixed failure action")
 }

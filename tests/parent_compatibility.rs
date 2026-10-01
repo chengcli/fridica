@@ -419,10 +419,23 @@ async fn invalid_repair_rejects_every_proposed_effect_and_records_both_responses
             .await,
         "parent_invalid_after_repair"
     );
-    assert!(!f
-        .scalar("SELECT text FROM outbox")
-        .await
-        .contains("Claimed success"));
+    // Nothing is posted; the owner is asked to review, with both errors kept.
+    assert_eq!(
+        f.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
+    assert_eq!(
+        f.scalar("SELECT CAST(count(*) AS TEXT) FROM obligations WHERE kind='signal' AND summary LIKE '%owner review%'")
+            .await,
+        "1"
+    );
+    for sql in [
+        "SELECT json_extract(context_json,'$.validation_error') FROM parent_turns WHERE call='decide'",
+        "SELECT json_extract(context_json,'$.validation_error') FROM parent_turns WHERE call='repair'",
+    ] {
+        let error = f.scalar(sql).await;
+        assert!(error.contains("machine"), "{sql}: {error}");
+    }
 }
 
 #[tokio::test]
