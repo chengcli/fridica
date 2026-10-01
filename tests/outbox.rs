@@ -359,3 +359,115 @@ async fn the_egress_gate_holds_back_private_terms_and_ai_trailers_without_naming
         .unwrap();
     assert_eq!(health, 1);
 }
+
+/// The PR heads a fake GitHub reports; any other PR is unreadable.
+struct Heads(Vec<(u64, &'static str)>);
+impl fridica::github::client::Api for Heads {
+    fn get(
+        &self,
+        request: fridica::github::client::Request,
+    ) -> AdapterFuture<'_, Result<Value, fridica::github::client::Failure>> {
+        Box::pin(async move {
+            let fridica::github::client::Operation::Pull { number } = request.operation else {
+                return Err(fridica::github::client::Failure::Invalid);
+            };
+            assert_eq!(request.repo, "owner/project");
+            self.0
+                .iter()
+                .find(|(n, _)| *n == number)
+                .map(|(_, sha)| json!({"head":{"sha":sha}}))
+                .ok_or(fridica::github::client::Failure::Unavailable)
+        })
+    }
+}
+
+#[tokio::test]
+async fn sign_off_lines_must_name_the_live_pr_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    let head = "0123456789abcdef0123456789abcdef01234567";
+    // Every thread but 100.6 knows its repository.
+    s.call(|c| {
+        for (thread, context) in [
+            ("100.1", r#"{"repo":"owner/project"}"#),
+            ("100.2", r#"{"repo":"owner/project"}"#),
+            ("100.3", r#"{"repo":"owner/project"}"#),
+            ("100.4", r#"{"repo":"owner/project"}"#),
+            ("100.5", r#"{"repo":"owner/project"}"#),
+            ("100.6", "{}"),
+            ("100.7", r#"{"repo":"owner/project"}"#),
+        ] {
+            c.execute(
+                "INSERT INTO threads(id,workspace,channel,root_ts,created,updated,context_json)
+                 VALUES(?,'TTEAM','CROOM',?,1,1,?)",
+                rusqlite::params![format!("TTEAM:CROOM:{thread}"), thread, context],
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    for (key, thread, text) in [
+        ("plain", "100.1", "No sign-off here.".to_string()),
+        (
+            "live",
+            "100.2",
+            format!("Looks good.\nSIGN-OFF #7 {} approve", &head[..12]),
+        ),
+        (
+            "full",
+            "100.3",
+            format!("SIGN-OFF #7 {head} approve (code review)"),
+        ),
+        (
+            "stale",
+            "100.4",
+            "SIGN-OFF #7 fedcba9876 changes".to_string(),
+        ),
+        (
+            "unreadable",
+            "100.5",
+            format!("SIGN-OFF #8 {} approve", &head[..7]),
+        ),
+        ("norepo", "100.6", format!("SIGN-OFF #7 {head} approve")),
+        (
+            "loose",
+            "100.7",
+            format!("Sign-off #7 {head} approve, nice work"),
+        ),
+    ] {
+        let mut p = post(key, thread, "");
+        p.text = text;
+        outbox::enqueue(&s, p, 1.).await.unwrap();
+    }
+    let fake = Arc::new(Fake::default());
+    let d = dispatcher(&s, fake.clone(), Arc::new(ReplayClock::new(10.)));
+    let heads = Heads(vec![(7, head)]);
+    assert_eq!(d.drain_with(10, None, Some(&heads)).await.unwrap(), 3);
+    assert_eq!(*fake.calls.lock().unwrap(), ["plain", "live", "full"]);
+    let errors: Vec<String> = s
+        .call(|c| {
+            Ok(
+                c.prepare("SELECT error FROM outbox WHERE state='failed' ORDER BY id")?
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?,
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        errors,
+        [
+            "egress_signoff_stale_head",
+            "egress_signoff_unverified",
+            "egress_signoff_repo_unknown",
+            "egress_signoff_malformed"
+        ]
+    );
+    // Without a GitHub reader, a sign-off is never sent unverified.
+    let mut p = post("unchecked", "100.2", "");
+    p.text = format!("SIGN-OFF #7 {head} approve");
+    outbox::enqueue(&s, p, 11.).await.unwrap();
+    assert_eq!(d.drain(10).await.unwrap(), 0);
+    assert_eq!(fake.calls.lock().unwrap().len(), 3);
+}
