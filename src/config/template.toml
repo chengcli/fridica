@@ -103,6 +103,11 @@ project = "~/project"             # an existing directory; each job slot works i
 # [machines.greatlakes.workspaces]
 # scratch = "/scratch/myaccount/me"
 
+# [egress]                        # checks before anything is posted
+# deny_list = "~/.local/state/fridica/deny.txt"   # mode 0600: one pattern per line, case-insensitive;
+#                                   # a matching post is not sent and `fridica outbox` names the rule.
+#                                   # Posts with AI attribution trailers are never sent.
+
 [github]
 enabled = true                    # show the parent the state of linked GitHub pull requests and issues
 # GitHub API reads use the owner's existing gh authentication.

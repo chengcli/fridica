@@ -7,6 +7,7 @@ pub mod approvals;
 pub mod config;
 pub mod delegation;
 pub mod delivery;
+pub mod egress;
 pub mod failure;
 pub mod ids;
 pub mod parent;

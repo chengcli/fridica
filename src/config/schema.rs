@@ -60,6 +60,18 @@ impl Default for GitHub {
         }
     }
 }
+/// Checks on text before it is published.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Egress {
+    /// A private (mode 0600) file of terms that must never be published.
+    pub deny_list: Option<PathBuf>,
+}
+impl Egress {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
     pub path: PathBuf,
@@ -80,6 +92,8 @@ pub struct Config {
     pub isolation: super::isolation::Settings,
     #[serde(default, skip_serializing_if = "Placement::is_default")]
     pub placement: Placement,
+    #[serde(default, skip_serializing_if = "Egress::is_default")]
+    pub egress: Egress,
     pub path: PathBuf,
     pub fingerprint: String,
 }

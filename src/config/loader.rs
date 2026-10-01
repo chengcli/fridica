@@ -79,6 +79,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             "attention",
             "isolation",
             "placement",
+            "egress",
         ],
         "top level",
     )?;
@@ -177,6 +178,12 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     policy.validate()?;
     let attention: Attention = decode(root.get("attention"))?;
     attention.validate()?;
+    let mut egress: Egress = decode(root.get("egress"))?;
+    if let Some(path) = egress.deny_list.take() {
+        let path = file(&path, base, context)?;
+        super::egress::deny_list(&path).context("invalid egress.deny_list")?;
+        egress.deny_list = Some(path);
+    }
     let github: GitHub = decode(root.get("github"))?;
     if !env_name(&github.token_env) {
         bail!("github.token_env must name an environment variable");
@@ -275,6 +282,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         attention,
         isolation,
         placement,
+        egress,
         path,
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };
