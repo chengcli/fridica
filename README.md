@@ -67,7 +67,7 @@ pip install fridica              # or: pipx install fridica
 fridica init                     # ~/.config/fridica/config.toml, contract.md, manifest.yaml
 ```
 
-The wheel contains the native `fridica` and `fridica-overseer` executables (no Python
+The wheel contains the native `fridica` executable (no Python
 code), built for Linux x86_64/aarch64 (glibc 2.28+) and macOS arm64/x86_64; one wheel
 per platform serves every Python version. Elsewhere pip builds from the source
 distribution, which needs a Rust toolchain (1.88+). Worker helpers still run the

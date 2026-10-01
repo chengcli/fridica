@@ -24,8 +24,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Authority {
     Owner,
-    Lead { campaign: String },
-    Overseer,
     System,
     DesktopReadOnly,
 }
@@ -46,14 +44,7 @@ pub enum ThreadControl {
 
 impl ThreadControl {
     pub fn can_resume(&self, actor: &Authority) -> bool {
-        match self {
-            Self::Paused {
-                by: Authority::Owner,
-                ..
-            } => *actor == Authority::Owner,
-            Self::Paused { .. } => matches!(actor, Authority::Owner | Authority::Overseer),
-            _ => false,
-        }
+        matches!(self, Self::Paused { .. }) && *actor == Authority::Owner
     }
 }
 

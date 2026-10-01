@@ -129,7 +129,7 @@ async fn deliver(web: &WebClient, claim: ClaimedPost) -> Result<String, Failure>
     }
     if !matches!(
         post.kind.as_str(),
-        "reply" | "notice" | "report" | "debrief_root" | "approval_notice" | "overseer"
+        "reply" | "notice" | "report" | "debrief_root" | "approval_notice"
     ) {
         return Err(Failure::Configuration);
     }

@@ -23,10 +23,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         Self { runtime }
     }
     async fn handle(&self, request: Request, authority: Authority) -> Response {
-        if !matches!(
-            authority,
-            Authority::Owner | Authority::Overseer | Authority::DesktopReadOnly
-        ) {
+        if !matches!(authority, Authority::Owner | Authority::DesktopReadOnly) {
             return Response::error(403, "forbidden");
         }
         let Some((mut parts, query)) = target(&request.target) else {
@@ -395,7 +392,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 }
             }
             ["threads", id, action] => {
-                if authority != Authority::Owner && !matches!(*action, "pause" | "resume") {
+                if authority != Authority::Owner {
                     return Response::error(403, "owner_required");
                 }
                 let allowed = match *action {
@@ -510,13 +507,10 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                         if body.get("reason").is_some_and(|v| !v.is_string()) {
                             return Response::error(400, "invalid_pause_reason");
                         }
-                        let reason = body.get("reason").and_then(Value::as_str).unwrap_or(
-                            if authority == Authority::Owner {
-                                "Paused by the owner."
-                            } else {
-                                "Paused by the overseer."
-                            },
-                        );
+                        let reason = body
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Paused by the owner.");
                         if reason.trim().is_empty() || reason.chars().count() > 4000 {
                             return Response::error(400, "invalid_pause_reason");
                         }

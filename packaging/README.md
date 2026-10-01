@@ -1,9 +1,7 @@
 # Fridica native candidate
 
 This is an experimental Linux x86_64 installation, separate from the production
-Python `fridica` command. It contains `bin/fridica-candidate` and
-`bin/fridica-overseer-candidate`. The latter currently exposes the offline campaign
-planner; campaign automation remains opt-in development work. Dashboard serving
+Python `fridica` command. It contains `bin/fridica-candidate`. Dashboard serving
 and redesign are deferred. Cross-platform maturin wheels and public publishing
 are later release work.
 
@@ -119,8 +117,8 @@ python3 /absolute/install/share/state_snapshot.py restore --snapshot /private/ne
 
 Snapshot and recovery destinations must be new. Incomplete destinations have no
 valid manifest; do not use them. This helper covers daemon DB and config only:
-copy contract/repository policies, artifacts, credentials, report exports and any
-separate overseer database according to your retention requirements. It does not
+copy contract/repository policies, artifacts, credentials and report exports
+according to your retention requirements. It does not
 claim to back up an entire deployment.
 
 For an existing Python installation, retain its environment for two weeks. Make

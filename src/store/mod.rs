@@ -64,14 +64,6 @@ pub struct Store {
 impl Store {
     /// Existing databases must be explicitly migrated with backups first.
     pub async fn open(path: PathBuf) -> Result<Self> {
-        Self::open_kind(path, false).await
-    }
-
-    pub async fn open_overseer(path: PathBuf) -> Result<Self> {
-        Self::open_kind(path, true).await
-    }
-
-    async fn open_kind(path: PathBuf, overseer: bool) -> Result<Self> {
         let (sender, mut receiver) = mpsc::channel::<Request>(128);
         let (ready, wait) = oneshot::channel();
         std::thread::Builder::new()
@@ -80,16 +72,12 @@ impl Store {
                 let opened = (|| -> Result<_> {
                     let path = std::fs::canonicalize(&path).unwrap_or(path);
                     let guard = lock(&path)?;
-                    if !overseer {
-                        migration::check_ready(&path)?;
-                    }
+                    migration::check_ready(&path)?;
                     private_file(&path)?;
                     let mut c = Connection::open(&path)?;
                     c.busy_timeout(Duration::from_secs(5))?;
                     let version = schema::version(&c)?;
-                    if overseer {
-                        schema::overseer(&mut c)?;
-                    } else if version == 0 {
+                    if version == 0 {
                         schema::migrate(&mut c)?;
                         schema::install_mutation_guards(&c)?;
                     } else if version != schema::VERSION {

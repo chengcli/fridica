@@ -136,14 +136,7 @@ async fn decisions_commit_before_wakeup_and_require_owner_authentication() {
     let stored = approvals::get(&h.store, id.clone()).await.unwrap().unwrap();
     assert_eq!(stored.summary, "private approval text");
     assert_eq!(stored.detail, json!({"command":"make"}));
-    for authority in [
-        Authority::System,
-        Authority::Overseer,
-        Authority::DesktopReadOnly,
-        Authority::Lead {
-            campaign: "c1".into(),
-        },
-    ] {
+    for authority in [Authority::System, Authority::DesktopReadOnly] {
         assert!(h
             .broker
             .decide(id.clone(), ApprovalDecision::Session, authority)

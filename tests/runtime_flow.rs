@@ -562,7 +562,7 @@ async fn owner_pause_retains_result_and_resume_does_not_delegate_again() {
     );
     assert!(h
         .runtime
-        .control(SESSION.into(), Control::Resume, Authority::Overseer)
+        .control(SESSION.into(), Control::Resume, Authority::System)
         .await
         .is_err());
     h.runtime
@@ -1338,7 +1338,7 @@ async fn channel_instructions_reach_the_most_recent_thread_by_name_or_id() {
     for (channel, authority, status, code) in [
         ("general", Authority::Owner, 404, "unknown_channel"),
         ("CUNLISTED", Authority::Owner, 404, "unknown_channel"),
-        ("CROOM", Authority::Overseer, 403, "owner_required"),
+        ("CROOM", Authority::System, 403, "forbidden"),
     ] {
         let reply =
             control_call(&h, "POST", &route(channel), body("channel-3333"), authority).await;
@@ -1377,7 +1377,7 @@ async fn authenticated_controls_protect_owner_pause_and_deduplicate_instructions
             &h,
             "POST",
             &pause,
-            json!({"actor":"overseer"}),
+            json!({"actor":"someone-else"}),
             Authority::Owner
         )
         .await
@@ -1391,7 +1391,7 @@ async fn authenticated_controls_protect_owner_pause_and_deduplicate_instructions
                 "POST",
                 &format!("/threads/{SESSION}/{action}"),
                 json!({"actor":"UOWNER"}),
-                Authority::Overseer
+                Authority::System
             )
             .await
             .status,
@@ -1504,7 +1504,7 @@ async fn control_views_notes_approvals_and_retry_use_durable_state() {
     assert_eq!(post["created"], 20.);
     let retry = format!("/outbox/{}/retry", post["id"]);
     assert_eq!(
-        control_call(&h, "POST", &retry, json!({}), Authority::Overseer)
+        control_call(&h, "POST", &retry, json!({}), Authority::System)
             .await
             .status,
         403
@@ -1637,20 +1637,18 @@ async fn closing_thread_stops_active_workers_and_cancels_pending_approvals() {
         200
     );
     assert_eq!(h.scalar("SELECT control FROM threads").await, "closed");
-    for authority in [Authority::Owner, Authority::Overseer] {
-        assert_eq!(
-            control_call(
-                &h,
-                "POST",
-                &format!("/threads/{SESSION}/pause"),
-                json!({}),
-                authority
-            )
-            .await
-            .status,
-            409
-        );
-    }
+    assert_eq!(
+        control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/pause"),
+            json!({}),
+            Authority::Owner
+        )
+        .await
+        .status,
+        409
+    );
     h.runtime.pass().await.unwrap();
     assert_eq!(h.scalar("SELECT status FROM workers").await, "stopped");
     assert_ne!(h.scalar("SELECT status FROM jobs").await, "running");
@@ -1865,7 +1863,7 @@ async fn clean_and_restore_clear_local_inputs_without_replaying_or_losing_new_in
     );
     let clean = format!("/threads/{SESSION}/clean");
     let restore = format!("/threads/{SESSION}/restore");
-    for authority in [Authority::Overseer, Authority::DesktopReadOnly] {
+    for authority in [Authority::System, Authority::DesktopReadOnly] {
         assert_eq!(
             control_call(
                 &h,
@@ -1981,7 +1979,7 @@ async fn restore_preserves_history_and_counters_and_never_replays_latest_message
             .unwrap();
         assert!(h
             .runtime
-            .control(SESSION.into(), Control::Restore, Authority::Overseer)
+            .control(SESSION.into(), Control::Restore, Authority::System)
             .await
             .is_err());
         assert_eq!(
@@ -2337,7 +2335,7 @@ async fn historical_backfill_and_closure_require_owner_authority_and_preserve_ow
         .await
         .unwrap();
     let body = json!({"since":100.,"until":101.,"apply":true,"client_id":"backfill-1234"});
-    for authority in [Authority::Overseer, Authority::DesktopReadOnly] {
+    for authority in [Authority::System, Authority::DesktopReadOnly] {
         assert_eq!(
             control_call(&h, "POST", "/obligations/backfill", body.clone(), authority)
                 .await
@@ -2369,7 +2367,7 @@ async fn historical_backfill_and_closure_require_owner_authority_and_preserve_ow
             "POST",
             &route,
             json!({"reason":"Already handled"}),
-            Authority::Overseer
+            Authority::System
         )
         .await
         .status,
@@ -3153,7 +3151,7 @@ async fn owner_configuration_edits_are_durable_and_reject_unauthorized_or_invali
     let fingerprint = h.config.fingerprint.clone();
     h.store.call(move |c| { c.execute("INSERT INTO runtime(id,pid,started_at,heartbeat_at,slack_status,observe_only,config_fingerprint) VALUES(1,123,1,2,'connected',0,?)", [fingerprint])?; Ok(()) }).await.unwrap();
     let original = std::fs::read_to_string(&h.config.path).unwrap();
-    for authority in [Authority::Overseer, Authority::DesktopReadOnly] {
+    for authority in [Authority::System, Authority::DesktopReadOnly] {
         assert_eq!(
             control_call(
                 &h,
@@ -3954,7 +3952,7 @@ async fn owner_file_routes_list_a_thread_and_read_text_files_exactly() {
             "{target}"
         );
     }
-    let refused = control_call(&h, "GET", "/files/F1", json!({}), Authority::Overseer).await;
+    let refused = control_call(&h, "GET", "/files/F1", json!({}), Authority::System).await;
     assert_eq!(refused.status, 403);
     // Reading posts nothing.
     assert_eq!(

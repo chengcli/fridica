@@ -127,7 +127,7 @@ async fn ambiguity_blocks_descendants_and_never_automatically_resends() {
         .await
         .unwrap();
     assert_eq!(state(&s, late).await, "blocked");
-    assert!(outbox::requeue(&s, id, Authority::Overseer, 4.)
+    assert!(outbox::requeue(&s, id, Authority::System, 4.)
         .await
         .is_err());
     assert!(outbox::requeue(&s, id, Authority::Owner, 4.).await.unwrap());

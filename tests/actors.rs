@@ -187,22 +187,18 @@ async fn observe_only_and_owner_pause_leave_mentions_visible_without_model_or_po
         .await,
         "2"
     );
-    assert!(controls::apply(
-        &s,
-        SESSION.into(),
-        Control::Resume,
-        Authority::Overseer,
-        22.
-    )
-    .await
-    .is_err());
+    assert!(
+        controls::apply(&s, SESSION.into(), Control::Resume, Authority::System, 22.)
+            .await
+            .is_err()
+    );
     assert!(controls::apply(
         &s,
         SESSION.into(),
         Control::Pause {
             reason: "override".into()
         },
-        Authority::Overseer,
+        Authority::System,
         22.
     )
     .await
@@ -614,15 +610,11 @@ async fn owner_resume_reuses_pending_message_and_resets_only_the_intended_histor
     })
     .await
     .unwrap();
-    assert!(controls::apply(
-        &s,
-        SESSION.into(),
-        Control::Resume,
-        Authority::Overseer,
-        20.
-    )
-    .await
-    .is_err());
+    assert!(
+        controls::apply(&s, SESSION.into(), Control::Resume, Authority::System, 20.)
+            .await
+            .is_err()
+    );
     controls::apply(&s, SESSION.into(), Control::Resume, Authority::Owner, 20.)
         .await
         .unwrap();

@@ -120,7 +120,7 @@ the Rust core rather than Python patches.
      - Track work items separately from Slack threads: repo, PR, exact head and tree, owner, status,
        evidence; a thread can link to several items.
      - The ``work_items`` table and the ``WorkItem`` state machine, owned by the overseer and read by
-       the parent (`The overseer <overseer_>`_, `Data model and schema v5 <data-model_>`_).
+       the parent (the overseer design, since dropped, `Data model and schema v5 <data-model_>`_).
    * - F8
      - Let code determine permissions and queue state; let the model decide intent. A standing grant
        must not produce an approval prompt, and "queued" must only be said after the job row exists.
@@ -132,7 +132,7 @@ the Rust core rather than Python patches.
        posting a review; a changed head makes evidence stale and cancels queued work for the old sha;
        carry a sign-off forward only after an all-``=`` range-diff and green CI.
      - The overseer's ``SignOff`` action and its preconditions; the ``stale_for`` cancellation of
-       queued jobs when a work item's head moves (`The overseer <overseer_>`_).
+       queued jobs when a work item's head moves (the overseer design, since dropped).
 
 Repository and process decisions from the same thread
 -----------------------------------------------------

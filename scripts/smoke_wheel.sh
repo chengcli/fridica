@@ -15,7 +15,6 @@ echo "$version"
 if [[ -n $expected ]]; then
   [[ $version == "fridica $expected" ]] || { echo "expected fridica $expected" >&2; exit 1; }
 fi
-"$bin/fridica-overseer" --version
 "$bin/fridica" build-info
 [[ $("$bin/fridica" assets --list | wc -l) -gt 0 ]]
 # A fresh configuration is created without network, credentials or a source checkout.

@@ -837,7 +837,7 @@ async fn owner_pause_controls_remain_available_during_history_and_mentions_do_no
         .control(
             "TTEAM:CROOM:9999.1".into(),
             Control::Resume,
-            Authority::Overseer
+            Authority::System
         )
         .await
         .is_err());

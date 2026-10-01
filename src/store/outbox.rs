@@ -50,7 +50,7 @@ pub(crate) fn enqueue_tx(c: &Connection, item: &Post, now: f64) -> Result<i64> {
     }
     if !matches!(
         item.kind.as_str(),
-        "reply" | "notice" | "report" | "debrief_root" | "upload" | "approval_notice" | "overseer"
+        "reply" | "notice" | "report" | "debrief_root" | "upload" | "approval_notice"
     ) {
         bail!("unknown outbox kind");
     }

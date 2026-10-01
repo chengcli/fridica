@@ -226,17 +226,13 @@ async fn peer_ceiling_persists_and_deferred_items_do_not_block_controls() {
 }
 
 #[test]
-fn owner_pause_cannot_be_resumed_by_overseer_or_lead() {
+fn owner_pause_cannot_be_resumed_by_another_actor() {
     let paused = ThreadControl::Paused {
         by: Authority::Owner,
         reason: "away".into(),
         since: 1.,
     };
     assert!(paused.can_resume(&Authority::Owner));
-    assert!(!paused.can_resume(&Authority::Overseer));
-    assert!(!paused.can_resume(&Authority::Lead {
-        campaign: "one".into()
-    }));
     assert!(!paused.can_resume(&Authority::System));
 }
 

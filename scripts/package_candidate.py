@@ -74,7 +74,7 @@ def native_target(system, machine, toolchain):
 
 def linkage(binaries):
     """Minimum platform and shared libraries of the built binaries."""
-    paths = [binaries / "fridica", binaries / "fridica-overseer"]
+    paths = [binaries / "fridica"]
     if platform.system() == "Darwin":
         loads = subprocess.check_output(["otool", "-l", *paths], text=True)
         minimum = max(set(re.findall(r"^\s*minos (\S+)$", loads, re.M)),
@@ -113,8 +113,7 @@ def build(output, target_dir):
                    cwd=ROOT, env=environment, check=True)
     files = {}
     binaries = target_dir / target / "release"
-    for name in ("fridica", "fridica-overseer"):
-        files[f"bin/{name}-candidate"] = ((binaries / name).read_bytes(), 0o755)
+    files["bin/fridica-candidate"] = ((binaries / "fridica").read_bytes(), 0o755)
     with tempfile.TemporaryDirectory() as tmp:
         assets = Path(tmp) / "assets"
         subprocess.run([binaries / "fridica", "assets", "--export", assets], check=True, stdout=subprocess.DEVNULL)
