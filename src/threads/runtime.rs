@@ -360,7 +360,8 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         let manager = self.snapshot.read().unwrap().manager.clone();
         let turns = manager.sweep().await?;
         self.supervisor.reconcile_parent_controls().await?;
-        let delivered = self.dispatcher.drain(100).await?;
+        let deny = self.config().egress.deny_list.clone();
+        let delivered = self.dispatcher.drain_checked(100, deny.as_deref()).await?;
         let started = self.supervisor.schedule().await?.len();
         Ok(Progress {
             turns,

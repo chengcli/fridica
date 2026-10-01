@@ -274,3 +274,88 @@ async fn delivery_timeout_is_ambiguous_and_never_automatically_resent() {
         (1, "delivery_timeout", 0)
     );
 }
+
+#[tokio::test]
+async fn the_egress_gate_holds_back_private_terms_and_ai_trailers_without_naming_them() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    let deny = dir.path().join("deny.txt");
+    std::fs::write(&deny, "# names that stay private\nJane Q\\. Private\n").unwrap();
+    std::fs::set_permissions(&deny, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let mut texts = vec![];
+    // One thread each: the outbox delivers a thread's posts in order.
+    for (key, thread, text) in [
+        ("clean", "100.1", "Checks passed."),
+        (
+            "private",
+            "100.2",
+            "Thanks to jane q. private for the data.",
+        ),
+        (
+            "trailer",
+            "100.3",
+            "Done.\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        ),
+    ] {
+        let mut p = post(key, thread, "");
+        p.text = text.into();
+        texts.push(outbox::enqueue(&s, p, 1.).await.unwrap());
+    }
+    let mut upload = post("upload", "100.4", "");
+    upload.kind = "upload".into();
+    upload.filename = "notes.md".into();
+    upload.blob = Some(b"Reviewed with Jane Q. Private".to_vec());
+    texts.push(outbox::enqueue(&s, upload, 1.).await.unwrap());
+    let fake = Arc::new(Fake::default());
+    let clock = Arc::new(ReplayClock::new(10.));
+    let d = dispatcher(&s, fake.clone(), clock);
+    assert_eq!(d.drain_checked(10, Some(&deny)).await.unwrap(), 1);
+    assert_eq!(*fake.calls.lock().unwrap(), ["clean"]);
+    let errors: Vec<(String, String)> = s
+        .call(|c| {
+            Ok(c.prepare("SELECT state,error FROM outbox ORDER BY id")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        errors[1..],
+        [
+            ("failed".into(), "egress_deny_list_2".into()),
+            ("failed".into(), "egress_ai_trailer".into()),
+            ("failed".into(), "egress_deny_list_2".into()),
+        ]
+    );
+    // The refusals name the rule only: the matched term is in no delivery record.
+    let records: String = s
+        .call(|c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(group_concat(payload_json),'') FROM replay_events WHERE kind='delivery'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert!(!records.to_lowercase().contains("jane q"), "{records}");
+    // An unreadable or public list holds every post back.
+    let mut held = post("held", "200.1", "");
+    held.text = "Fine text".into();
+    outbox::enqueue(&s, held, 11.).await.unwrap();
+    std::fs::set_permissions(&deny, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(d.drain_checked(10, Some(&deny)).await.unwrap(), 0);
+    assert_eq!(fake.calls.lock().unwrap().len(), 1);
+    let health: i64 = s
+        .call(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM health_events WHERE kind='egress_deny_list_unavailable'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(health, 1);
+}

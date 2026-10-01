@@ -627,3 +627,39 @@ async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflict
     let outcomes: Vec<String> = store.call(|c| Ok(c.prepare("SELECT json_extract(payload_json,'$.outcome') FROM replay_events WHERE kind='configuration_result' ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)).await.unwrap();
     assert_eq!(outcomes, ["applied", "not_applied"]);
 }
+#[test]
+fn an_egress_deny_list_must_be_private_and_valid() {
+    use std::os::unix::fs::PermissionsExt;
+    let cases: Vec<Value> = serde_json::from_str(include_str!("corpus/config.json")).unwrap();
+    let directory = tempfile::Builder::new()
+        .prefix("fe-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    setup(&root);
+    let context = context(&root);
+    let base = cases.iter().find(|c| c["error"] != true).unwrap()["source"]
+        .as_str()
+        .unwrap()
+        .replace("__ROOT__", root.to_str().unwrap());
+    let deny = root.join("etc/deny.txt");
+    let path = root.join("etc/config.toml");
+    let load = |list: &str, mode: u32| {
+        std::fs::write(&deny, list).unwrap();
+        std::fs::set_permissions(&deny, std::fs::Permissions::from_mode(mode)).unwrap();
+        std::fs::write(
+            &path,
+            format!("{base}\n[egress]\ndeny_list = \"{}\"\n", deny.display()),
+        )
+        .unwrap();
+        config::load(&path, &context)
+    };
+    assert_eq!(
+        load("Private Name\n", 0o600).unwrap().egress.deny_list,
+        Some(deny.clone())
+    );
+    assert!(load("Private Name\n", 0o644).is_err(), "readable by others");
+    assert!(load("(unclosed\n", 0o600).is_err(), "invalid pattern");
+    std::fs::write(&path, format!("{base}\n[egress]\nunknown = 1\n")).unwrap();
+    assert!(config::load(&path, &context).is_err());
+}
