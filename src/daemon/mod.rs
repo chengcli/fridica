@@ -16,7 +16,7 @@ use crate::{
         time::{RandomIds, SystemClock},
         worker::{Failure as WorkerFailureKind, WorkerFailure, WorkerRecord},
     },
-    slack::{socket, web::WebClient},
+    slack::socket,
     store::Store,
     threads::service::{self, Failure, Lifecycle},
     workers::protocol::{Factory, Worker, WorkerSpec},
@@ -239,8 +239,8 @@ async fn run(
     let (finished, following) = watch::channel(false);
     let follower = tokio::spawn(log::follow(store.clone(), config.slack.clone(), following));
     let clock = Arc::new(SystemClock);
-    let web = Arc::new(WebClient::new(
-        config.clone(),
+    let web = Arc::new(crate::slack::web::client(
+        &config,
         store.clone(),
         clock.clone(),
         credentials.user,

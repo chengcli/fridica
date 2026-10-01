@@ -2,18 +2,27 @@ use super::*;
 use crate::{
     config::{loader, LoadContext},
     core::time::{ReplayClock, SequenceIds},
+    slack::{ingress::ENVELOPE_LIMIT, web::WebClient},
     store::Store,
 };
-use std::{collections::VecDeque, sync::Mutex as StdMutex};
+use futures_util::{SinkExt, StreamExt};
+use reqwest::Url;
+use serde_json::{json, Value};
+use std::{collections::VecDeque, sync::Mutex as StdMutex, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-    sync::mpsc,
+    net::{TcpListener, TcpStream},
+    sync::{mpsc, watch},
 };
 use tokio_tungstenite::{
     accept_hdr_async,
-    tungstenite::handshake::server::{Request, Response},
+    tungstenite::{
+        handshake::server::{Request, Response},
+        Message,
+    },
+    WebSocketStream,
 };
+type Result<T> = std::result::Result<T, Failure>;
 
 type ServerSocket = WebSocketStream<TcpStream>;
 struct TicketServer {
@@ -59,9 +68,9 @@ impl TicketServer {
                     .to_string();
                 log.lock().unwrap().push((path.clone(), auth));
                 let value = if path == "/api/auth.test" {
-                    json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"})
+                    json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/"})
                 } else if path.starts_with("/api/conversations.info?") {
-                    json!({"ok":true,"channel":{"id":"CROOM","is_member":true}})
+                    json!({"ok":true,"channel":{"id":"CROOM","created":1,"is_member":true}})
                 } else if path.starts_with("/api/conversations.history?")
                     || path.starts_with("/api/conversations.replies?")
                 {
@@ -154,6 +163,8 @@ struct Harness {
     http: TicketServer,
     ws: WsServer,
     mode: Arc<SocketMode>,
+    receiver: Receiver,
+    web: Arc<WebClient>,
 }
 impl Harness {
     async fn new(options: Options) -> Self {
@@ -192,24 +203,30 @@ path="{}"
         let clock = Arc::new(ReplayClock::new(1000.));
         let http = TicketServer::new().await;
         let ws = WsServer::new().await;
-        let mut web = WebClient::new(
-            config.clone(),
+        let web = crate::slack::web::client(
+            &config,
             store.clone(),
             clock.clone(),
             "xoxp-owner-secret".into(),
             Duration::from_secs(2),
         )
-        .unwrap();
-        web.test_endpoint(http.base.clone());
+        .unwrap()
+        .with_test_endpoints(http.base.clone(), http.base.clone(), http.base.clone());
         let receiver = Receiver::new(
             store.clone(),
             config,
             clock.clone(),
             Arc::new(SequenceIds::default()),
         );
-        let mut mode =
-            SocketMode::new(Arc::new(web), receiver, "xapp-app-secret".into(), options).unwrap();
-        mode.test_origin = Some(ws.url.clone());
+        let web = Arc::new(web);
+        let mode = socket_mode(
+            web.clone(),
+            receiver.clone(),
+            "xapp-app-secret".into(),
+            options,
+        )
+        .unwrap()
+        .with_test_origin(ws.url.clone());
         Self {
             _dir: dir,
             store,
@@ -217,6 +234,8 @@ path="{}"
             http,
             ws,
             mode: Arc::new(mode),
+            receiver,
+            web,
         }
     }
     fn ticket(&self) {
@@ -532,7 +551,6 @@ async fn stop_interrupts_backoff_and_second_run_is_rejected() {
 }
 #[tokio::test]
 async fn ticket_validation_rejects_untrusted_origins_without_attempting_connection() {
-    let h = Harness::new(options()).await;
     for bad in [
         "ws://wss.slack.com/link/?ticket=x",
         "wss://evil.test/link/?ticket=x",
@@ -543,12 +561,16 @@ async fn ticket_validation_rejects_untrusted_origins_without_attempting_connecti
         "wss://wss.slack.com/link/",
         "wss://wss.slack.com/link/?ticket=x\n",
     ] {
-        assert_eq!(h.mode.url(bad), Err(Failure::Configuration), "{bad}");
+        assert_eq!(
+            fridica_slack::socket::ticket_url(bad),
+            Err(Failure::Configuration),
+            "{bad}"
+        );
     }
-    assert!(h
-        .mode
-        .url("wss://wss-primary.slack.com/link/?ticket=x&app_id=A1")
-        .is_ok());
+    assert!(fridica_slack::socket::ticket_url(
+        "wss://wss-primary.slack.com/link/?ticket=x&app_id=A1"
+    )
+    .is_ok());
 }
 
 #[tokio::test]
@@ -730,8 +752,8 @@ async fn service_composes_real_socket_history_and_delivery_across_a_reconnect() 
     };
     let mut h = Harness::new(options()).await;
     h.clock.set(10000.);
-    let receiver = h.mode.receiver.clone();
-    let web = h.mode.web.clone();
+    let receiver = h.receiver.clone();
+    let web = h.web.clone();
     let runtime = Runtime::start(
         h.store.clone(),
         receiver.config.clone(),
@@ -753,9 +775,10 @@ async fn service_composes_real_socket_history_and_delivery_across_a_reconnect() 
         runtime,
         web.clone(),
         move |receiver| {
-            let mut mode = SocketMode::new(web, receiver, "xapp-app-secret".into(), options())?;
-            mode.test_origin = Some(origin);
-            Ok(mode)
+            Ok(
+                socket_mode(web, receiver, "xapp-app-secret".into(), options())?
+                    .with_test_origin(origin),
+            )
         },
         ServiceOptions {
             pass_interval: Duration::from_millis(10),

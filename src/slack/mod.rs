@@ -2,6 +2,7 @@ pub mod catchup;
 pub mod discovery;
 pub mod files;
 pub mod ingress;
+pub mod journal;
 pub mod links;
 pub mod names;
 pub mod outbox;

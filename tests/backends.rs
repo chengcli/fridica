@@ -119,7 +119,9 @@ impl Harness {
                 }),
                 Arc::new(SequenceIds::default()),
                 Options {
-                    eof_wait: Duration::from_millis(200),
+                    // Long enough for a slow CI runner to reap a backend that
+                    // exits shortly after closing its output.
+                    eof_wait: Duration::from_secs(1),
                     close_grace: Duration::from_millis(100),
                     ..Default::default()
                 },

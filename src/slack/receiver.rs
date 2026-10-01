@@ -1,6 +1,6 @@
 //! Durable Socket Mode intake. Call only from an authenticated Slack connection;
 //! this does not authenticate arbitrary HTTP requests or interpret owner controls.
-use super::ingress::{normalize, ENVELOPE_LIMIT};
+use super::ingress::normalize;
 use crate::{
     attention,
     config::Config,
@@ -8,9 +8,10 @@ use crate::{
     store::Store,
 };
 use anyhow::{bail, Result};
+pub use fridica_slack::Acknowledgement;
+use fridica_slack::{socket::Refused, BoxFuture, Intake};
 use rusqlite::params;
-use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -19,10 +20,6 @@ pub struct Receiver {
     pub(crate) config: Arc<Config>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) ids: Arc<dyn Identifiers>,
-}
-#[derive(Debug, Serialize, PartialEq)]
-pub struct Acknowledgement {
-    pub envelope_id: String,
 }
 impl Receiver {
     pub fn new(
@@ -42,26 +39,15 @@ impl Receiver {
     /// Transport loss after commit is safe: a repeated envelope is deduplicated
     /// by event ID and workspace/channel/timestamp, independently of envelope ID.
     pub async fn receive(&self, bytes: &[u8]) -> Result<Option<Acknowledgement>> {
-        if bytes.len() > ENVELOPE_LIMIT {
-            bail!("Slack envelope exceeds size limit");
-        }
-        let mut envelope: Value = serde_json::from_slice(bytes)
-            .map_err(|_| anyhow::anyhow!("invalid Slack envelope JSON"))?;
-        // Legacy verification tokens are authentication material, not event data.
-        if let Some(payload) = envelope.get_mut("payload").and_then(Value::as_object_mut) {
-            payload.remove("token");
-        }
-        let kind = envelope["type"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing Slack envelope type"))?;
+        let fridica_slack::ingress::Envelope {
+            kind,
+            id,
+            value: envelope,
+        } = fridica_slack::ingress::envelope(bytes)?;
+        let kind = kind.as_str();
         if matches!(kind, "hello" | "disconnect") {
             return Ok(None);
         }
-        let id = envelope["envelope_id"]
-            .as_str()
-            .filter(|id| !id.is_empty() && id.len() <= 256)
-            .ok_or_else(|| anyhow::anyhow!("invalid Slack envelope ID"))?
-            .to_owned();
         let payload = &envelope["payload"];
         let scoped = self.scoped(payload);
         let message = (kind == "events_api" && scoped)
@@ -102,10 +88,18 @@ impl Receiver {
         }).await?;
         Ok(Some(Acknowledgement { envelope_id: id }))
     }
-    pub(crate) fn scoped(&self, payload: &Value) -> bool {
+    pub(crate) fn scoped(&self, payload: &serde_json::Value) -> bool {
         payload["team_id"] == self.config.slack.workspace
             && payload["event"]["channel"]
                 .as_str()
                 .is_some_and(|c| self.config.slack.channels.iter().any(|v| v == c))
+    }
+}
+impl Intake for Receiver {
+    fn receive<'a>(
+        &'a self,
+        envelope: &'a [u8],
+    ) -> BoxFuture<'a, std::result::Result<Option<Acknowledgement>, Refused>> {
+        Box::pin(async move { Receiver::receive(self, envelope).await.map_err(|_| Refused) })
     }
 }

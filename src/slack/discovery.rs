@@ -1,100 +1,24 @@
 //! Read-only onboarding, before a valid Config or state database exists.
 //! The only network operations are auth.test and conversations.list.
-use super::web::{self, Failure};
-use crate::{config::loader, core::delivery::AdapterFuture};
+use super::web::Failure;
+use crate::config::loader;
 use anyhow::{bail, Result};
-use reqwest::{
-    header::{HeaderValue, AUTHORIZATION},
-    Client, Url,
-};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum Request {
-    Identity,
-    Channels { private: bool, cursor: String },
-}
-pub trait Api: Send + Sync {
-    fn get(&self, request: Request) -> AdapterFuture<'_, std::result::Result<Value, Failure>>;
-}
-/// No Debug implementation: this adapter owns the user's credential.
-pub struct Web {
-    client: Client,
-    authorization: HeaderValue,
-    base: Url,
-}
+pub use fridica_slack::discovery::{Api, Request};
+/// The onboarding client for a user token.
+pub struct Web;
 impl Web {
-    #[cfg(test)]
-    pub(crate) fn test_endpoint(&mut self, base: Url) {
-        self.base = base;
-    }
-    pub fn new(token: &str) -> Result<Self> {
-        if !token.starts_with("xoxp-")
-            || token.len() < 6
-            || token.bytes().any(|b| !b.is_ascii_graphic())
-        {
-            bail!("set the configured Slack user-token environment variable before detection");
-        }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|_| anyhow::anyhow!("invalid Slack user credential"))?;
-        authorization.set_sensitive(true);
-        let builder = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .referer(false)
-            .timeout(Duration::from_secs(15))
-            .connect_timeout(Duration::from_secs(10));
-        #[cfg(test)]
-        let builder = builder.no_proxy();
-        let client = builder
-            .build()
-            .map_err(|_| anyhow::anyhow!("Slack discovery client unavailable"))?;
-        Ok(Self {
-            client,
-            authorization,
-            base: Url::parse("https://slack.com/api/")?,
-        })
-    }
-}
-impl Api for Web {
-    fn get(&self, request: Request) -> AdapterFuture<'_, std::result::Result<Value, Failure>> {
-        Box::pin(async move {
-            let (method, body) = match request {
-                Request::Identity => ("auth.test", json!({})),
-                Request::Channels { private, cursor } => {
-                    if cursor.len() > 4096 {
-                        return Err(Failure::InvalidResponse);
-                    }
-                    (
-                        "conversations.list",
-                        json!({"types":if private {"private_channel"} else {"public_channel"},"exclude_archived":true,"limit":200,"cursor":cursor}),
-                    )
-                }
-            };
-            let url = self.base.join(method).map_err(|_| Failure::Configuration)?;
-            // Match Slack's discovery protocol: channel listing is GET with
-            // encoded query arguments; auth.test is POST.
-            let request = if method == "auth.test" {
-                self.client.post(url).json(&body)
-            } else {
-                self.client.get(url).query(&body)
-            };
-            let response =
-                web::read(request.header(AUTHORIZATION, self.authorization.clone())).await?;
-            let mut value = web::decode(&response)?;
-            let token = self
-                .authorization
-                .to_str()
-                .unwrap_or("")
-                .strip_prefix("Bearer ")
-                .unwrap_or("");
-            web::redact(&mut value, token);
-            Ok(value)
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(token: &str) -> Result<fridica_slack::discovery::Web> {
+        fridica_slack::discovery::Web::new(token).map_err(|_| {
+            anyhow::anyhow!(
+                "set the configured Slack user-token environment variable before detection"
+            )
         })
     }
 }
