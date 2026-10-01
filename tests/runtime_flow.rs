@@ -96,6 +96,7 @@ struct WorkerScript {
     interrupt_wakes: AtomicBool,
     interruptions: AtomicUsize,
     close_fails: AtomicBool,
+    instructions: Mutex<String>,
 }
 impl Default for WorkerScript {
     fn default() -> Self {
@@ -107,6 +108,7 @@ impl Default for WorkerScript {
             interrupt_wakes: AtomicBool::new(false),
             interruptions: AtomicUsize::new(0),
             close_fails: AtomicBool::new(false),
+            instructions: Mutex::new("Scripted test instructions".into()),
         }
     }
 }
@@ -169,7 +171,7 @@ impl Worker for Fake {
 struct Fakes(Arc<WorkerScript>);
 impl Factory for Fakes {
     fn instructions(&self, _: &Config, _: &WorkerRecord) -> anyhow::Result<String> {
-        Ok("Scripted test instructions".into())
+        Ok(self.0.instructions.lock().unwrap().clone())
     }
     fn create(&self, _: WorkerSpec) -> Result<Arc<dyn Worker>, WorkerFailure> {
         Ok(Arc::new(Fake {
@@ -1038,6 +1040,55 @@ async fn followup_delegation_reuses_worker_placement_and_backend_session() {
         "2"
     );
     assert_eq!(h.worker.calls.lock().unwrap()[1].resume, "backend-1");
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn changed_worker_instructions_start_a_fresh_backend_session() {
+    let h = Harness::new(vec![delegate()], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+    let worker = h.scalar("SELECT id FROM workers").await;
+    let follow_up = |n: u32| {
+        h.parent.responses.lock().unwrap().push_back(
+            json!({"delegations":[{"worker_id":worker,"brief":"Run the followup checks"}]}),
+        );
+        Message {
+            files: vec![],
+            event_id: format!("e{n}"),
+            workspace: "TTEAM".into(),
+            channel: "CROOM".into(),
+            ts: format!("20{n}.1"),
+            thread_ts: Some("100.1".into()),
+            sender: "UALICE".into(),
+            text: "<@UOWNER> follow up".into(),
+            source: "socket".into(),
+            meta: None,
+            attachments: vec![],
+        }
+    };
+    // Unchanged instructions resume; changed ones (e.g. an edited contract) do not.
+    for (n, change, resume) in [(2, false, "backend-1"), (3, true, "")] {
+        if change {
+            *h.worker.instructions.lock().unwrap() = "Work on any repository".into();
+        }
+        h.runtime.intake(follow_up(n)).await.unwrap();
+        assert_eq!(h.runtime.pass().await.unwrap().started, 1);
+        h.finish(1, n as usize).await;
+        h.runtime.pass().await.unwrap();
+        assert_eq!(
+            h.worker.calls.lock().unwrap()[n as usize - 1].resume,
+            resume,
+            "{n}"
+        );
+    }
+    // The fresh session's ID is recorded and resumed while instructions hold.
+    assert_eq!(
+        h.scalar("SELECT backend_session_id FROM workers").await,
+        "backend-1"
+    );
     h.runtime.close().await.unwrap();
 }
 

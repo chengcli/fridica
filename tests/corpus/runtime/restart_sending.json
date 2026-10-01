@@ -731,7 +731,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "35"
+            "value": "37"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -1645,7 +1649,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "59"
+            "value": "61"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -2918,7 +2926,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "61"
+            "value": "63"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -4191,7 +4203,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "61"
+            "value": "63"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -5464,7 +5480,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "61"
+            "value": "63"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -6737,7 +6757,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "61"
+            "value": "63"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],

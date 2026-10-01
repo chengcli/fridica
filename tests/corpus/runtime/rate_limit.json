@@ -795,7 +795,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "33"
+            "value": "35"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -1683,7 +1687,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "55"
+            "value": "57"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -2926,7 +2934,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "70"
+            "value": "72"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -4265,7 +4277,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "70"
+            "value": "72"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
@@ -5604,7 +5620,11 @@
           },
           {
             "key": "durable_generation",
-            "value": "70"
+            "value": "72"
+          },
+          {
+            "key": "worker_instructions:worker-0000000000000004",
+            "value": "febc86309cda517cb18065a78f335e00795df0d249752cdda369e3c7047f1ea3"
           }
         ],
         "notes": [],
