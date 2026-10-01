@@ -239,13 +239,15 @@ async fn run(
     let (finished, following) = watch::channel(false);
     let follower = tokio::spawn(log::follow(store.clone(), config.slack.clone(), following));
     let clock = Arc::new(SystemClock);
-    let web = Arc::new(crate::slack::web::client(
-        &config,
-        store.clone(),
-        clock.clone(),
-        credentials.user,
-        Duration::from_secs(30),
-    )?);
+    let web = Arc::new(crate::slack::web::SlackClient::from(
+        crate::slack::web::client(
+            &config,
+            store.clone(),
+            clock.clone(),
+            credentials.user,
+            Duration::from_secs(30),
+        )?,
+    ));
     let mode = if let Some(host) = host {
         composition::Mode::Active(Box::new(composition::Execution::system(
             &config,

@@ -375,7 +375,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     }
 }
 
-impl<P: Parent + 'static> Runtime<P, crate::slack::web::WebClient> {
+impl<P: Parent + 'static> Runtime<P, crate::slack::web::SlackClient> {
     /// Build the live service with one authenticated client for history and
     /// delivery, and the runtime's receiver for Socket Mode intake.
     pub fn slack_service(
@@ -384,7 +384,7 @@ impl<P: Parent + 'static> Runtime<P, crate::slack::web::WebClient> {
         socket_options: crate::slack::socket::Options,
         options: super::service::Options,
     ) -> Result<
-        super::service::Service<P, crate::slack::web::WebClient, crate::slack::web::WebClient>,
+        super::service::Service<P, crate::slack::web::SlackClient, crate::slack::web::SlackClient>,
         super::service::Failure,
     > {
         let web = self.dispatcher.delivery.clone();
@@ -392,7 +392,8 @@ impl<P: Parent + 'static> Runtime<P, crate::slack::web::WebClient> {
             self,
             web.clone(),
             move |receiver| {
-                crate::slack::socket::socket_mode(web, receiver, app_token, socket_options)
+                let client = Arc::new(crate::slack::web::WebClient::clone(&web));
+                crate::slack::socket::socket_mode(client, receiver, app_token, socket_options)
             },
             options,
         )

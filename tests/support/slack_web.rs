@@ -177,7 +177,7 @@ impl Server {
 struct Harness {
     _dir: tempfile::TempDir,
     server: Server,
-    web: Arc<WebClient>,
+    web: Arc<SlackClient>,
     config: Arc<crate::config::Config>,
     store: Store,
     clock: Arc<ReplayClock>,
@@ -234,7 +234,7 @@ path="{}"
         Self {
             _dir: dir,
             server,
-            web: Arc::new(web),
+            web: Arc::new(SlackClient::from(web)),
             config,
             store,
             clock,
@@ -256,7 +256,7 @@ path="{}"
             .await
             .unwrap()
     }
-    fn dispatcher(&self) -> Dispatcher<WebClient> {
+    fn dispatcher(&self) -> Dispatcher<SlackClient> {
         Dispatcher {
             store: self.store.clone(),
             delivery: self.web.clone(),
