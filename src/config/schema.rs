@@ -2,6 +2,7 @@ use super::{
     registry::{Policy, Registry},
     Attention,
 };
+pub use fridica_core::config::{Limits, Parent, Placement};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -41,94 +42,6 @@ impl Slack {
         self.delegate_channels
             .as_ref()
             .is_none_or(|v| v.iter().any(|s| s == channel))
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Parent {
-    pub backend: String,
-    pub model: String,
-    pub triage_model: String,
-    pub reasoning_effort: String,
-    pub timeout: f64,
-    pub context_chars: usize,
-    pub default_machine: String,
-    pub repos: Option<PathBuf>,
-}
-impl Default for Parent {
-    fn default() -> Self {
-        Self {
-            backend: "claude".into(),
-            model: String::new(),
-            triage_model: String::new(),
-            reasoning_effort: String::new(),
-            timeout: 180.,
-            context_chars: 24000,
-            default_machine: String::new(),
-            repos: None,
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Limits {
-    pub max_delegations_per_turn: usize,
-    pub max_workers_per_thread: usize,
-    pub max_jobs: usize,
-    pub parent_concurrency: usize,
-    pub job_timeout: f64,
-    pub worker_idle: f64,
-    pub session_timeout: f64,
-    pub auto_resume: bool,
-    pub reply_chars: usize,
-    pub report_fast_path: bool,
-}
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            max_delegations_per_turn: 3,
-            max_workers_per_thread: 4,
-            max_jobs: 4,
-            parent_concurrency: 4,
-            job_timeout: 14400.,
-            worker_idle: 1800.,
-            session_timeout: 1209600.,
-            auto_resume: false,
-            reply_chars: 7000,
-            report_fast_path: true,
-        }
-    }
-}
-/// Load-aware placement: probe candidate machines before choosing among them.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Placement {
-    pub probe: bool,
-    /// Seconds a machine reading is reused before probing again.
-    pub probe_ttl: f64,
-    /// Seconds one probe may take, including the SSH connection.
-    pub probe_timeout: f64,
-    /// 1-minute load average per declared CPU at which a machine is saturated.
-    pub max_load: f64,
-    /// GPU utilization percent, or used memory fraction, at which a GPU is in use.
-    pub max_gpu_utilization: f64,
-    pub max_gpu_memory: f64,
-}
-impl Default for Placement {
-    fn default() -> Self {
-        Self {
-            probe: true,
-            probe_ttl: 60.,
-            probe_timeout: 10.,
-            max_load: 1.0,
-            max_gpu_utilization: 90.,
-            max_gpu_memory: 0.9,
-        }
-    }
-}
-impl Placement {
-    pub fn is_default(&self) -> bool {
-        self == &Self::default()
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

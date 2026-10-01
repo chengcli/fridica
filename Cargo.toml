@@ -20,6 +20,7 @@ name = "fridica-overseer"
 path = "src/bin/fridica-overseer.rs"
 
 [dependencies]
+fridica-core = { path = "crates/fridica-core", version = "0.1.0" }
 fridica-agent = "0.1"
 fridica-slack = "0.1"
 anyhow = "1"
@@ -53,3 +54,8 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# fridica-core lives here and changes with Fridica; release.py stamps only the
+# root package, so this table stays after [package].
+[workspace]
+members = ["crates/fridica-core"]

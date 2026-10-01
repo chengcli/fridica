@@ -39,8 +39,10 @@ def sources():
     paths.add(ROOT / "tests/test_candidate_packaging.py")
     paths.update(ROOT.glob("src/**/*.rs"))
     paths.update(ROOT.glob("src/exec/*.py"))
-    paths.update(ROOT.glob("src/workers/*.json"))
-    paths.update(ROOT.glob("src/workers/*.txt"))
+    # Workspace crates (fridica-core) are part of the same build.
+    paths.update(ROOT.glob("crates/*/Cargo.toml"))
+    paths.update(ROOT.glob("crates/*/src/**/*"))
+    paths.update(ROOT.glob("crates/*/tests/**/*.rs"))
     paths.update(ROOT.glob("src/store/migrations/*.sql"))
     paths.update(ROOT.glob("assets/**/*"))
     paths.update(ROOT.glob("packaging/*.py"))

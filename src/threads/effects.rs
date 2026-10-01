@@ -1,8 +1,5 @@
 //! Bounded parent edits to thread memory. No model field grants authority.
-use crate::{
-    config::Config,
-    core::parent::{Decision, ParentRequest, ReplyStatus},
-};
+use crate::core::parent::{Decision, ReplyStatus};
 use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -42,48 +39,6 @@ pub(super) fn validate(decision: &mut Decision) -> Result<()> {
     }
     decision.decisions.retain(|s| !s.is_empty());
     Ok(())
-}
-
-pub(super) fn context(
-    decision: &Decision,
-    request: &ParentRequest,
-    config: Option<&Config>,
-) -> Result<Value> {
-    let context = &decision.context;
-    if !context.machine.is_empty() || !context.workspace.is_empty() {
-        let registry = &config
-            .context("context placement is not configured")?
-            .machines;
-        let target = if context.machine.is_empty() {
-            request.session["context"]["machine"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&registry.default)
-        } else {
-            &context.machine
-        };
-        let machine = registry.get(target).context("unknown context machine")?;
-        if !context.workspace.is_empty() && machine.workspace(&context.workspace).is_none() {
-            bail!("context workspace is not on the selected machine");
-        }
-        // A machine-only update must not retain an invalid workspace on the new
-        // machine. The parent can repair the pair explicitly.
-        let workspace = request.session["context"]["workspace"]
-            .as_str()
-            .unwrap_or("");
-        if context.workspace.is_empty()
-            && !workspace.is_empty()
-            && machine.workspace(workspace).is_none()
-        {
-            bail!("context machine change needs a valid workspace");
-        }
-    }
-    let mut patch = serde_json::to_value(context)?;
-    patch
-        .as_object_mut()
-        .unwrap()
-        .retain(|_, v| v.as_str().is_some_and(|s| !s.is_empty()));
-    Ok(patch)
 }
 
 pub(super) fn notes(c: &Connection, session: &str) -> Result<(i64, Value)> {

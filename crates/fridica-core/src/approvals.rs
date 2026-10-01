@@ -1,7 +1,7 @@
 //! Automatic command rules do not parse or execute shell input.
 use crate::{
     config::registry::Policy,
-    core::worker::{ApprovalDecision, ApprovalRequest},
+    worker::{ApprovalDecision, ApprovalRequest},
 };
 fn matches(command: &str, prefix: &str) -> bool {
     command == prefix

@@ -1,4 +1,6 @@
-use super::delivery::AdapterFuture;
+pub mod context;
+pub mod schema;
+use crate::delivery::AdapterFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

@@ -753,7 +753,10 @@ async fn service_composes_real_socket_history_and_delivery_across_a_reconnect() 
     let mut h = Harness::new(options()).await;
     h.clock.set(10000.);
     let receiver = h.receiver.clone();
-    let web = h.web.clone();
+    let web = Arc::new(crate::slack::web::SlackClient::from(WebClient::clone(
+        &h.web,
+    )));
+    let socket_web = h.web.clone();
     let runtime = Runtime::start(
         h.store.clone(),
         receiver.config.clone(),
@@ -776,7 +779,7 @@ async fn service_composes_real_socket_history_and_delivery_across_a_reconnect() 
         web.clone(),
         move |receiver| {
             Ok(
-                socket_mode(web, receiver, "xapp-app-secret".into(), options())?
+                socket_mode(socket_web, receiver, "xapp-app-secret".into(), options())?
                     .with_test_origin(origin),
             )
         },

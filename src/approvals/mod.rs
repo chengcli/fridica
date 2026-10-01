@@ -1,6 +1,5 @@
 //! Owner approval service. Authentication belongs to the calling control adapter;
 //! its authority is explicit and never taken from model/request JSON.
-pub mod rules;
 use crate::{
     config::Config,
     core::{
@@ -16,6 +15,7 @@ use crate::{
     workers::protocol::ApprovalHandler,
 };
 use anyhow::{bail, Result};
+pub use fridica_core::approvals as rules;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, Semaphore};
 

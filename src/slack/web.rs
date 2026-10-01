@@ -11,9 +11,46 @@ use crate::{
     store::Store,
 };
 pub use fridica_slack::web::{Failure, Identity, Post, Upload, WebClient};
-use fridica_slack::Scope;
+use fridica_slack::{
+    files::{Download, Downloader, Failure as FileFailure},
+    history::{History, HistoryFailure, PageRequest},
+    links::{Entry, Failure as LinkFailure, Link, Reader},
+    BoxFuture, Scope,
+};
 use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
+use std::{ops::Deref, sync::Arc, time::Duration};
+
+/// The owner's Slack client as Fridica's adapter: delivery for the outbox,
+/// history for catch-up, and links and files for parent context. A clone
+/// shares the client's validation state.
+#[derive(Clone)]
+pub struct SlackClient(WebClient);
+impl From<WebClient> for SlackClient {
+    fn from(web: WebClient) -> Self {
+        Self(web)
+    }
+}
+impl Deref for SlackClient {
+    type Target = WebClient;
+    fn deref(&self) -> &WebClient {
+        &self.0
+    }
+}
+impl History for SlackClient {
+    fn page(&self, request: PageRequest) -> BoxFuture<'_, Result<Value, HistoryFailure>> {
+        self.0.page(request)
+    }
+}
+impl Reader for SlackClient {
+    fn fetch(&self, link: Link) -> BoxFuture<'_, Result<Vec<Entry>, LinkFailure>> {
+        self.0.fetch(link)
+    }
+}
+impl Downloader for SlackClient {
+    fn download(&self, url: String, html: bool) -> BoxFuture<'_, Result<Download, FileFailure>> {
+        self.0.download(url, html)
+    }
+}
 
 /// The owner, workspace and channels a client for `config` may use.
 pub fn scope(config: &Config) -> Scope {
@@ -105,7 +142,7 @@ async fn deliver(web: &WebClient, claim: ClaimedPost) -> Result<String, Failure>
     .await
 }
 /// Ambiguous outcomes are never retried: the post may already be in Slack.
-impl Delivery for WebClient {
+impl Delivery for SlackClient {
     fn send(&self, post: ClaimedPost) -> AdapterFuture<'_, DeliveryOutcome> {
         Box::pin(async move {
             match deliver(self, post).await {
