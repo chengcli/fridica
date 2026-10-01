@@ -354,6 +354,9 @@ impl<P: Parent> Actor<P> {
                     break;
                 }
                 Err(error) => {
+                    // Kept with the call, so both the decide and the repair
+                    // errors are in parent_turns.
+                    calls.last_mut().unwrap()["validation_error"] = json!(error.to_string());
                     request.previous = Some(raw);
                     request.errors = vec![error.to_string()];
                     if round == 1 {
@@ -639,7 +642,16 @@ async fn commit(
         let result_stale=if is_result {super::results::load(&tx,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
         let notes_changed=super::effects::notes(&tx,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
         let controls_current=crate::store::worker_controls::current_tx(&tx,&request,&decision.worker_control)?;
-        if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed || !controls_current {
+        // A message that arrived while the parent was deciding (not one of our
+        // own echoes) makes the turn stale once, so it reruns and sees it.
+        let seen=request.history.iter().chain(std::iter::once(&request.trigger["message"]))
+            .filter_map(|m| m["ts"].as_str()?.parse::<f64>().ok()).fold(f64::NEG_INFINITY,f64::max);
+        let arrived:bool=seen.is_finite() && tx.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE workspace||':'||channel||':'||root_ts=? AND CAST(ts AS REAL)>? AND NOT (sender=? AND meta_json IS NOT NULL))",params![session,seen,owner],|r|r.get(0))?;
+        let reread:bool=tx.query_row("SELECT COALESCE(json_extract(payload_json,'$.reread'),0) FROM thread_inbox WHERE id=?",[id],|r|r.get(0))?;
+        if arrived && !reread {
+            tx.execute("UPDATE thread_inbox SET payload_json=json_set(payload_json,'$.reread',1) WHERE id=?",[id])?;
+        }
+        if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed || !controls_current || (arrived && !reread) {
             tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
             tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
             tx.commit()?;return Ok(Step::Stale);
@@ -667,7 +679,15 @@ async fn commit(
                 let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
                     thread_ts:request.session["root_ts"].as_str().context("missing root timestamp")?.into(),text:reply.text.clone(),obligations:reply.answers.clone(),inbox:id};
                 let post=attention::queue_answer_tx(&tx,&answer,now)?;
-                let meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":"","v":2});
+                // A report names the worker(s) it reports on, failed ones first.
+                let worker=if is_result {
+                    let results=request.trigger["results"].as_array().cloned().unwrap_or_default();
+                    let failed=|r:&Value| r["job_status"]!="done" || r["result"]["status"]=="failed";
+                    let mut ids:Vec<&str>=results.iter().filter(|r|failed(r)).chain(results.iter().filter(|r|!failed(r))).filter_map(|r|r["worker_id"].as_str()).collect();
+                    ids.dedup();
+                    ids.join(",").chars().take(64).collect::<String>()
+                } else {String::new()};
+                let meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":worker,"v":2});
                 tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).unwrap_or(""),post])?;
                 if is_result {tx.execute("UPDATE outbox SET kind='report' WHERE id=?",[post])?;}
                 super::results::attachments(&tx, &request, reply, &session, id, now)?;
@@ -711,10 +731,18 @@ async fn commit(
         }
         for call in calls {
             let error=call["settlement_error"].as_str().unwrap_or("");
+            let mut context=call["request"].clone();
+            if let Some(validation)=call.get("validation_error") {context["validation_error"]=validation.clone();}
             tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,?,?,?,?,?)",
-                params![session,id,call["request"]["call"].as_str(),serde_json::to_string(&decision)?,call["response"].to_string(),call["request"].to_string(),error,call["created"].as_f64()])?;
+                params![session,id,call["request"]["call"].as_str(),serde_json::to_string(&decision)?,call["response"].to_string(),context.to_string(),error,call["created"].as_f64()])?;
             if !error.is_empty() {
                 tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.blocked',?,?)",params![now,session,json!({"inbox_id":id,"reason":error}).to_string()])?;
+            }
+            // Nothing was posted: the owner is asked to review instead.
+            if error=="parent_invalid_after_repair" {
+                let key=format!("parent-invalid:{id}");
+                tx.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'signal',?,?,'The parent action stayed invalid after repair; owner review required',?,?,?)",
+                    params![key,session,key,json!({"inbox_id":id,"error":call["validation_error"]}).to_string(),now,now,now])?;
             }
         }
         tx.execute("UPDATE threads SET status=?,turns=CASE WHEN EXISTS(SELECT 1 FROM outbox WHERE idem_key=?) THEN MAX(turns,?) ELSE turns END,

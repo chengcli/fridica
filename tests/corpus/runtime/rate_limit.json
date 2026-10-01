@@ -540,7 +540,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "session_id": "TTEAM:CROOM:100.1",
             "text": "Checks passed.",
@@ -1773,7 +1773,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "retry_at": 0.0,
             "retry_base": 0,
@@ -2914,7 +2914,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "received_at": 51.0,
             "root_ts": "100.1",
@@ -3020,7 +3020,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "retry_at": 0.0,
             "retry_base": 0,
@@ -3999,7 +3999,7 @@
                   "status": "complete",
                   "turn": 1,
                   "v": 2,
-                  "worker": ""
+                  "worker": "worker-0000000000000004"
                 },
                 "session_id": "TTEAM:CROOM:100.1",
                 "text": "Checks passed.",
@@ -4257,7 +4257,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "received_at": 51.0,
             "root_ts": "100.1",
@@ -4363,7 +4363,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "retry_at": 0.0,
             "retry_base": 0,
@@ -5342,7 +5342,7 @@
                   "status": "complete",
                   "turn": 1,
                   "v": 2,
-                  "worker": ""
+                  "worker": "worker-0000000000000004"
                 },
                 "session_id": "TTEAM:CROOM:100.1",
                 "text": "Checks passed.",
@@ -5600,7 +5600,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "received_at": 51.0,
             "root_ts": "100.1",
@@ -5706,7 +5706,7 @@
               "status": "complete",
               "turn": 1,
               "v": 2,
-              "worker": ""
+              "worker": "worker-0000000000000004"
             },
             "retry_at": 0.0,
             "retry_base": 0,
@@ -6685,7 +6685,7 @@
                   "status": "complete",
                   "turn": 1,
                   "v": 2,
-                  "worker": ""
+                  "worker": "worker-0000000000000004"
                 },
                 "session_id": "TTEAM:CROOM:100.1",
                 "text": "Checks passed.",

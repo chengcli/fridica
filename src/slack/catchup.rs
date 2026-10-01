@@ -78,7 +78,7 @@ impl<H: History> Catchup<H> {
         let mut progress = Progress::default();
         for channel in &self.receiver.config.slack.channels {
             let start = self.start(channel, window, now, started_at).await?;
-            let (payloads, complete) = self.recent(channel, &start).await?;
+            let (payloads, complete, gaps) = self.recent(channel, &start).await?;
             let mut prepared = vec![];
             let mut dropped = vec![];
             let mut first_read = now;
@@ -108,6 +108,12 @@ impl<H: History> Catchup<H> {
                 let mut added = 0;
                 for (message,id) in prepared {
                     if attention::intake_tx(&tx,message,&config.owner.slack_user,now,config.attention.mention_grace,&id,Some(now-DAY))?.is_some() { added+=1; }
+                }
+                // A root Slack refuses (e.g. deleted) is skipped, once per root,
+                // so it cannot stall the watermark.
+                for (root, code) in gaps {
+                    let detail = json!({"workspace":config.slack.workspace,"channel":channel,"root":root,"code":code});
+                    tx.execute("INSERT INTO health_events(kind,details_json,created) SELECT 'slack_catchup_skipped_thread',?,? WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='slack_catchup_skipped_thread' AND json_extract(details_json,'$.channel')=? AND json_extract(details_json,'$.root')=?)",params![detail.to_string(),now,channel,root])?;
                 }
                 for detail in dropped {
                     tx.execute("INSERT INTO health_events(kind,details_json,created) SELECT 'slack_dropped_mention',?,? WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='slack_dropped_mention' AND json_extract(details_json,'$.event_id')=?)",params![detail.to_string(),now,detail["event_id"].as_str()])?;
@@ -162,9 +168,16 @@ impl<H: History> Catchup<H> {
             Ok(Start {oldest,roots,mark})
         }).await
     }
-    async fn recent(&self, channel: &str, start: &Start) -> Result<(Vec<Value>, bool)> {
+    /// Messages since `start`, whether every page was read, and the thread
+    /// roots Slack refused (root, error code).
+    async fn recent(
+        &self,
+        channel: &str,
+        start: &Start,
+    ) -> Result<(Vec<Value>, bool, Vec<(String, String)>)> {
         let mut size = 0;
-        let (items, mut complete) = self.pages(channel, start.oldest, None, &mut size).await?;
+        let mut gaps = vec![];
+        let (items, mut complete, _) = self.pages(channel, start.oldest, None, &mut size).await?;
         let mut found: BTreeMap<String, Value> = items
             .into_iter()
             .filter_map(|v| Some((v["ts"].as_str()?.into(), v)))
@@ -180,10 +193,13 @@ impl<H: History> Catchup<H> {
             if !timestamp(&root) {
                 continue;
             }
-            let (items, whole) = self
+            let (items, whole, refused) = self
                 .pages(channel, start.oldest, Some(root.clone()), &mut size)
                 .await?;
             complete &= whole;
+            if let Some(code) = refused {
+                gaps.push((root.clone(), code));
+            }
             for item in items {
                 let ts = item["ts"]
                     .as_str()
@@ -203,7 +219,7 @@ impl<H: History> Catchup<H> {
             item["channel"] = json!(channel);
             payloads.push(json!({"type":"event_callback","event_id":format!("catchup:{channel}:{ts}"),"team_id":self.receiver.config.slack.workspace,"event":item}));
         }
-        Ok((payloads, complete))
+        Ok((payloads, complete, gaps))
     }
     async fn pages(
         &self,
@@ -211,7 +227,7 @@ impl<H: History> Catchup<H> {
         oldest: f64,
         root: Option<String>,
         size: &mut usize,
-    ) -> Result<(Vec<Value>, bool)> {
+    ) -> Result<(Vec<Value>, bool, Option<String>)> {
         let mut items = vec![];
         let mut cursor = None;
         for _ in 0..PAGES {
@@ -228,7 +244,13 @@ impl<H: History> Catchup<H> {
                 limit: 200,
                 include_all_metadata: true,
             };
-            let response = self.page(request).await?;
+            let response = match self.page(request).await? {
+                Ok(response) => response,
+                // One refused thread (deleted, or otherwise unreadable) is a gap
+                // in that thread only; a refused channel history fails the pass.
+                Err(code) if root.is_some() => return Ok((items, true, Some(code))),
+                Err(code) => bail!("Slack history rejected request ({code}); watermark unchanged"),
+            };
             *size += serde_json::to_vec(&response)?.len();
             if *size > CORPUS_LIMIT {
                 bail!("catch-up response budget exceeded; watermark unchanged");
@@ -250,12 +272,14 @@ impl<H: History> Catchup<H> {
             };
             if cursor.is_none() {
                 // A has_more response without its cursor cannot certify a full pass.
-                return Ok((items, response["has_more"] != true));
+                return Ok((items, response["has_more"] != true, None));
             }
         }
-        Ok((items, false))
+        Ok((items, false, None))
     }
-    async fn page(&self, request: PageRequest) -> Result<Value> {
+    /// One recorded page: Slack's response, or the error code of a refusal.
+    /// Timeouts, transport and recording failures are errors.
+    async fn page(&self, request: PageRequest) -> Result<std::result::Result<Value, String>> {
         let now = self.receiver.clock.now();
         let record = serde_json::to_string(&request)?;
         let call=self.receiver.store.call(move |c| {
@@ -281,10 +305,15 @@ impl<H: History> Catchup<H> {
             tx.execute("UPDATE replay_events SET complete=? WHERE seq=?",params![complete,call])?;
             tx.commit()?; Ok(())
         }).await?;
-        let response = result.map_err(anyhow::Error::new)?;
+        let response = match result {
+            Ok(response) => response,
+            Err(HistoryFailure::Rejected { code }) => return Ok(Err(code)),
+            Err(error) => return Err(anyhow::Error::new(error)),
+        };
         if response["ok"] != true {
-            bail!("Slack history rejected request; watermark unchanged");
+            let code = response["error"].as_str().unwrap_or("rejected");
+            return Ok(Err(code.chars().take(64).collect()));
         }
-        Ok(response)
+        Ok(Ok(response))
     }
 }

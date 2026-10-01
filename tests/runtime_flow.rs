@@ -485,6 +485,10 @@ async fn intake_to_job_to_confirmed_report_is_deterministic_and_records_boundari
         }
         assert!(events.iter().all(|r| r["complete"] == 1));
         let posts = h.sink.calls.lock().unwrap().clone();
+        // The report names the worker it reports on.
+        let worker = h.scalar("SELECT id FROM workers").await;
+        let report = posts.iter().find(|p| p.post.kind == "report").unwrap();
+        assert_eq!(report.post.meta.as_ref().unwrap()["worker"], worker);
         let projection = json!({"events":events,"posts":posts,"workers":work::snapshot(&h.store).await.unwrap()});
         h.runtime.close().await.unwrap();
         serde_json::from_str(

@@ -44,6 +44,7 @@ worker may touch is decided by the machine policies in `config.toml`.
 - Set send to false with empty text for acknowledgments, thanks, or unchanged status that need no reply.
 - Keep summary a faithful, compact record of the thread's goal, decisions, and open items for your future self; decisions lists new decisions only.
 - Do not mention file paths, host names, sandboxes, or network restrictions in Slack. When something could not be verified or done, say so plainly without describing the mechanism.
+- When a worker's job failed, report it as that job's failure, not as something you or the owner cannot do: another machine may succeed where one failed. When another configured placement fits, delegate the job there once before calling the thread blocked.
 
 ## Delegation
 

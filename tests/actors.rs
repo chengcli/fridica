@@ -1150,3 +1150,70 @@ async fn unicode_case_equivalent_answers_are_suppressed_and_delivery_is_rechecke
         "previous reply definitely failed"
     );
 }
+
+/// Posts a plain message into the thread during its first call.
+struct ArrivingParent {
+    store: Store,
+    requests: Mutex<Vec<ParentRequest>>,
+}
+impl Parent for ArrivingParent {
+    fn decide(&self, r: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>> {
+        Box::pin(async move {
+            let first = self.requests.lock().unwrap().is_empty();
+            self.requests.lock().unwrap().push(r);
+            if first {
+                attention::intake(
+                    &self.store,
+                    Message {
+                        files: vec![],
+                        event_id: "e-late".into(),
+                        workspace: "TTEAM".into(),
+                        channel: "CROOM".into(),
+                        ts: "100.5".into(),
+                        thread_ts: Some("100.1".into()),
+                        sender: "UBOB".into(),
+                        text: "Here is the text you asked for".into(),
+                        source: "socket".into(),
+                        meta: None,
+                        attachments: vec![],
+                    },
+                    "UOWNER".into(),
+                    15.,
+                    900.,
+                    "o-late".into(),
+                )
+                .await
+                .unwrap();
+            }
+            Ok(json!({"reply":{"text":"Thanks, read it","status":"complete","answers":["o1"]}}))
+        })
+    }
+}
+#[tokio::test]
+async fn a_message_arriving_during_the_turn_reruns_it_once_with_the_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    intake(&s, 1).await;
+    let parent = Arc::new(ArrivingParent {
+        store: s.clone(),
+        requests: Mutex::new(vec![]),
+    });
+    let a = actor(&s, parent.clone());
+    // The first decision is stale: it never saw the message that arrived.
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Stale);
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    let requests = parent.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1]
+        .history
+        .iter()
+        .any(|m| m["text"] == "Here is the text you asked for"));
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "1"
+    );
+}

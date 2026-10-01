@@ -1482,7 +1482,7 @@ fn decision_schema_allows_only_known_workers_and_granted_fetches() {
         {"id":"w1","session_id":"T:C:1","status":"idle"},
         {"id":"w2","session_id":"T:C:1","status":"stopped"},
         {"id":"w3","session_id":"T:C:2","status":"idle"}]},
-        "machines":[{"name":"a","fetch_repos":{"src":["chengcli/snapy"]}},
+        "machines":[{"name":"a","tags":["gpu","cuda"],"fetch_repos":{"src":["chengcli/snapy"]}},
                     {"name":"b","fetch_repos":{}},{"name":"c","fetch_repos":{"x":["chengcli/snapy","o/r"]}}]});
     let schema = parent::schema::decision(&parent::schema::Choices::from_session(&session));
     let delegation = &schema["properties"]["delegations"]["items"]["properties"];
@@ -1490,6 +1490,11 @@ fn decision_schema_allows_only_known_workers_and_granted_fetches() {
     assert_eq!(
         delegation["fetch_repo"]["enum"],
         json!(["", "chengcli/snapy", "o/r"])
+    );
+    // Selector tags are limited to tags some machine has.
+    assert_eq!(
+        delegation["tags"]["items"]["enum"],
+        json!(["", "cuda", "gpu"])
     );
     let control = &schema["properties"]["worker_control"]["items"]["properties"];
     assert_eq!(control["worker_id"]["enum"], json!(["", "w1", "w2"]));

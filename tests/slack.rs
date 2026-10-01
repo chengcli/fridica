@@ -604,3 +604,102 @@ async fn unsupported_caught_up_mentions_are_visible_without_repeating_health_eve
     assert_eq!(h.count("messages").await, 0);
     assert_eq!(h.count("health_events").await, 1);
 }
+
+#[tokio::test]
+async fn a_deleted_thread_root_is_skipped_and_the_watermark_still_advances() {
+    let h = Harness::new().await;
+    h.clock.set(1000.);
+    let fake = Arc::new(FakeHistory::default());
+    let message = |ts: &str, text: &str| json!({"ts":ts,"user":"UALICE","text":text});
+    let root = |ts: &str| json!({"ts":ts,"user":"UALICE","text":"root","reply_count":1});
+    let replies = |root: &str, ts: &str| {
+        Ok(
+            json!({"ok":true,"messages":[message(root,"root"),{"ts":ts,"user":"UALICE","text":"reply","thread_ts":root}]}),
+        )
+    };
+    let pass = || {
+        vec![
+            Ok(json!({"ok":true,"messages":[root("990.1"),root("995.1"),root("998.1")]})),
+            replies("990.1", "991.1"),
+            // Root 995.1 was deleted in Slack.
+            Err(HistoryFailure::Rejected {
+                code: "thread_not_found".into(),
+            }),
+            replies("998.1", "999.1"),
+        ]
+    };
+    *fake.responses.lock().unwrap() = pass().into();
+    let service = Catchup::new(h.receiver.clone(), fake.clone(), Duration::from_secs(1)).unwrap();
+    let progress = service.run(3600., None).await.unwrap();
+    assert!(progress.incomplete_channels.is_empty());
+    // The other roots' replies are read; the watermark advances to this pass.
+    let texts: Vec<String> = h
+        .store
+        .call(|c| {
+            Ok(c.prepare("SELECT ts FROM messages ORDER BY ts")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(texts, ["990.1", "991.1", "995.1", "998.1", "999.1"]);
+    let mark: f64 = h
+        .store
+        .call(|c| {
+            Ok(c.query_row(
+                "SELECT last_complete_pass FROM channel_watermarks",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(mark, 1000.);
+    let skipped = || async {
+        h.store
+            .call(|c| {
+                Ok(c.prepare("SELECT details_json FROM health_events WHERE kind='slack_catchup_skipped_thread'")?
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap()
+    };
+    let rows = skipped().await;
+    assert_eq!(rows.len(), 1);
+    let row: Value = serde_json::from_str(&rows[0]).unwrap();
+    assert_eq!(
+        (row["root"].as_str(), row["code"].as_str()),
+        (Some("995.1"), Some("thread_not_found"))
+    );
+    // The next pass meets the same root: still complete, recorded once.
+    h.clock.set(1300.);
+    *fake.responses.lock().unwrap() = pass().into();
+    assert!(service
+        .run(3600., None)
+        .await
+        .unwrap()
+        .incomplete_channels
+        .is_empty());
+    assert_eq!(skipped().await.len(), 1);
+    // A refused channel history still fails the pass and leaves the watermark.
+    h.clock.set(1600.);
+    *fake.responses.lock().unwrap() = vec![Err(HistoryFailure::Rejected {
+        code: "channel_not_found".into(),
+    })]
+    .into();
+    let error = service.run(3600., None).await.unwrap_err().to_string();
+    assert!(error.contains("channel_not_found"), "{error}");
+    let mark: f64 = h
+        .store
+        .call(|c| {
+            Ok(c.query_row(
+                "SELECT last_complete_pass FROM channel_watermarks",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(mark, 1300.);
+}
