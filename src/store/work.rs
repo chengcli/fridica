@@ -63,9 +63,27 @@ pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Va
         .collect::<std::result::Result<_, _>>()?;
     let busy: BTreeMap<String,i64> = c.prepare("SELECT w.machine,count(*) FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.status IN ('queued','running') GROUP BY w.machine")?
         .query_map([], |r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-    Ok(
-        json!({"workers":workers,"busy":busy,"jobs":super::worker_controls::jobs_tx(c,session)?,"controls":super::worker_controls::recent_tx(c,session)?}),
-    )
+    let mut context = json!({"workers":workers,"busy":busy,"jobs":super::worker_controls::jobs_tx(c,session)?,"controls":super::worker_controls::recent_tx(c,session)?});
+    let elsewhere = elsewhere_tx(c, session)?;
+    if !elsewhere.is_empty() {
+        context["elsewhere"] = json!(elsewhere);
+    }
+    Ok(context)
+}
+/// The latest jobs of other threads in the same channel, so a parent can cite
+/// or wait for work already running or done instead of starting it again.
+/// Other channels are left out: their work may be private to them.
+fn elsewhere_tx(c: &Connection, session: &str) -> Result<Vec<serde_json::Value>> {
+    let Some((channel, _)) = session.rsplit_once(':') else {
+        return Ok(vec![]);
+    };
+    let prefix = format!("{channel}:");
+    let rows: Vec<String> = c.prepare("SELECT json_object('thread',session_id,'brief',substr(brief,1,300),'status',status,
+            'summary',COALESCE(substr(json_extract(result_json,'$.summary'),1,300),''),'queued_at',queued_at)
+        FROM jobs WHERE substr(session_id,1,length(?1))=?1 AND session_id!=?2 ORDER BY queued_at DESC,rowid DESC LIMIT 10")?
+        .query_map(params![prefix, session], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    rows.iter().map(|r| Ok(serde_json::from_str(r)?)).collect()
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
