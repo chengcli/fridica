@@ -9,4 +9,4 @@ Provisions 01 to 03 take precedence over this one.
    SIGN-OFF #<PR> <sha> approve (code review)
    SIGN-OFF #<PR> <sha> changes
    ```
-   The next line gives the reason for `changes`, or for `approve (code review)` (no build) the runtime evidence relied on. "Looks good" or "I recommend approving" is not a sign-off. A sign-off rests on your own line-by-line reading of that head. One per (PR, sha); any push resets every sign-off.
+   When you are asked to review a PR, the first line of your reply is that sign-off line. The next line gives the reason for `changes`, or for `approve (code review)` (no build) the runtime evidence relied on. "Looks good" or "I recommend approving" is not a sign-off. A sign-off rests on your own line-by-line reading of that head. One per (PR, sha); any push resets every sign-off.

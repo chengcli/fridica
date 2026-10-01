@@ -147,6 +147,14 @@ fn shared_provisions_lead_every_parent_call_and_worker_prompt_in_order() {
         .collect();
     assert!(positions.windows(2).all(|w| w[0] < w[1]), "{positions:?}");
     assert!(shared.contains("lower-numbered one wins"));
+    // The public index links every provision, so one URL reaches them all.
+    let index = include_str!("../assets/provisions/README.md");
+    for (name, _) in provisions::FILES {
+        assert!(
+            index.contains(&format!("/assets/provisions/{name})")),
+            "{name}"
+        );
+    }
     // An owner contract that says nothing about these provisions still gets them.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("owner.md");
@@ -180,5 +188,9 @@ fn shared_provisions_lead_every_parent_call_and_worker_prompt_in_order() {
         let (prompt, _, _) = fridica::parent::prompts::build(&config, &request).unwrap();
         assert!(prompt.starts_with(&shared), "{call}");
         assert!(prompt.contains("SIGN-OFF #<PR> <sha> approve"), "{call}");
+        assert!(
+            prompt.contains("the first line of your reply is that sign-off line"),
+            "{call}"
+        );
     }
 }
