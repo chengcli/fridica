@@ -55,6 +55,3 @@ unsafe_code = "forbid"
 # root package, so this table stays after [package].
 [workspace]
 members = ["crates/fridica-core"]
-
-[patch.crates-io]
-fridica-slack = { path = "../fridica-slack" }
