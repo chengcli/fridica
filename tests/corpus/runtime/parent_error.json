@@ -116,51 +116,6 @@
         }
       },
       "seq": 2
-    },
-    {
-      "at": 20.0,
-      "kind": "call",
-      "payload": {
-        "arguments": {
-          "attempt": 1,
-          "id": 1,
-          "post": {
-            "after": "",
-            "blob": null,
-            "channel": "CROOM",
-            "filename": "",
-            "idem_key": "1:reply",
-            "kind": "reply",
-            "meta": {
-              "kind": "reply",
-              "owner": "UOWNER",
-              "session": "TTEAM:CROOM:100.1",
-              "status": "blocked",
-              "turn": 1,
-              "v": 2,
-              "worker": ""
-            },
-            "session_id": "TTEAM:CROOM:100.1",
-            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-            "thread_ts": "100.1"
-          }
-        },
-        "id": 2,
-        "operation": "delivery.send"
-      },
-      "seq": 3
-    },
-    {
-      "at": 20.0,
-      "kind": "result",
-      "payload": {
-        "id": 2,
-        "value": {
-          "outcome": "sent",
-          "reference": "200.1"
-        }
-      },
-      "seq": 4
     }
   ],
   "scenario": "parent_error",
@@ -349,8 +304,10 @@
             "action": "parent.blocked",
             "actor": "system",
             "details_json": {
+              "failure": "script_exhausted",
               "inbox_id": 1,
-              "reason": "parent_unavailable"
+              "reason": "parent_unavailable",
+              "validation_error": null
             },
             "id": 2,
             "target": "TTEAM:CROOM:100.1",
@@ -381,32 +338,6 @@
             "ts": "100.1",
             "verdict": "respond: addressed",
             "workspace": "TTEAM"
-          },
-          {
-            "attachments_json": [],
-            "channel": "CROOM",
-            "event_id": "self:CROOM:200.1",
-            "files_json": [],
-            "id": 2,
-            "mentions_owner": 0,
-            "meta_json": {
-              "kind": "reply",
-              "owner": "UOWNER",
-              "session": "TTEAM:CROOM:100.1",
-              "status": "blocked",
-              "turn": 1,
-              "v": 2,
-              "worker": ""
-            },
-            "received_at": 20.0,
-            "root_ts": "100.1",
-            "sender": "UOWNER",
-            "source": "self",
-            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-            "thread_ts": "100.1",
-            "ts": "200.1",
-            "verdict": "",
-            "workspace": "TTEAM"
           }
         ],
         "meta": [
@@ -416,7 +347,7 @@
           },
           {
             "key": "durable_generation",
-            "value": "33"
+            "value": "22"
           }
         ],
         "notes": [
@@ -424,7 +355,6 @@
             "actor": "parent",
             "created": 20.0,
             "data_json": {
-              "assignee": "",
               "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
               "next_step": "Owner review before retrying"
             },
@@ -452,40 +382,7 @@
             "updated": 20.0
           }
         ],
-        "outbox": [
-          {
-            "after": "",
-            "answers_json": [],
-            "attempts": 1,
-            "blob": null,
-            "channel": "CROOM",
-            "created": 20.0,
-            "delivered_at": 20.0,
-            "error": "",
-            "filename": "",
-            "id": 1,
-            "idem_key": "1:reply",
-            "kind": "reply",
-            "meta_json": {
-              "kind": "reply",
-              "owner": "UOWNER",
-              "session": "TTEAM:CROOM:100.1",
-              "status": "blocked",
-              "turn": 1,
-              "v": 2,
-              "worker": ""
-            },
-            "retry_at": 0.0,
-            "retry_base": 0,
-            "sent_ts": "200.1",
-            "session_id": "TTEAM:CROOM:100.1",
-            "state": "sent",
-            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-            "thread_ts": "100.1",
-            "trigger_class": "human",
-            "trigger_event": "e1"
-          }
-        ],
+        "outbox": [],
         "overseer_exchanges": [],
         "parent_turns": [
           {
@@ -512,7 +409,7 @@
                 "answers": [],
                 "details": "",
                 "discussion": "ongoing",
-                "send": true,
+                "send": false,
                 "status": "blocked",
                 "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
               },
@@ -524,6 +421,7 @@
             "context_json": {
               "call": "decide",
               "errors": [],
+              "failure": "script_exhausted",
               "github_state": [],
               "history": [
                 {
@@ -816,7 +714,7 @@
                   "answers": [],
                   "details": "",
                   "discussion": "ongoing",
-                  "send": true,
+                  "send": false,
                   "status": "blocked",
                   "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
                 },
@@ -929,64 +827,16 @@
             },
             "seq": 5,
             "time": 20.0
-          },
-          {
-            "complete": 1,
-            "kind": "delivery_call",
-            "payload_json": {
-              "attempt": 1,
-              "id": 1,
-              "post": {
-                "after": "",
-                "blob": null,
-                "channel": "CROOM",
-                "filename": "",
-                "idem_key": "1:reply",
-                "kind": "reply",
-                "meta": {
-                  "kind": "reply",
-                  "owner": "UOWNER",
-                  "session": "TTEAM:CROOM:100.1",
-                  "status": "blocked",
-                  "turn": 1,
-                  "v": 2,
-                  "worker": ""
-                },
-                "session_id": "TTEAM:CROOM:100.1",
-                "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-                "thread_ts": "100.1"
-              }
-            },
-            "seq": 6,
-            "time": 20.0
-          },
-          {
-            "complete": 1,
-            "kind": "delivery",
-            "payload_json": {
-              "attempt": 1,
-              "outbox_id": 1,
-              "raw_result": {
-                "outcome": "sent",
-                "reference": "200.1"
-              },
-              "result": {
-                "outcome": "sent",
-                "reference": "200.1"
-              }
-            },
-            "seq": 7,
-            "time": 20.0
           }
         ],
         "reply_reservations": [
           {
             "id": "reply-0000000000000003",
             "inbox_id": 1,
-            "outbox_id": 1,
+            "outbox_id": null,
             "reserved_at": 20.0,
             "session_id": "TTEAM:CROOM:100.1",
-            "state": "sent",
+            "state": "released",
             "trigger_class": "human"
           }
         ],
@@ -1020,16 +870,16 @@
             "debriefed_turn": 0,
             "decisions_json": [],
             "id": "TTEAM:CROOM:100.1",
-            "last_reply_hash": "efff2a83ffa667441084ffd9a37c88a79ce16e1b7637e9f39095b635b367691a",
+            "last_reply_hash": "",
             "last_unsolicited": 0.0,
-            "no_progress": 0,
+            "no_progress": 1,
             "pause_reason": "",
             "reset_at": 0.0,
             "root_ts": "100.1",
             "status": "blocked",
             "summary": "",
             "throttled_until": 0.0,
-            "turns": 1,
+            "turns": 0,
             "updated": 20.0,
             "version": 1,
             "wait_streak": 0,
@@ -1061,8 +911,10 @@
             "action": "parent.blocked",
             "actor": "system",
             "details_json": {
+              "failure": "script_exhausted",
               "inbox_id": 1,
-              "reason": "parent_unavailable"
+              "reason": "parent_unavailable",
+              "validation_error": null
             },
             "id": 2,
             "target": "TTEAM:CROOM:100.1",
@@ -1093,32 +945,6 @@
             "ts": "100.1",
             "verdict": "respond: addressed",
             "workspace": "TTEAM"
-          },
-          {
-            "attachments_json": [],
-            "channel": "CROOM",
-            "event_id": "self:CROOM:200.1",
-            "files_json": [],
-            "id": 2,
-            "mentions_owner": 0,
-            "meta_json": {
-              "kind": "reply",
-              "owner": "UOWNER",
-              "session": "TTEAM:CROOM:100.1",
-              "status": "blocked",
-              "turn": 1,
-              "v": 2,
-              "worker": ""
-            },
-            "received_at": 20.0,
-            "root_ts": "100.1",
-            "sender": "UOWNER",
-            "source": "self",
-            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-            "thread_ts": "100.1",
-            "ts": "200.1",
-            "verdict": "",
-            "workspace": "TTEAM"
           }
         ],
         "meta": [
@@ -1128,7 +954,7 @@
           },
           {
             "key": "durable_generation",
-            "value": "33"
+            "value": "22"
           }
         ],
         "notes": [
@@ -1136,7 +962,6 @@
             "actor": "parent",
             "created": 20.0,
             "data_json": {
-              "assignee": "",
               "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
               "next_step": "Owner review before retrying"
             },
@@ -1164,40 +989,7 @@
             "updated": 20.0
           }
         ],
-        "outbox": [
-          {
-            "after": "",
-            "answers_json": [],
-            "attempts": 1,
-            "blob": null,
-            "channel": "CROOM",
-            "created": 20.0,
-            "delivered_at": 20.0,
-            "error": "",
-            "filename": "",
-            "id": 1,
-            "idem_key": "1:reply",
-            "kind": "reply",
-            "meta_json": {
-              "kind": "reply",
-              "owner": "UOWNER",
-              "session": "TTEAM:CROOM:100.1",
-              "status": "blocked",
-              "turn": 1,
-              "v": 2,
-              "worker": ""
-            },
-            "retry_at": 0.0,
-            "retry_base": 0,
-            "sent_ts": "200.1",
-            "session_id": "TTEAM:CROOM:100.1",
-            "state": "sent",
-            "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-            "thread_ts": "100.1",
-            "trigger_class": "human",
-            "trigger_event": "e1"
-          }
-        ],
+        "outbox": [],
         "overseer_exchanges": [],
         "parent_turns": [
           {
@@ -1224,7 +1016,7 @@
                 "answers": [],
                 "details": "",
                 "discussion": "ongoing",
-                "send": true,
+                "send": false,
                 "status": "blocked",
                 "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
               },
@@ -1236,6 +1028,7 @@
             "context_json": {
               "call": "decide",
               "errors": [],
+              "failure": "script_exhausted",
               "github_state": [],
               "history": [
                 {
@@ -1528,7 +1321,7 @@
                   "answers": [],
                   "details": "",
                   "discussion": "ongoing",
-                  "send": true,
+                  "send": false,
                   "status": "blocked",
                   "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries."
                 },
@@ -1641,64 +1434,16 @@
             },
             "seq": 5,
             "time": 20.0
-          },
-          {
-            "complete": 1,
-            "kind": "delivery_call",
-            "payload_json": {
-              "attempt": 1,
-              "id": 1,
-              "post": {
-                "after": "",
-                "blob": null,
-                "channel": "CROOM",
-                "filename": "",
-                "idem_key": "1:reply",
-                "kind": "reply",
-                "meta": {
-                  "kind": "reply",
-                  "owner": "UOWNER",
-                  "session": "TTEAM:CROOM:100.1",
-                  "status": "blocked",
-                  "turn": 1,
-                  "v": 2,
-                  "worker": ""
-                },
-                "session_id": "TTEAM:CROOM:100.1",
-                "text": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
-                "thread_ts": "100.1"
-              }
-            },
-            "seq": 6,
-            "time": 20.0
-          },
-          {
-            "complete": 1,
-            "kind": "delivery",
-            "payload_json": {
-              "attempt": 1,
-              "outbox_id": 1,
-              "raw_result": {
-                "outcome": "sent",
-                "reference": "200.1"
-              },
-              "result": {
-                "outcome": "sent",
-                "reference": "200.1"
-              }
-            },
-            "seq": 7,
-            "time": 20.0
           }
         ],
         "reply_reservations": [
           {
             "id": "reply-0000000000000003",
             "inbox_id": 1,
-            "outbox_id": 1,
+            "outbox_id": null,
             "reserved_at": 20.0,
             "session_id": "TTEAM:CROOM:100.1",
-            "state": "sent",
+            "state": "released",
             "trigger_class": "human"
           }
         ],
@@ -1732,16 +1477,16 @@
             "debriefed_turn": 0,
             "decisions_json": [],
             "id": "TTEAM:CROOM:100.1",
-            "last_reply_hash": "efff2a83ffa667441084ffd9a37c88a79ce16e1b7637e9f39095b635b367691a",
+            "last_reply_hash": "",
             "last_unsolicited": 0.0,
-            "no_progress": 0,
+            "no_progress": 1,
             "pause_reason": "",
             "reset_at": 0.0,
             "root_ts": "100.1",
             "status": "blocked",
             "summary": "",
             "throttled_until": 0.0,
-            "turns": 1,
+            "turns": 0,
             "updated": 20.0,
             "version": 1,
             "wait_streak": 0,

@@ -47,7 +47,7 @@ def sources():
     paths.update(ROOT.glob("assets/**/*"))
     paths.update(ROOT.glob("packaging/*.py"))
     paths.update(ROOT.glob("packaging/*.md"))
-    paths.update(ROOT / name for name in ("src/config/template.toml", "slack/manifest.yaml"))
+    paths.update(ROOT / name for name in ("src/config/template.toml",))
     return {str(path.relative_to(ROOT)): digest(path.read_bytes()) for path in sorted(paths) if path.is_file()}
 
 

@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod controls;
+pub mod dispatcher;
 pub mod manager;
 
 mod debrief;

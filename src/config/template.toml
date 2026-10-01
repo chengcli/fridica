@@ -22,7 +22,7 @@ cooldown = 60                     # seconds between unsolicited replies in one c
 
 [parent]
 backend = "claude"                # the parent always runs locally with no tools
-model = ""                        # "" uses the CLI's default model
+model = ""                        # "" uses the CLI's default model; workers on this backend use it too
 triage_model = ""                 # cheaper model for deciding whether to join a conversation
 # default_machine = "local"       # where work goes when nobody names a machine (default: the first one)
 

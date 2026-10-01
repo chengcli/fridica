@@ -3,8 +3,8 @@ use fridica::{
         delivery::{AdapterFuture, ClaimedPost, Delivery, DeliveryOutcome, Post},
         time::ReplayClock,
     },
-    slack::outbox::Dispatcher,
     store::{outbox, Store},
+    threads::dispatcher::Dispatcher,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};

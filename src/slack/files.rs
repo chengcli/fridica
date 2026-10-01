@@ -130,8 +130,6 @@ pub async fn read<D: Downloader>(
                 Some("not read again: the same file is read from a newer message")
             } else if !is_text(&a) {
                 Some("not read: not a text file")
-            } else if a.url.is_empty() {
-                Some("not read: no Slack download URL")
             } else if chosen.len() >= MAX_FILES {
                 Some("not read: only 3 files are read per reply")
             } else {
@@ -155,7 +153,16 @@ pub async fn read<D: Downloader>(
             .unwrap_or("")
             .trim()
             .eq_ignore_ascii_case("text/html");
-        tokio::time::timeout(timeout, downloader.download(a.url.clone(), html))
+        // Some file events carry no URL; look it up by file ID first.
+        let read = async {
+            let url = if a.url.is_empty() {
+                downloader.resolve(a.id.clone()).await?
+            } else {
+                a.url.clone()
+            };
+            downloader.download(url, html).await
+        };
+        tokio::time::timeout(timeout, read)
             .await
             .unwrap_or(Err(Failure::Timeout))
     }))

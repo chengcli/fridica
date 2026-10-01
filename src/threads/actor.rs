@@ -670,8 +670,11 @@ async fn commit(
         if decision.reopen_blocked && status=="blocked" {status="complete".into();}
         let mut hash=request.session["last_reply_hash"].as_str().unwrap_or("").to_owned();
         let repeat=super::replies::repeat_evidence(&tx,&request,&owner)?;
-        if let Some(reply)=&mut decision.reply {super::replies::render(&tx,&request,&owner,reply,reply_limit)?;}
-        if let Some(reply)=&decision.reply {
+        // Only the stand-in for a failed parent turn reaches here unsent: it
+        // settles the thread's status without posting anything.
+        if let Some(reply)=decision.reply.as_ref().filter(|r|!r.send) {status=reply.status.as_str().into();}
+        if let Some(reply)=decision.reply.as_mut().filter(|r|r.send) {super::replies::render(&tx,&request,&owner,reply,reply_limit)?;}
+        if let Some(reply)=decision.reply.as_ref().filter(|r|r.send) {
             let candidate=crate::core::policy::reply_hash(&reply.text);
             let explicit=repeat["allowed"]==true;
             let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty() && reply.details.is_empty() && work.jobs.is_empty() && !is_result && decision.note.kind!=NoteKind::Correction;
@@ -733,17 +736,16 @@ async fn commit(
             let error=call["settlement_error"].as_str().unwrap_or("");
             let mut context=call["request"].clone();
             if let Some(validation)=call.get("validation_error") {context["validation_error"]=validation.clone();}
+            // The parent's own failure code (e.g. parent_timeout), never its output.
+            if let Some(code)=call["failure"]["code"].as_str() {context["failure"]=json!(code);}
             tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,?,?,?,?,?)",
                 params![session,id,call["request"]["call"].as_str(),serde_json::to_string(&decision)?,call["response"].to_string(),context.to_string(),error,call["created"].as_f64()])?;
+            // A failed turn posts nothing and blocks the thread, which puts it in
+            // the owner's attention view; the audit keeps the cause.
             if !error.is_empty() {
-                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.blocked',?,?)",params![now,session,json!({"inbox_id":id,"reason":error}).to_string()])?;
+                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.blocked',?,?)",params![now,session,json!({"inbox_id":id,"reason":error,"failure":call["failure"]["code"],"validation_error":call["validation_error"]}).to_string()])?;
             }
-            // Nothing was posted: the owner is asked to review instead.
-            if error=="parent_invalid_after_repair" {
-                let key=format!("parent-invalid:{id}");
-                tx.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'signal',?,?,'The parent action stayed invalid after repair; owner review required',?,?,?)",
-                    params![key,session,key,json!({"inbox_id":id,"error":call["validation_error"]}).to_string(),now,now,now])?;
-            }
+
         }
         tx.execute("UPDATE threads SET status=?,turns=CASE WHEN EXISTS(SELECT 1 FROM outbox WHERE idem_key=?) THEN MAX(turns,?) ELSE turns END,
             wait_streak=?,no_progress=?,last_reply_hash=?,summary=CASE WHEN ?='' THEN summary ELSE ? END,updated=?,version=version+1 WHERE id=?",

@@ -7,8 +7,8 @@ use fridica::{
         time::{ReplayClock, SequenceIds},
         Authority,
     },
-    slack::outbox::Dispatcher,
     store::Store,
+    threads::dispatcher::Dispatcher,
     threads::{
         actor::{Actor, Step},
         controls::{self, Control},
@@ -424,11 +424,12 @@ async fn invalid_repair_rejects_every_proposed_effect_and_records_both_responses
         f.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
         "0"
     );
-    assert_eq!(
-        f.scalar("SELECT CAST(count(*) AS TEXT) FROM obligations WHERE kind='signal' AND summary LIKE '%owner review%'")
-            .await,
-        "1"
-    );
+    // The thread is blocked, which lists it for the owner, with the cause audited.
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "blocked");
+    assert!(f
+        .scalar("SELECT details_json FROM audit WHERE action='parent.blocked'")
+        .await
+        .contains("parent_invalid_after_repair"));
     for sql in [
         "SELECT json_extract(context_json,'$.validation_error') FROM parent_turns WHERE call='decide'",
         "SELECT json_extract(context_json,'$.validation_error') FROM parent_turns WHERE call='repair'",
@@ -633,39 +634,35 @@ async fn held_due_work_survives_failure_and_runs_after_successful_owner_reopenin
 }
 
 #[tokio::test]
-async fn fallback_replies_reserve_attention_capacity_without_blocking_owner_controls() {
+async fn failed_parent_turns_post_nothing_and_a_new_mention_retries_the_parent() {
     let f = Fixture::new(vec![
         Err(ParentFailure {
-            code: "parent_exit_7".into(),
+            code: "parent_timeout".into(),
         }),
         Err(ParentFailure {
             code: "parent_exit_7".into(),
         }),
     ])
     .await;
-    let mut actor = f.actor();
-    actor.limits.max_replies_per_hour = 1;
+    let actor = f.actor();
     f.intake(1).await;
     assert_eq!(actor.step(SESSION.into()).await.unwrap(), Step::Committed);
+    // A new request in the blocked thread tries the parent again; neither
+    // failure is posted, each keeps its own cause, and both asks stay open.
     f.intake(2).await;
-    assert_eq!(actor.step(SESSION.into()).await.unwrap(), Step::Deferred);
-    assert_eq!(f.parent.calls.lock().unwrap().len(), 1);
-    controls::apply(
-        &f.store,
-        SESSION.into(),
-        Control::Instruct {
-            text: "Owner retry".into(),
-        },
-        Authority::Owner,
-        20.,
-    )
-    .await
-    .unwrap();
     assert_eq!(actor.step(SESSION.into()).await.unwrap(), Step::Committed);
     assert_eq!(f.parent.calls.lock().unwrap().len(), 2);
     assert_eq!(
         f.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
-        "2"
+        "0"
+    );
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "blocked");
+    assert_eq!(
+        f.scalar(
+            "SELECT group_concat(json_extract(context_json,'$.failure'),',') FROM parent_turns"
+        )
+        .await,
+        "parent_timeout,parent_exit_7"
     );
     assert_eq!(
         f.scalar("SELECT CAST(count(*) AS TEXT) FROM obligations WHERE state='open'")

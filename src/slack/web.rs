@@ -50,6 +50,9 @@ impl Downloader for SlackClient {
     fn download(&self, url: String, html: bool) -> BoxFuture<'_, Result<Download, FileFailure>> {
         self.0.download(url, html)
     }
+    fn resolve(&self, file_id: String) -> BoxFuture<'_, Result<String, FileFailure>> {
+        self.0.resolve(file_id)
+    }
 }
 
 /// The owner, workspace and channels a client for `config` may use.
