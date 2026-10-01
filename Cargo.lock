@@ -354,6 +354,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
+ "fridica-agent",
  "fs2",
  "futures-util",
  "http-body-util",
@@ -375,6 +376,17 @@ dependencies = [
  "unicode-normalization",
  "users",
  "uuid",
+]
+
+[[package]]
+name = "fridica-agent"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70457a7e903a09949d25357d549cc6f4232e139aad1748e680c2efbd6db3ca02"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
