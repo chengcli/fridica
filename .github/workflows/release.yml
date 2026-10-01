@@ -92,6 +92,20 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: python scripts/release.py stamp --tag "$RELEASE_TAG"
+      # maturin-action pulls this image itself; a registry hiccup there fails
+      # the whole release, so fetch it first with retries.
+      - name: Pull the manylinux image
+        env:
+          IMAGE: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}:latest
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if docker pull "$IMAGE"; then
+              exit 0
+            fi
+            echo "pull attempt $attempt failed; retrying" >&2
+            sleep $((attempt * 20))
+          done
+          exit 1
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@v1
         with:
