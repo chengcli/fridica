@@ -141,6 +141,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
     mode: Mode,
 ) -> Result<ComposedRuntime<S>> {
     let context = crate::config::LoadContext::current()?;
+    let files: Arc<dyn Downloader> = slack.clone();
     let (adapters, observe_only, parent_factory): (_, _, ParentFactory<ComposedParent>) = match mode
     {
         Mode::ObserveOnly => (
@@ -220,6 +221,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
     Ok(
         Runtime::start(store, config, adapters, clock, ids, observe_only)
             .await?
-            .with_configuration_editor(parent_factory, context),
+            .with_configuration_editor(parent_factory, context)
+            .with_files(files),
     )
 }

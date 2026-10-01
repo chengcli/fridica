@@ -81,6 +81,123 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         }
         response
     }
+    /// Owner-only Slack file reads for local tools: list a thread's files, or
+    /// read one text file (64 KiB at most) through the daemon's own client.
+    async fn files(
+        &self,
+        authority: Authority,
+        parts: &[String],
+        query: &BTreeMap<String, String>,
+    ) -> Response {
+        use crate::slack::files::{self, Attachment, Failure as FileFailure};
+        if authority != Authority::Owner {
+            return Response::error(403, "owner_required");
+        }
+        let store = self.runtime.store();
+        match parts {
+            [_] => {
+                let Some(thread) = query.get("thread").cloned() else {
+                    return Response::error(400, "thread_required");
+                };
+                let slack = self.runtime.config().slack.clone();
+                let listed = store.call(move |c| {
+                    let Some(id) = Names::load(c, &slack)?.resolve(&thread) else { return Ok(None) };
+                    let rows: Vec<(String, String, String)> = c
+                        .prepare("SELECT ts,sender,attachments_json FROM messages WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL),id")?
+                        .query_map([&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    let known: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM threads WHERE id=?)", [&id], |r| r.get(0))?;
+                    Ok(known.then_some(rows))
+                }).await;
+                match listed {
+                    Ok(Some(rows)) => {
+                        let mut out = vec![];
+                        for (ts, sender, json_text) in rows {
+                            let values: Vec<Value> =
+                                serde_json::from_str(&json_text).unwrap_or_default();
+                            for value in values {
+                                if let Ok(a) = serde_json::from_value::<Attachment>(value) {
+                                    out.push(json!({"id":a.id,"name":a.name,"mimetype":a.mimetype,"size":a.size,"ts":ts,"sender":sender,"text":files::is_text(&a)}));
+                                }
+                            }
+                        }
+                        Response::ok(json!(out))
+                    }
+                    Ok(None) => Response::error(404, "unknown_thread"),
+                    Err(_) => Response::error(500, "view_unavailable"),
+                }
+            }
+            [_, id] => {
+                if id.len() < 2
+                    || id.len() > 64
+                    || !id.starts_with('F')
+                    || !id.bytes().all(|b| b.is_ascii_alphanumeric())
+                {
+                    return Response::error(400, "invalid_file");
+                }
+                let key = id.clone();
+                let found = store.call(move |c| {
+                    let rows: Vec<String> = c
+                        .prepare("SELECT attachments_json FROM messages WHERE instr(attachments_json,?)>0 ORDER BY id DESC")?
+                        .query_map([format!("\"{key}\"")], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    Ok(rows.iter()
+                        .flat_map(|j| serde_json::from_str::<Vec<Value>>(j).unwrap_or_default())
+                        .filter_map(|v| serde_json::from_value::<Attachment>(v).ok())
+                        .find(|a| a.id == key))
+                }).await;
+                let attachment = match found {
+                    Ok(Some(a)) => a,
+                    Ok(None) => return Response::error(404, "unknown_file"),
+                    Err(_) => return Response::error(500, "view_unavailable"),
+                };
+                if !files::is_text(&attachment) {
+                    return Response::error(415, "not_text");
+                }
+                let Some(reader) = self.runtime.files() else {
+                    return Response::error(503, "files_unavailable");
+                };
+                let html = attachment
+                    .mimetype
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case("text/html");
+                let read = async {
+                    let url = if attachment.url.is_empty() {
+                        reader.resolve(attachment.id.clone()).await?
+                    } else {
+                        attachment.url.clone()
+                    };
+                    reader.download(url, html).await
+                };
+                match tokio::time::timeout(std::time::Duration::from_secs(30), read)
+                    .await
+                    .unwrap_or(Err(FileFailure::Timeout))
+                {
+                    Ok(download) if download.data.len() > files::FILE_LIMIT => {
+                        Response::error(413, "file_too_large")
+                    }
+                    Ok(download) => {
+                        use sha2::{Digest, Sha256};
+                        let hex: String =
+                            download.data.iter().map(|b| format!("{b:02x}")).collect();
+                        Response::ok(
+                            json!({"id":attachment.id,"name":attachment.name,"mimetype":attachment.mimetype,
+                            "size":download.data.len(),"sha256":format!("{:x}",Sha256::digest(&download.data)),"hex":hex}),
+                        )
+                    }
+                    Err(FileFailure::Recording) => Response::error(500, "recording_failed"),
+                    Err(failure) => Response {
+                        status: 502,
+                        body: json!({"error":"file_unavailable","reason":failure.note()}),
+                    },
+                }
+            }
+            _ => Response::error(404, "not_found"),
+        }
+    }
     async fn route(
         &self,
         request: Request,
@@ -94,6 +211,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         if request.method == "GET" {
             if !request.body.as_object().is_some_and(|v| v.is_empty()) {
                 return Response::error(400, "get_body_not_allowed");
+            }
+            if parts.first().is_some_and(|p| p == "files") {
+                return self.files(authority, parts, &query).await;
             }
             let processes = if matches!(
                 parts.first().map(String::as_str),
@@ -579,7 +699,7 @@ pub fn target(value: &str) -> Option<(Vec<String>, BTreeMap<String, String>)> {
     let url = reqwest::Url::parse(&format!("http://fridica/?{query}")).ok()?;
     let mut fields = BTreeMap::new();
     for (k, v) in url.query_pairs() {
-        if !["limit", "control", "status", "state"].contains(&k.as_ref())
+        if !["limit", "control", "status", "state", "thread"].contains(&k.as_ref())
             || v.len() > 200
             || fields.insert(k.into_owned(), v.into_owned()).is_some()
         {

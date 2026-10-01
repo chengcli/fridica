@@ -55,9 +55,19 @@ pub struct Runtime<P: Parent, D: Delivery> {
     dispatcher: Dispatcher<D>,
     pub approvals: Arc<Broker>,
     machine_load: Option<Arc<Monitor>>,
+    /// Owner-side reads of Slack text files (`fridica files get`).
+    files: Option<Arc<dyn crate::slack::files::Downloader>>,
     pass: Mutex<()>,
 }
 impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
+    /// Lets owner controls read Slack text files through this client.
+    pub fn with_files(mut self, files: Arc<dyn crate::slack::files::Downloader>) -> Self {
+        self.files = Some(files);
+        self
+    }
+    pub fn files(&self) -> Option<Arc<dyn crate::slack::files::Downloader>> {
+        self.files.clone()
+    }
     pub fn observe_only(&self) -> bool {
         self.dispatcher.observe_only
     }
@@ -130,6 +140,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             dispatcher,
             approvals,
             machine_load: adapters.machine_load,
+            files: None,
             pass: Mutex::new(()),
         })
     }
