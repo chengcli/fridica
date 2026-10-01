@@ -3,6 +3,7 @@ pub mod contract;
 pub mod editor;
 pub mod isolation;
 pub mod loader;
+pub mod provisions;
 pub mod repos;
 pub mod schema;
 pub mod setup;

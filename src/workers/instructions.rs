@@ -21,7 +21,8 @@ impl super::jsonl::Instructions for OwnerInstructions {
         let repositories = repos::load(config.parent.repos.as_deref())?;
         let data = json!({"owner_id":config.owner.slack_user,"profile":config.owner.profile,"repositories":repositories,"machine":machine.payload(0),"workspace":worker.workspace});
         Ok(format!(
-            "{}\n{UNTRUSTED}\n\nWorker data:\n{}",
+            "{}\n\n{}\n{UNTRUSTED}\n\nWorker data:\n{}",
+            crate::config::provisions::shared(),
             contract.worker(),
             serde_json::to_string(&data)?
         ))

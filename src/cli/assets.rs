@@ -36,6 +36,11 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "helpers/diagnostics.py" => "../exec/diagnostics.py",
     ]);
     entries.extend(
+        crate::config::provisions::FILES
+            .iter()
+            .map(|(name, body)| (format!("provisions/{name}"), body.as_bytes())),
+    );
+    entries.extend(
         crate::store::schema::MIGRATIONS
             .iter()
             .enumerate()
