@@ -63,7 +63,8 @@ pub fn build(
     }
     Ok((
         format!(
-            "{instructions}\n{UNTRUSTED}\n\nData:\n{}",
+            "{}\n\n{instructions}\n{UNTRUSTED}\n\nData:\n{}",
+            crate::config::provisions::shared(),
             serde_json::to_string(&data)?
         ),
         schema,

@@ -1,5 +1,5 @@
 use fridica::{
-    config::{contract, loader, repos, LoadContext},
+    config::{contract, loader, provisions, repos, LoadContext},
     core::worker::WorkerRecord,
     workers::{
         instructions::{OwnerInstructions, UNTRUSTED},
@@ -103,7 +103,8 @@ fn owner_overrides_inherit_only_optional_sections_and_reload_without_restart() {
     )
     .unwrap();
     let changed = OwnerInstructions.build(&config, &worker).unwrap();
-    assert!(changed.starts_with("Changed instructions\n"));
+    let after_provisions = changed.strip_prefix(&provisions::shared()).unwrap();
+    assert!(after_provisions.starts_with("\n\nChanged instructions\n"));
     assert!(!changed.contains("private rule"));
     std::fs::write(&repos_path, "repos=[]").unwrap();
     assert!(OwnerInstructions
@@ -135,4 +136,49 @@ fn reads_are_utf8_and_byte_bounded_and_fail_closed() {
     let secret = "never-print-this-note";
     std::fs::write(&path, format!("notes=['{secret}'")).unwrap();
     assert!(!format!("{:#}", repos::load(Some(&path)).err().unwrap()).contains(secret));
+}
+#[test]
+fn shared_provisions_lead_every_parent_call_and_worker_prompt_in_order() {
+    let shared = provisions::shared();
+    // Most general first; each file is included whole, in sequence.
+    let positions: Vec<usize> = provisions::FILES
+        .iter()
+        .map(|(_, body)| shared.find(body.trim()).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|w| w[0] < w[1]), "{positions:?}");
+    assert!(shared.contains("lower-numbered one wins"));
+    // An owner contract that says nothing about these provisions still gets them.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owner.md");
+    std::fs::write(&path, "## Participation\np\n## Replies\nr").unwrap();
+    let corpus: Value = serde_json::from_str(include_str!("corpus/placement.json")).unwrap();
+    let mut config = loader::parse(
+        corpus["source"].as_str().unwrap(),
+        &dir.path().join("config.toml"),
+        &LoadContext {
+            home: "/tmp/test-home".into(),
+            uid: 1,
+            runtime_dir: None,
+            protected: vec![],
+        },
+    )
+    .unwrap();
+    config.owner.contract = Some(path);
+    let worker: WorkerRecord = serde_json::from_value(
+        json!({"id":"w1","session_id":"s1","machine":"gpu","workspace":"unique","backend":"codex"}),
+    )
+    .unwrap();
+    assert!(OwnerInstructions
+        .build(&config, &worker)
+        .unwrap()
+        .starts_with(&shared));
+    for call in ["triage", "decide", "repair", "debrief"] {
+        let request: fridica::core::parent::ParentRequest = serde_json::from_value(json!({
+            "inbox_id":1,"call":call,"session":{"id":"T:C:1","channel":"C","work":{"workers":[]}},
+            "trigger":{},"history":[],"obligations":[],"previous":null,"errors":[]}))
+        .unwrap();
+        let (prompt, _, _) = fridica::parent::prompts::build(&config, &request).unwrap();
+        assert!(prompt.starts_with(&shared), "{call}");
+        assert!(prompt.contains("SIGN-OFF #<PR> <sha> approve"), "{call}");
+    }
 }
