@@ -663,3 +663,40 @@ fn an_egress_deny_list_must_be_private_and_valid() {
     std::fs::write(&path, format!("{base}\n[egress]\nunknown = 1\n")).unwrap();
     assert!(config::load(&path, &context).is_err());
 }
+
+#[test]
+fn migrate_defaults_to_the_configured_database() {
+    use fridica::store::schema;
+    let dir = tempfile::tempdir().unwrap();
+    let root = &dir.path().canonicalize().unwrap();
+    setup(root);
+    let config = root.join("etc/config.toml");
+    std::fs::write(&config, basic(root)).unwrap();
+    let mut c = rusqlite::Connection::open(root.join("db")).unwrap();
+    schema::migrate(&mut c).unwrap();
+    drop(c);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+        .args(["migrate", "--dry-run", "--config"])
+        .arg(&config)
+        .env("HOME", root.join("home"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plan["from"], schema::VERSION);
+    assert_eq!(plan["to"], schema::VERSION);
+    // An explicit database that is not the configured one is still refused.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+        .args(["migrate", "--dry-run", "--config"])
+        .arg(&config)
+        .arg("--database")
+        .arg(root.join("other.db"))
+        .env("HOME", root.join("home"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}

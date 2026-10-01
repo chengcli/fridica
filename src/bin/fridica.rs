@@ -5,7 +5,7 @@ use fridica::{
     report,
     store::{migration, Store},
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -83,9 +83,10 @@ enum Command {
         timeout: u64,
     },
     /// Migrate a stopped daemon's database and configuration, with backups.
+    /// Without --database, the configuration's state.path is migrated.
     Migrate {
         #[arg(long)]
-        database: PathBuf,
+        database: Option<PathBuf>,
         #[arg(long)]
         config: Option<PathBuf>,
         #[arg(long, conflicts_with = "rollback")]
@@ -93,10 +94,11 @@ enum Command {
         #[arg(long)]
         rollback: bool,
     },
-    /// Generate and atomically export a report from an offline v6 database.
+    /// Generate and atomically export a report from an offline database
+    /// (the configuration's state.path unless --database says otherwise).
     Report {
         #[arg(long)]
-        database: PathBuf,
+        database: Option<PathBuf>,
         #[arg(long)]
         channel: String,
         #[arg(long)]
@@ -128,6 +130,16 @@ async fn main() -> std::process::ExitCode {
 /// `--config`, or `~/.config/fridica/config.toml` like `init` and `start`.
 fn config_path(config: Option<PathBuf>) -> Result<PathBuf> {
     fridica::config::setup::path(config.as_deref(), &fridica::config::LoadContext::current()?)
+}
+/// An explicit database, else the one the configuration names.
+fn database_path(database: Option<PathBuf>, config: &Path) -> Result<PathBuf> {
+    match database {
+        Some(database) => Ok(database),
+        None => {
+            let context = fridica::config::LoadContext::current()?;
+            Ok(fridica::config::loader::load(config, &context)?.state.path)
+        }
+    }
 }
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -303,6 +315,7 @@ async fn run(cli: Cli) -> Result<()> {
             rollback,
         } => {
             let config = config_path(config)?;
+            let database = database_path(database, &config)?;
             if rollback {
                 migration::rollback(&database, &config)?;
                 println!("Restored migration backups.");
@@ -322,6 +335,7 @@ async fn run(cli: Cli) -> Result<()> {
             timezone,
             directory,
         } => {
+            let database = database_path(database, &config_path(None)?)?;
             let store = Store::open(database).await?;
             let data = report::generate(&store, channel, date, timezone, SystemClock.now()).await?;
             report::export_pending(&store, directory).await?;
