@@ -56,7 +56,7 @@ impl Default for GitHub {
         Self {
             enabled: true,
             token_env: "FRIDICA_GITHUB_TOKEN".into(),
-            cache_seconds: 180.,
+            cache_seconds: 60.,
         }
     }
 }

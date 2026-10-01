@@ -112,7 +112,7 @@ project = "~/project"             # an existing directory; each job slot works i
 enabled = true                    # show the parent the state of linked GitHub pull requests and issues
 # GitHub API reads use the owner's existing gh authentication.
 token_env = "FRIDICA_GITHUB_TOKEN" # legacy credential name to scrub from worker environments
-cache_seconds = 180
+cache_seconds = 60
 
 [state]
 path = "~/.local/state/fridica/state.sqlite3"

@@ -101,8 +101,20 @@ async fn frozen_github_state_projections_and_request_multisets_match() {
             .linked(serde_json::from_value(case["texts"].clone()).unwrap())
             .await
             .unwrap();
+        // Fresh reads report age 0; the frozen projections predate the field.
+        let mut output = json!(output);
+        for item in output.as_array_mut().into_iter().flatten() {
+            if let Some(item) = item.as_object_mut() {
+                assert_eq!(
+                    item.remove("age_seconds"),
+                    Some(json!(0.)),
+                    "{}",
+                    case["name"]
+                );
+            }
+        }
         assert_eq!(
-            json!(output),
+            output,
             *case.get("rust_expected").unwrap_or(&case["expected"]),
             "{}",
             case["name"]
@@ -305,4 +317,26 @@ async fn hung_sibling_cannot_hide_a_recording_fault_behind_optional_timeout() {
             Err(Failure::Recording)
         );
     }
+}
+#[tokio::test]
+async fn cached_github_state_reports_its_age() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("db")).await.unwrap();
+    let clock = Arc::new(ReplayClock::new(1000.));
+    let script = Arc::new(Script::new(
+        json!({"/repos/o/r/issues/1":{"number":1,"title":"cached","state":"open"}}),
+    ));
+    let reader = Links::new(script.clone(), store, clock.clone(), 60.).unwrap();
+    let url = vec!["https://github.com/o/r/issues/1".to_string()];
+    let first = json!(reader.linked(url.clone()).await.unwrap());
+    assert_eq!(first[0]["age_seconds"], 0.);
+    clock.set(1045.);
+    let cached = json!(reader.linked(url.clone()).await.unwrap());
+    assert_eq!(cached[0]["age_seconds"], 45.);
+    assert_eq!(script.calls.lock().unwrap().len(), 1);
+    // Past the cache lifetime the state is read again.
+    clock.set(1061.);
+    let fresh = json!(reader.linked(url).await.unwrap());
+    assert_eq!(fresh[0]["age_seconds"], 0.);
+    assert_eq!(script.calls.lock().unwrap().len(), 2);
 }

@@ -472,7 +472,7 @@ pauses all calls until it resets:
 [github]
 enabled = true
 token_env = "FRIDICA_GITHUB_TOKEN"   # optional read-only token
-cache_seconds = 180
+cache_seconds = 60
 ```
 
 Public repositories need no token, but anonymous requests are limited to 60 per hour
