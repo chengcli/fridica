@@ -1,12 +1,16 @@
 //! Scoped-fetch JobIo wrapper. Ordinary workers receive only a local bare-repo
 //! path and verified commit; they acquire no network or push capability.
-use super::protocol::{JobIo, WorkerSpec};
+use super::{
+    inputs,
+    protocol::{JobIo, WorkerSpec},
+};
 use crate::{
     config::registry::valid_fetch_ref,
     core::{delivery::AdapterFuture, time::Clock, worker::*},
     exec::fetch::{Fetched, Fetcher, Request},
     store::{fetch, Store},
 };
+use fridica_slack::files::Downloader;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -72,6 +76,8 @@ pub struct ScopedJobIo {
     pub fetcher: Arc<dyn Fetcher>,
     pub artifacts: Arc<dyn JobIo>,
     pub clock: Arc<dyn Clock>,
+    /// Reads Slack files for a job's `files`; `None` refuses such jobs.
+    pub files: Option<Arc<dyn Downloader>>,
 }
 impl ScopedJobIo {
     async fn run(
@@ -102,6 +108,119 @@ impl ScopedJobIo {
         }
     }
 }
+impl ScopedJobIo {
+    /// Download the job's attached files and place them in the workspace. The
+    /// result is recorded as `worker_files`; any failure fails the job, so a
+    /// worker never runs believing it has a file it does not.
+    async fn files(&self, spec: &WorkerSpec, job: &Job) -> Result<String, WorkerFailure> {
+        if job.files.is_empty() {
+            return Ok(String::new());
+        }
+        let Some(downloader) = &self.files else {
+            return Err(failure(Failure::Refusal, "files_unsupported"));
+        };
+        let session = job.session_id.clone();
+        let wanted = job.files.clone();
+        let names: Vec<(String, String)> = self
+            .store
+            .call(move |c| {
+                let rows: Vec<String> = c
+                    .prepare("SELECT attachments_json FROM messages WHERE workspace||':'||channel||':'||root_ts=?")?
+                    .query_map([session], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                let attachments: Vec<serde_json::Value> = rows
+                    .iter()
+                    .filter_map(|r| serde_json::from_str::<Vec<serde_json::Value>>(r).ok())
+                    .flatten()
+                    .collect();
+                Ok(wanted
+                    .iter()
+                    .map(|id| {
+                        let name = attachments
+                            .iter()
+                            .find(|a| a["id"] == id.as_str())
+                            .and_then(|a| a["name"].as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        (id.clone(), name)
+                    })
+                    .collect())
+            })
+            .await
+            .map_err(|_| failure(Failure::Execution, "files_storage_failed"))?;
+        if names.iter().any(|(_, name)| name.is_empty()) {
+            return Err(failure(Failure::Refusal, "files_not_in_thread"));
+        }
+        let directory = tempfile::Builder::new()
+            .prefix("fridica-files-")
+            .permissions(
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+            )
+            .tempdir()
+            .map_err(|_| failure(Failure::Execution, "files_download_failed"))?;
+        let unique = inputs::unique_names(&names);
+        let mut downloaded = vec![];
+        let mut record = vec![];
+        for ((id, _), name) in names.iter().zip(unique) {
+            let source = directory.path().join(&name);
+            let saved = async {
+                let url = downloader.resolve(id.clone()).await?;
+                downloader
+                    .save(url, source.clone(), inputs::INPUT_LIMIT)
+                    .await
+            }
+            .await;
+            match saved {
+                Ok(size) => {
+                    record.push(json!({"id":id,"name":name,"size":size}));
+                    downloaded.push(inputs::Input {
+                        id: id.clone(),
+                        name,
+                        source,
+                        size,
+                    });
+                }
+                Err(error) => {
+                    record.push(json!({"id":id,"name":name,"error":error}));
+                    self.record(job, json!({"files":record,"placed":false}))
+                        .await?;
+                    return Err(failure(
+                        Failure::Execution,
+                        if matches!(error, fridica_slack::files::Failure::TooLarge) {
+                            "files_too_large"
+                        } else {
+                            "files_download_failed"
+                        },
+                    ));
+                }
+            }
+        }
+        let placed = self
+            .artifacts
+            .place(spec.clone(), job.clone(), downloaded)
+            .await;
+        self.record(
+            job,
+            json!({"files":record,"placed":placed.as_ref().map(|p| json!(p)).unwrap_or(json!(false))}),
+        )
+        .await?;
+        Ok(inputs::context(&placed?))
+    }
+    async fn record(&self, job: &Job, payload: serde_json::Value) -> Result<(), WorkerFailure> {
+        let now = self.clock.now();
+        let payload = json!({"job_id":job.id,"attempt":job.attempt,"result":payload});
+        self.store
+            .call(move |c| {
+                c.execute(
+                    "INSERT INTO replay_events(kind,time,payload_json) VALUES('worker_files',?,?)",
+                    rusqlite::params![now, payload.to_string()],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| failure(Failure::Execution, "files_storage_failed"))
+    }
+}
 impl JobIo for ScopedJobIo {
     fn prepare(
         &self,
@@ -109,6 +228,30 @@ impl JobIo for ScopedJobIo {
         job: Job,
     ) -> AdapterFuture<'_, Result<String, WorkerFailure>> {
         Box::pin(async move {
+            let files = self.files(&spec, &job).await?;
+            let rest = self.fetch(spec, job).await?;
+            Ok(format!("{files}{rest}"))
+        })
+    }
+    fn place(
+        &self,
+        spec: WorkerSpec,
+        job: Job,
+        inputs: Vec<inputs::Input>,
+    ) -> AdapterFuture<'_, Result<Vec<inputs::Placed>, WorkerFailure>> {
+        self.artifacts.place(spec, job, inputs)
+    }
+    fn collect(
+        &self,
+        spec: WorkerSpec,
+        artifacts: Vec<ArtifactRef>,
+    ) -> AdapterFuture<'_, Result<Vec<CollectedArtifact>, WorkerFailure>> {
+        self.artifacts.collect(spec, artifacts)
+    }
+}
+impl ScopedJobIo {
+    async fn fetch(&self, spec: WorkerSpec, job: Job) -> Result<String, WorkerFailure> {
+        {
             if job.fetch_repo.is_empty() {
                 if !job.fetch_ref.is_empty() {
                     return Err(failure(Failure::Refusal, "fetch_repository_not_granted"));
@@ -127,13 +270,6 @@ impl JobIo for ScopedJobIo {
             });
             wait.await
                 .unwrap_or_else(|_| Err(failure(Failure::Execution, "fetch_storage_failed")))
-        })
-    }
-    fn collect(
-        &self,
-        spec: WorkerSpec,
-        artifacts: Vec<ArtifactRef>,
-    ) -> AdapterFuture<'_, Result<Vec<CollectedArtifact>, WorkerFailure>> {
-        self.artifacts.collect(spec, artifacts)
+        }
     }
 }

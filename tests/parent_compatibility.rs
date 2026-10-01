@@ -188,7 +188,12 @@ async fn details_only_reply_links_the_ordered_upload_before_answer_closure() {
         },
     ] {
         let sent = matches!(outcome, DeliveryOutcome::Sent { .. });
-        let f=Fixture::new(vec![Ok(json!({"reply":{"text":"  ","details":"  Full answer.  ","status":"complete","answers":["o1"]}}))]).await;
+        // Details this long are a file; shorter ones fold into the message.
+        let details = format!("  {}  ", "Full answer. ".repeat(200));
+        let f = Fixture::new(vec![Ok(
+            json!({"reply":{"text":"  ","details":details,"status":"complete","answers":["o1"]}}),
+        )])
+        .await;
         f.intake(1).await;
         assert_eq!(
             f.actor().step(SESSION.into()).await.unwrap(),
@@ -201,7 +206,7 @@ async fn details_only_reply_links_the_ordered_upload_before_answer_closure() {
         assert_eq!(
             f.scalar("SELECT CAST(blob AS TEXT) FROM outbox WHERE kind='upload'")
                 .await,
-            "Full answer."
+            details.trim()
         );
         assert_eq!(
             f.scalar("SELECT CAST(count(*) AS TEXT) FROM obligation_posts")

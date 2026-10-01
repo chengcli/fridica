@@ -195,4 +195,7 @@ pub struct Delegation {
     pub deliverable: String,
     pub fetch_repo: String,
     pub fetch_ref: String,
+    /// Files attached in this thread (`session.files[].id`) that Fridica
+    /// places in the worker's workspace before the job starts.
+    pub files: Vec<String>,
 }

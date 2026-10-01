@@ -108,6 +108,9 @@ pub struct Job {
     pub fetch_repo: String,
     #[serde(default)]
     pub fetch_ref: String,
+    /// Slack file IDs placed in the workspace before the job starts.
+    #[serde(default)]
+    pub files: Vec<String>,
     #[serde(default = "queued")]
     pub status: String,
     #[serde(default)]

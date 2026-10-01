@@ -474,6 +474,8 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
         session_data["decisions"]=serde_json::from_str(&decisions)?;
         session_data["debriefed_turn"]=json!(debriefed);
         session_data["work"]=work::context_tx(&tx,&session)?;
+        let files=work::files_tx(&tx,&session)?;
+        if !files.is_empty() {session_data["files"]=json!(files);}
         let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![session_data["workspace"].as_str(),session_data["channel"].as_str()],|r|r.get(0))?;
         session_data["last_unsolicited"]=json!(last);
         if matches!(kind.as_str(),"worker_result"|"worker_interrupted") {

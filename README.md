@@ -175,6 +175,13 @@ the file. Limits:
 - files Fridica uploaded itself are skipped, and a file shared twice is read once;
 - downloads give up after 30 seconds.
 
+Any attached file, text or not (a NetCDF dataset, say), can be handed to a worker: the
+parent lists its ID in a delegation's `files`, and Fridica downloads it (up to 1 GiB per
+file, three per job) read-only into `data_in/<file id>/` beside the worker slots before the job
+starts, and tells the worker the path. Workers never talk to Slack themselves. A
+file that cannot be fetched fails the job visibly rather than letting it run without
+the data.
+
 Workers never hold the Slack token, and it is only ever sent to `files.slack.com`.
 Cleaning a thread erases its attachments along with its text.
 

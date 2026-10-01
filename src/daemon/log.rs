@@ -2,10 +2,18 @@
 //! line per notable event to stderr, in v0.3's `time LEVEL name: message` form.
 //! It only reads; it never prints message text, briefs, tokens or paths.
 //! `FRIDICA_LOG=off` silences it.
-use crate::{config::schema::Slack, slack::names::Names, store::Store};
+use crate::{
+    config::schema::Slack,
+    slack::names::{self, Names, UserNames},
+    store::Store,
+};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::watch;
 
 pub fn enabled() -> bool {
@@ -21,10 +29,18 @@ pub fn line(level: &str, name: &str, message: &str) {
 }
 
 /// Print events recorded after the call until `finished` turns true, then drain.
-pub async fn follow(store: Store, slack: Slack, mut finished: watch::Receiver<bool>) {
+/// With `lookup`, senders are shown by name: each unknown ID is looked up
+/// once (again after ten minutes if that failed) and the name is recorded.
+pub async fn follow(
+    store: Store,
+    slack: Slack,
+    lookup: Option<Arc<dyn UserNames>>,
+    mut finished: watch::Receiver<bool>,
+) {
     if !enabled() {
         return;
     }
+    let mut attempted: BTreeMap<String, std::time::Instant> = BTreeMap::new();
     let mut seq: i64 = store
         .call(|c| {
             Ok(
@@ -38,6 +54,34 @@ pub async fn follow(store: Store, slack: Slack, mut finished: watch::Receiver<bo
     loop {
         let done = *finished.borrow();
         let after = seq;
+        let scope = slack.clone();
+        let names: Names = store
+            .call(move |c| Ok(Names::load(c, &scope)?))
+            .await
+            .unwrap_or_default();
+        if let Some(lookup) = &lookup {
+            let unknown: Vec<String> = store
+                .call(move |c| unknown_senders(c, after))
+                .await
+                .unwrap_or_default();
+            let retry = Duration::from_secs(600);
+            for sender in unknown.into_iter().filter(|s| !names.users.contains_key(s)) {
+                if attempted
+                    .get(&sender)
+                    .is_some_and(|at| at.elapsed() < retry)
+                {
+                    continue;
+                }
+                attempted.insert(sender.clone(), std::time::Instant::now());
+                if let Some(name) = lookup.user_name(&sender).await {
+                    let (id, recorded) = (sender.clone(), name.clone());
+                    let _ = store
+                        .call(move |c| Ok(names::record_user(c, &id, &recorded)?))
+                        .await;
+                }
+            }
+            attempted.retain(|_, at| at.elapsed() < retry);
+        }
         let slack = slack.clone();
         if let Ok((last, lines)) = store.call(move |c| read(c, &slack, after)).await {
             seq = last;
@@ -56,6 +100,21 @@ pub async fn follow(store: Store, slack: Slack, mut finished: watch::Receiver<bo
 }
 
 type Line = (&'static str, &'static str, String);
+
+/// Senders of messages taken in after `after`, at most a handful per pass.
+fn unknown_senders(c: &mut Connection, after: i64) -> anyhow::Result<Vec<String>> {
+    let rows: Vec<String> = c
+        .prepare("SELECT json_extract(payload_json,'$.message.sender') FROM replay_events WHERE seq>? AND kind='intake' ORDER BY seq LIMIT 500")?
+        .query_map([after], |r| r.get::<_, Option<String>>(0))?
+        .filter_map(|r| r.ok().flatten())
+        .collect();
+    let mut seen = BTreeSet::new();
+    Ok(rows
+        .into_iter()
+        .filter(|s| !s.is_empty() && seen.insert(s.clone()))
+        .take(5)
+        .collect())
+}
 
 fn read(c: &mut Connection, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
     let names = Names::load(c, slack)?;
@@ -160,7 +219,7 @@ pub(crate) fn describe(post: Post<'_>, names: &Names, kind: &str, p: &Value) -> 
                 format!(
                     "{}:{root} from {}{source}",
                     names.channel(text(&m["channel"])),
-                    text(&m["sender"])
+                    names.user(text(&m["sender"]))
                 ),
             )
         }
@@ -283,6 +342,7 @@ mod tests {
         let names = Names {
             workspace: "T".into(),
             channels: [("C1".to_string(), "ai-human-plume".to_string())].into(),
+            users: [("UA".to_string(), "Ada".to_string())].into(),
             ..Names::default()
         };
         let say = |kind: &str, p: Value| {
@@ -294,7 +354,12 @@ mod tests {
         );
         let intake = json!({"owner":"UO","message":{"channel":"C1","ts":"100.1","thread_ts":null,"sender":"UA","source":"socket","text":"private words","meta":null}});
         let line = say("intake", intake).unwrap();
-        assert_eq!(line, "INFO intake: #ai-human-plume:100.1 from UA");
+        assert_eq!(line, "INFO intake: #ai-human-plume:100.1 from @Ada");
+        let other = json!({"owner":"UO","message":{"channel":"C1","ts":"100.2","thread_ts":null,"sender":"UB","source":"socket","text":"x","meta":null}});
+        assert_eq!(
+            say("intake", other).unwrap(),
+            "INFO intake: #ai-human-plume:100.2 from UB"
+        );
         assert!(say("intake", json!({"owner":"UO","message":{"channel":"C1","ts":"1","sender":"UO","meta":{"kind":"reply"}}})).is_none());
         let commit = json!({"request":{"session":{"id":"T:C1:100.1"}},"decision":{"reply":{"send":true,"text":"secret reply","status":"complete"},"delegations":[{"machine":"dart10"},{"machine":"","tags":["cuda"]}]}});
         assert_eq!(say("actor_commit", commit).unwrap(), "INFO parent: #ai-human-plume:100.1: replied (complete); delegated 2 job(s) to dart10, cuda");

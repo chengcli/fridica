@@ -110,6 +110,21 @@ pub trait JobIo: Send + Sync {
         spec: WorkerSpec,
         job: Job,
     ) -> AdapterFuture<'_, Result<String, WorkerFailure>>;
+    /// Place downloaded files in the worker's workspace; where each landed.
+    fn place(
+        &self,
+        _spec: WorkerSpec,
+        _job: Job,
+        _inputs: Vec<super::inputs::Input>,
+    ) -> AdapterFuture<'_, Result<Vec<super::inputs::Placed>, WorkerFailure>> {
+        Box::pin(async {
+            Err(WorkerFailure {
+                kind: Failure::Refusal,
+                code: "files_unsupported".into(),
+                backend_session_id: String::new(),
+            })
+        })
+    }
     /// Read only validated artifacts confined to the slot workspace.
     fn collect(
         &self,

@@ -69,7 +69,7 @@ fn every_migration_boundary_recovers_and_retains_one_resume_and_original_backup(
         migrate(&f.db, &f.cfg, 30.).unwrap();
         check_ready(&f.db).unwrap();
         let c = Connection::open(&f.db).unwrap();
-        assert_eq!(schema::version(&c).unwrap(), 6);
+        assert_eq!(schema::version(&c).unwrap(), schema::VERSION);
         assert_eq!(
             c.query_row(
                 "SELECT count(*) FROM audit WHERE action='migration.resume'",
@@ -81,7 +81,7 @@ fn every_migration_boundary_recovers_and_retains_one_resume_and_original_backup(
             "{phase}"
         );
         assert_eq!(
-            fs::read_to_string(sibling(&f.cfg, ".pre-v6")).unwrap(),
+            fs::read_to_string(sibling(&f.cfg, &backup_suffix())).unwrap(),
             f.original
         );
         rollback(&f.db, &f.cfg).unwrap();
@@ -189,7 +189,7 @@ fn every_recognized_schema_upgrades_repeats_and_restores_its_own_backup() {
         migrate(&f.db, &f.cfg, 10.).unwrap();
         migrate(&f.db, &f.cfg, 20.).unwrap();
         let c = Connection::open(&f.db).unwrap();
-        assert_eq!(schema::version(&c).unwrap(), 6);
+        assert_eq!(schema::version(&c).unwrap(), schema::VERSION);
         assert_eq!(
             c.query_row(
                 "SELECT count(*) FROM audit WHERE action='migration.resume'",

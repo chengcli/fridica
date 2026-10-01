@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
-const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
+const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'files',json(files_json),'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
 const WORKER:&str="SELECT json_object('id',id,'session_id',session_id,'machine',machine,'workspace',workspace,'backend',backend,'role',role,'ephemeral',json(CASE WHEN ephemeral THEN 'true' ELSE 'false' END),'backend_session_id',backend_session_id,'status',status,'slot',slot,'updated',updated) FROM workers";
 fn job(c: &Connection, id: &str) -> Result<Job> {
     let raw: String = c.query_row(&format!("{JOB} WHERE id=?"), [id], |r| r.get(0))?;
@@ -44,8 +44,8 @@ pub(crate) fn enqueue_tx(c: &Connection, j: &Job, now: f64) -> Result<()> {
     if w.session_id != j.session_id || w.status == "stopped" {
         bail!("worker unavailable in this thread");
     }
-    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,j.work_item_id,j.target_sha,j.target_tree,now])?;
+    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,files_json,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,serde_json::to_string(&j.files)?,j.work_item_id,j.target_sha,j.target_tree,now])?;
     Ok(())
 }
 pub async fn enqueue(store: &Store, j: Job, now: f64) -> Result<()> {
@@ -69,6 +69,41 @@ pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Va
         context["elsewhere"] = json!(elsewhere);
     }
     Ok(context)
+}
+/// Files attached in this thread by others, newest first, that a delegation
+/// may hand to a worker. Fridica's own uploads are left out.
+pub(crate) fn files_tx(c: &Connection, session: &str) -> Result<Vec<serde_json::Value>> {
+    let rows: Vec<(String, String, String)> = c
+        .prepare("SELECT attachments_json,ts,sender FROM messages WHERE workspace||':'||channel||':'||root_ts=? AND attachments_json!='[]' ORDER BY CAST(ts AS REAL) DESC LIMIT 100")?
+        .query_map([session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut files = vec![];
+    let mut seen = std::collections::BTreeSet::new();
+    for (attachments, ts, sender) in rows {
+        let attachments: Vec<serde_json::Value> =
+            serde_json::from_str(&attachments).unwrap_or_default();
+        for a in attachments {
+            let Some(id) = a["id"].as_str().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            if !seen.insert(id.to_owned()) {
+                continue;
+            }
+            let own: bool = c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox WHERE kind='upload' AND sent_ts=?)",
+                [id],
+                |r| r.get(0),
+            )?;
+            if own {
+                continue;
+            }
+            files.push(json!({"id":id,"name":a["name"],"mimetype":a["mimetype"],"size":a["size"],"ts":ts,"sender":sender}));
+            if files.len() >= 20 {
+                return Ok(files);
+            }
+        }
+    }
+    Ok(files)
 }
 /// The latest jobs of other threads in the same channel, so a parent can cite
 /// or wait for work already running or done instead of starting it again.

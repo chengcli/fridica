@@ -1,6 +1,9 @@
 //! Artifact validation and local/SSH JobIo adapters. Compose with ScopedJobIo
 //! to enable trusted repository fetches.
-use super::protocol::{JobIo, NoJobIo, WorkerSpec};
+use super::{
+    inputs,
+    protocol::{JobIo, NoJobIo, WorkerSpec},
+};
 use crate::exec::ssh::SshTransport;
 use crate::{
     core::{delivery::AdapterFuture, worker::*},
@@ -13,6 +16,13 @@ use std::{
     time::Duration,
 };
 
+fn placement_failed() -> WorkerFailure {
+    WorkerFailure {
+        kind: Failure::Execution,
+        code: "files_placement_failed".into(),
+        backend_session_id: String::new(),
+    }
+}
 pub fn validate_reference(reference: &ArtifactRef) -> Result<(), &'static str> {
     let path = Path::new(&reference.path);
     if reference.path.contains('\0')
@@ -59,6 +69,21 @@ impl JobIo for LocalJobIo {
     ) -> AdapterFuture<'_, Result<String, WorkerFailure>> {
         Box::pin(async move { NoJobIo.prepare(spec, job).await })
     }
+    fn place(
+        &self,
+        spec: WorkerSpec,
+        job: Job,
+        inputs: Vec<inputs::Input>,
+    ) -> AdapterFuture<'_, Result<Vec<inputs::Placed>, WorkerFailure>> {
+        let home = self.home.clone();
+        Box::pin(async move {
+            let _ = job;
+            tokio::task::spawn_blocking(move || inputs::place_local(&home, &spec, &inputs))
+                .await
+                .map_err(|_| placement_failed())?
+                .map_err(|_| placement_failed())
+        })
+    }
     fn collect(
         &self,
         spec: WorkerSpec,
@@ -82,6 +107,35 @@ impl JobIo for SystemJobIo {
         job: Job,
     ) -> AdapterFuture<'_, Result<String, WorkerFailure>> {
         Box::pin(async move { NoJobIo.prepare(spec, job).await })
+    }
+    fn place(
+        &self,
+        spec: WorkerSpec,
+        job: Job,
+        inputs: Vec<inputs::Input>,
+    ) -> AdapterFuture<'_, Result<Vec<inputs::Placed>, WorkerFailure>> {
+        Box::pin(async move {
+            let _ = job;
+            match spec.machine.transport.as_str() {
+                "local" => {
+                    let home = self.home.clone();
+                    tokio::task::spawn_blocking(move || inputs::place_local(&home, &spec, &inputs))
+                        .await
+                        .map_err(|_| placement_failed())?
+                }
+                "ssh" => {
+                    inputs::place_remote(
+                        &self.ssh_control_directory,
+                        &self.environment,
+                        &spec,
+                        &inputs,
+                    )
+                    .await
+                }
+                _ => Err(anyhow::anyhow!("unsupported transport")),
+            }
+            .map_err(|_| placement_failed())
+        })
     }
     fn collect(
         &self,

@@ -56,6 +56,9 @@ pub(super) fn repeat_evidence(
     )
 }
 
+/// Details at most this long are folded into the reply instead of attached.
+const INLINE_DETAILS: usize = 1500;
+
 pub(super) fn render(
     c: &Connection,
     request: &ParentRequest,
@@ -78,6 +81,15 @@ pub(super) fn render(
     } else {
         String::new()
     };
+    // A few lines of details are not worth a file: they go in the message.
+    let combined = format!("{}\n\n{}", reply.text.trim_end(), reply.details.trim());
+    if !reply.details.trim().is_empty()
+        && reply.details.chars().count() <= INLINE_DETAILS
+        && combined.chars().count() <= limit
+    {
+        reply.text = combined;
+        reply.details.clear();
+    }
     (reply.text, reply.details) = crate::core::render::reply(
         &reply.text,
         &reply.details,
