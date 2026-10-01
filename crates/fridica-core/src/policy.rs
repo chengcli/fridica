@@ -102,6 +102,31 @@ pub fn legacy_gate(i: &GateInput) -> Verdict {
 
 pub fn attention_gate(i: &GateInput, new_instruction: bool) -> Verdict {
     let previous = legacy_gate(i);
+    // v0.4: another agent's message that addresses nobody may still be a
+    // factual ask; triage decides (the contract limits it to factual,
+    // verifiable questions). Finished replies and debriefs stay ignored.
+    let addressed =
+        i.text.contains(&format!("<@{}>", i.owner)) || i.resumed || i.status == "waiting";
+    if previous.kind == "ignore"
+        && i.generated
+        && !addressed
+        && i.sender != i.owner
+        && i.meta_kind != "debrief_root"
+        && !matches!(i.meta_status.as_str(), "complete" | "blocked")
+        && i.control == "active"
+        && !i.observe_only
+        && (i.resumed || i.reset_at == 0. || i.ts > i.reset_at)
+    {
+        return if i.status == "blocked" || i.cooling {
+            Verdict::new("observe", "another agent's message not addressed to us", 0)
+        } else {
+            Verdict::new(
+                "triage",
+                "another agent's message: answer only a factual ask",
+                i.turns.max(i.peer_turn).saturating_add(1),
+            )
+        };
+    }
     if i.status == "blocked"
         && new_instruction
         && matches!(previous.kind.as_str(), "notice" | "observe")
@@ -173,4 +198,57 @@ pub fn repost_requested(text: &str, owner: &str) -> bool {
         start = m.start() + text[m.start()..].chars().next().unwrap().len_utf8();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn peer(text: &str, status: &str, meta_status: &str, cooling: bool) -> GateInput {
+        GateInput {
+            owner: "UOWNER".into(),
+            text: text.into(),
+            sender: "UPEER".into(),
+            generated: true,
+            meta_kind: "reply".into(),
+            meta_status: meta_status.into(),
+            peer_turn: 2,
+            control: "active".into(),
+            status: status.into(),
+            turns: 0,
+            reset_at: 0.,
+            ts: 10.,
+            general_messages: true,
+            cooling,
+            observe_only: false,
+            resumed: false,
+        }
+    }
+    #[test]
+    fn unaddressed_agent_messages_go_to_triage_unless_finished_blocked_or_cooling() {
+        let ask = "I need the repository URL and the full head sha of PR 12";
+        let v = attention_gate(&peer(ask, "new", "", false), false);
+        assert_eq!((v.kind.as_str(), v.turn), ("triage", 3));
+        // The frozen v0.3 gate is unchanged.
+        assert_eq!(legacy_gate(&peer(ask, "new", "", false)).kind, "ignore");
+        for (status, meta, cooling, kind) in [
+            ("new", "complete", false, "ignore"),
+            ("new", "blocked", false, "ignore"),
+            ("blocked", "", false, "observe"),
+            ("new", "", true, "observe"),
+        ] {
+            assert_eq!(
+                attention_gate(&peer(ask, status, meta, cooling), false).kind,
+                kind,
+                "{status} {meta} {cooling}"
+            );
+        }
+        // An addressed message is answered as before.
+        assert_eq!(
+            attention_gate(&peer("<@UOWNER> which sha?", "new", "", false), false).kind,
+            "respond"
+        );
+        let mut debrief = peer(ask, "new", "", false);
+        debrief.meta_kind = "debrief_root".into();
+        assert_eq!(attention_gate(&debrief, false).kind, "ignore");
+    }
 }
