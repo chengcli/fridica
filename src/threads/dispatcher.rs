@@ -75,7 +75,7 @@ impl<D: Delivery> Dispatcher<D> {
                 attempted += 1;
                 let refused = match check(&post, &rules) {
                     Some(rule) => Some(rule),
-                    None => self.signoffs(&post, heads).await?,
+                    None => self.signoffs(&post, heads, &rules).await?,
                 };
                 let result = if let Some(rule) = refused {
                     DeliveryOutcome::Rejected {
@@ -109,11 +109,15 @@ impl<D: Delivery> Dispatcher<D> {
     }
 }
 impl<D: Delivery> Dispatcher<D> {
-    /// The rule a post's sign-off lines break, if any.
+    /// The rule a post's sign-off lines break, if any. A sign-off clears a
+    /// pull request for merge, so the PR's title, body and commit messages,
+    /// read back from GitHub, must also pass the egress rules: text a worker
+    /// pushed reaches upstream history once the PR is squashed.
     async fn signoffs(
         &self,
         post: &ClaimedPost,
         heads: Option<&dyn crate::github::client::Api>,
+        rules: &DenyList,
     ) -> Result<Option<String>> {
         let Some(lines) = signoff_lines(&post.post.text) else {
             return Ok(Some("signoff_malformed".into()));
@@ -139,23 +143,50 @@ impl<D: Delivery> Dispatcher<D> {
         if !crate::github::client::repository(&repo) {
             return Ok(Some("signoff_repo_unknown".into()));
         }
-        for (number, sha) in lines {
-            let request = crate::github::client::Request {
+        use crate::github::client::{Failure, Operation, Request};
+        let read = |operation| {
+            heads.get(Request {
                 repo: repo.clone(),
-                operation: crate::github::client::Operation::Pull { number },
-            };
-            let head = match heads.get(request).await {
-                Ok(pull) => pull["head"]["sha"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_ascii_lowercase(),
-                Err(crate::github::client::Failure::Recording) => {
-                    anyhow::bail!("sign-off check recording failed")
-                }
+                operation,
+            })
+        };
+        for (number, sha) in lines {
+            let pull = match read(Operation::Pull { number }).await {
+                Ok(pull) => pull,
+                Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
                 Err(_) => return Ok(Some("signoff_unverified".into())),
             };
+            let head = pull["head"]["sha"]
+                .as_str()
+                .unwrap_or("")
+                .to_ascii_lowercase();
             if head.len() < 40 || !head.starts_with(&sha) {
                 return Ok(Some("signoff_stale_head".into()));
+            }
+            let base = pull["base"]["sha"].as_str().unwrap_or("").to_string();
+            if !crate::github::client::sha(&base) {
+                return Ok(Some("signoff_unverified".into()));
+            }
+            let compare = match read(Operation::Compare { base, head }).await {
+                Ok(compare) => compare,
+                Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
+                Err(_) => return Ok(Some("signoff_unverified".into())),
+            };
+            // GitHub lists at most 250 commits; a longer PR cannot be read back.
+            let Some(commits) = compare["commits"]
+                .as_array()
+                .filter(|commits| compare["total_commits"].as_u64() == Some(commits.len() as u64))
+            else {
+                return Ok(Some("signoff_unverified".into()));
+            };
+            let texts = [&pull["title"], &pull["body"]]
+                .into_iter()
+                .chain(commits.iter().map(|c| &c["commit"]["message"]))
+                .filter_map(serde_json::Value::as_str);
+            for text in texts {
+                if let Some(rule) = egress::scan(text, rules) {
+                    return Ok(Some(format!("signoff_pr_{rule}")));
+                }
             }
         }
         Ok(None)

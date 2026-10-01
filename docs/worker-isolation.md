@@ -6,8 +6,8 @@ launcher, offline validation and the explicit target runtime probe.
 Existing configurations remain valid without this section. Confined workers see
 the target's normal files, including SSH keys, git configuration and `gh`
 credentials, so they can commit and push; confinement bounds writes and devices.
-Local confined workers still have the daemon config, state, control socket and
-configured contract/repository files masked automatically. There is no
+Local confined workers still have the daemon config, state, control socket,
+egress deny list and configured contract/repository files masked automatically. There is no
 `private_files` setting (it was removed; configurations that still set it are
 rejected with an explicit message).
 
