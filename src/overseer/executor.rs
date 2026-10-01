@@ -62,8 +62,19 @@ pub enum ApiOperation {
     RequestReview { number: u64, reviewer: String },
 }
 
-pub fn gh_arguments(mapping: &Repository, operation: ApiOperation) -> Result<Vec<String>> {
+/// `gh api` arguments for one operation. A comment is published text, so it
+/// passes the egress check first; a hit names the rule, never the term.
+pub fn gh_arguments(
+    mapping: &Repository,
+    operation: ApiOperation,
+    deny: &fridica_core::egress::DenyList,
+) -> Result<Vec<String>> {
     mapping.validate()?;
+    if let ApiOperation::Comment { body, .. } = &operation {
+        if let Some(rule) = fridica_core::egress::scan(body, deny) {
+            bail!("comment refused by the egress check ({rule})");
+        }
+    }
     let base = format!("repos/{}", mapping.upstream);
     let (method, endpoint, fields) = match operation {
         ApiOperation::Identity => ("GET", "user".into(), vec![]),

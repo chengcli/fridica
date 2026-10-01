@@ -110,12 +110,14 @@ fn trusted_commands_bind_fork_head_tree_and_lease() {
 #[test]
 fn api_commands_keep_untrusted_body_as_one_structured_argument() {
     let body = "$(touch /tmp/never); `whoami`\nsecond line";
+    let none = fridica::core::egress::DenyList::default();
     let args = gh_arguments(
         &mapping(),
         ApiOperation::Comment {
             number: 1,
             body: body.into(),
         },
+        &none,
     )
     .unwrap();
     assert_eq!(args.last().unwrap(), &format!("body={body}"));
@@ -124,9 +126,32 @@ fn api_commands_keep_untrusted_body_as_one_structured_argument() {
         &mapping(),
         ApiOperation::Checks {
             commit: "../../admin".into()
-        }
+        },
+        &none,
     )
     .is_err());
+    // Published comments pass the egress check: private terms and AI trailers
+    // are refused before any argument is built, naming only the rule.
+    let deny = fridica::core::egress::DenyList::parse("Jane Q\\. Private\n").unwrap();
+    for (text, rule) in [
+        ("Thanks, Jane Q. Private.", "deny_list:1"),
+        (
+            "LGTM\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+            "ai_trailer",
+        ),
+    ] {
+        let error = gh_arguments(
+            &mapping(),
+            ApiOperation::Comment {
+                number: 1,
+                body: text.into(),
+            },
+            &deny,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(rule) && !error.contains("Jane"), "{error}");
+    }
 }
 
 #[tokio::test]
