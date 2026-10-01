@@ -392,7 +392,7 @@ impl<P: Parent + 'static> Runtime<P, crate::slack::web::WebClient> {
             self,
             web.clone(),
             move |receiver| {
-                crate::slack::socket::SocketMode::new(web, receiver, app_token, socket_options)
+                crate::slack::socket::socket_mode(web, receiver, app_token, socket_options)
             },
             options,
         )

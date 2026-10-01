@@ -1,4 +1,5 @@
 use super::*;
+use crate::slack::ingress::ENVELOPE_LIMIT;
 use crate::{
     config::{loader, LoadContext},
     core::{
@@ -8,8 +9,13 @@ use crate::{
     slack::{catchup::Catchup, outbox::Dispatcher, receiver::Receiver},
     store::outbox,
 };
+use reqwest::Url;
 use sha2::Digest;
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    sync::Mutex,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -157,19 +163,22 @@ impl Server {
         self.add(Reply::json(value));
     }
     fn validate(&self) {
-        let mut auth = Reply::json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}));
+        let mut auth = Reply::json(
+            json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/"}),
+        );
         auth.headers.push((
             "x-oauth-scopes".into(),
             "chat:write, files:read, files:write".into(),
         ));
         self.add(auth);
-        self.json(json!({"ok":true,"channel":{"id":"CROOM","is_member":true}}));
+        self.json(json!({"ok":true,"channel":{"id":"CROOM","created":1,"is_member":true}}));
     }
 }
 struct Harness {
     _dir: tempfile::TempDir,
     server: Server,
     web: Arc<WebClient>,
+    config: Arc<crate::config::Config>,
     store: Store,
     clock: Arc<ReplayClock>,
 }
@@ -209,21 +218,24 @@ path="{}"
         let store = Store::open(dir.path().join("db")).await.unwrap();
         let clock = Arc::new(ReplayClock::new(1000.));
         let server = Server::new().await;
-        let mut web = WebClient::new(
-            config,
+        let web = client(
+            &config,
             store.clone(),
             clock.clone(),
             "xoxp-private-test-secret".into(),
             timeout,
         )
-        .unwrap();
-        web.base = server.base.clone();
-        web.upload_origin = Some(server.base.clone());
-        web.file_origin = Some(server.base.clone());
+        .unwrap()
+        .with_test_endpoints(
+            server.base.clone(),
+            server.base.clone(),
+            server.base.clone(),
+        );
         Self {
             _dir: dir,
             server,
             web: Arc::new(web),
+            config,
             store,
             clock,
         }
@@ -326,15 +338,15 @@ async fn wrong_identity_bot_and_missing_membership_never_enable_writes() {
     for (auth, member) in [
         (json!({"ok":true,"user_id":"OTHER","team_id":"TTEAM"}), true),
         (
-            json!({"ok":true,"user_id":"UOWNER","team_id":"OTHER"}),
+            json!({"ok":true,"user_id":"UOWNER","team_id":"OTHER","team":"Team","url":"https://team.slack.com/"}),
             true,
         ),
         (
-            json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","bot_id":"B1"}),
+            json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/","bot_id":"B1"}),
             true,
         ),
         (
-            json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}),
+            json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/"}),
             false,
         ),
     ] {
@@ -489,7 +501,7 @@ async fn upload_destinations_and_incomplete_completion_fail_closed() {
         "http://files.slack.com/upload/v1/a",
         "https://files.slack.com.evil.test/upload/a",
         "https://files.slack.com@evil.test/upload/a",
-        "https://files.slack.com:443/upload/a",
+        // An explicit :443 is the same origin; the typed URL normalizes it away.
         "https://files.slack.com/a",
         "https://files.slack.com/upload/../../bad",
     ] {
@@ -504,7 +516,7 @@ async fn upload_destinations_and_incomplete_completion_fail_closed() {
             DeliveryOutcome::Ambiguous { .. }
         ));
     }
-    assert_eq!(h.server.calls.lock().unwrap().len(), 8);
+    assert_eq!(h.server.calls.lock().unwrap().len(), 7);
     for confirmed in [
         json!({"ok":true}),
         json!({"ok":true,"files":[{"id":"FOTHER"}]}),
@@ -586,7 +598,7 @@ async fn real_http_history_drives_durable_catchup_and_does_not_leak_method_argum
     h.server.json(json!({"ok":true,"messages":[]}));
     let receiver = Receiver::new(
         h.store.clone(),
-        h.web.config.clone(),
+        h.config.clone(),
         h.clock.clone(),
         Arc::new(SequenceIds::default()),
     );
@@ -717,14 +729,16 @@ async fn cancelling_a_send_leaves_durable_intent_and_recovery_never_resends() {
 #[tokio::test]
 async fn credential_echoes_are_scrubbed_from_json_bytes_headers_and_scope_metadata() {
     let h = Harness::new(Duration::from_secs(2)).await;
-    let mut auth = Reply::json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}));
+    let mut auth = Reply::json(
+        json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/"}),
+    );
     auth.headers.push((
         "x-oauth-scopes".into(),
         "files:read,xoxp-private-test-secret".into(),
     ));
     h.server.add(auth);
     h.server
-        .json(json!({"ok":true,"channel":{"id":"CROOM","is_member":true}}));
+        .json(json!({"ok":true,"channel":{"id":"CROOM","created":1,"is_member":true}}));
     h.web.validate().await.unwrap();
     let mut echo = Reply::json(
         json!({"ok":false,"error":"xoxp-private-test-secret","nested":{"token":"extra-secret"}}),
@@ -783,9 +797,10 @@ async fn startup_records_channel_names_for_owner_controls() {
     ] {
         let h = Harness::new(Duration::from_secs(2)).await;
         h.server
-            .json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}));
-        h.server
-            .json(json!({"ok":true,"channel":{"id":"CROOM","is_member":true,"name":name}}));
+            .json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/"}));
+        h.server.json(
+            json!({"ok":true,"channel":{"id":"CROOM","created":1,"is_member":true,"name":name}}),
+        );
         h.web.validate().await.unwrap();
         let names: String = h
             .store
@@ -863,7 +878,7 @@ async fn file_reads_require_validation_scope_and_a_trusted_origin() {
             "{bad}"
         );
     }
-    *h.web.file_scopes.write().unwrap() = Some(BTreeSet::new());
+    h.web.set_file_scopes(Some(BTreeSet::new()));
     assert_eq!(
         h.web.download(url, false).await,
         Err(FileFailure::MissingScope)
@@ -933,7 +948,7 @@ async fn file_html_eligibility_is_checked_even_after_a_cached_read_and_redirects
     // Unknown scope must not use a successful HTML cache entry from a previous
     // validation. The scope state is part of the cache key.
     let unknown = url.clone();
-    *h.web.file_scopes.write().unwrap() = None;
+    h.web.set_file_scopes(None);
     h.server
         .add(file_reply(b"<html>sign in</html>".to_vec(), "text/html"));
     assert_eq!(
@@ -1169,14 +1184,17 @@ async fn linked_recording_faults_fail_closed_before_or_after_http() {
 
 #[tokio::test]
 async fn onboarding_discovery_uses_only_fixed_read_endpoints_without_a_database() {
-    use crate::slack::discovery::{self, Web};
+    use crate::slack::discovery;
     let server = Server::new().await;
-    server.json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM"}));
-    server.json(json!({"ok":true,"channels":[{"id":"CROOM","name":"general","is_member":true}],"response_metadata":{"next_cursor":"next +/?&="}}));
+    server.json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","team":"Team","url":"https://team.slack.com/"}));
+    server.json(json!({"ok":true,"channels":[{"id":"CROOM","created":1,"name":"general","is_member":true}],"response_metadata":{"next_cursor":"next +/?&="}}));
     server.json(json!({"ok":true,"channels":[]}));
     server.json(json!({"ok":false,"error":"missing_scope"}));
-    let mut web = Web::new("xoxp-onboarding-secret").unwrap();
-    web.test_endpoint(server.base.clone());
+    let web = fridica_slack::discovery::Web::with_test_endpoint(
+        "xoxp-onboarding-secret",
+        server.base.clone(),
+    )
+    .unwrap();
     let found = discovery::discover(&web).await.unwrap();
     assert_eq!(found.owner, "UOWNER");
     assert_eq!(found.channels[0].id, "CROOM");
@@ -1184,17 +1202,19 @@ async fn onboarding_discovery_uses_only_fixed_read_endpoints_without_a_database(
     let calls = server.calls.lock().unwrap();
     assert_eq!(calls.len(), 4);
     assert_eq!(calls[0].path, "/api/auth.test");
-    assert!(calls[0].headers.starts_with("POST "));
+    assert!(calls[0].headers.starts_with("GET "));
     for (index, private, cursor) in [(1, false, ""), (2, false, "next +/?&="), (3, true, "")] {
         let url = Url::parse(&format!("http://fixture{}", calls[index].path)).unwrap();
         assert_eq!(url.path(), "/api/conversations.list");
         assert!(calls[index].headers.starts_with("GET "));
         assert!(calls[index].body.is_empty());
         let args: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(
-            serde_json::to_value(args).unwrap(),
-            json!({"types":if private {"private_channel"} else {"public_channel"},"exclude_archived":"true","limit":"200","cursor":cursor})
-        );
+        // The first page of each type sends no cursor.
+        let mut expected = json!({"types":if private {"private_channel"} else {"public_channel"},"exclude_archived":"true","limit":"200"});
+        if !cursor.is_empty() {
+            expected["cursor"] = json!(cursor);
+        }
+        assert_eq!(serde_json::to_value(args).unwrap(), expected);
         assert!(calls[index]
             .headers
             .to_ascii_lowercase()
@@ -1205,13 +1225,15 @@ async fn onboarding_discovery_uses_only_fixed_read_endpoints_without_a_database(
 
 #[tokio::test]
 async fn onboarding_discovery_redacts_echoes_and_never_follows_redirects_or_retries() {
-    use crate::slack::discovery::{Api, Request, Web};
+    use crate::slack::discovery::{Api, Request};
     let server = Server::new().await;
-    let mut web = Web::new("xoxp-onboarding-secret").unwrap();
-    web.test_endpoint(server.base.clone());
-    server.json(
-        json!({"ok":true,"token":"xoxp-onboarding-secret","text":"echo xoxp-onboarding-secret"}),
-    );
+    let web = fridica_slack::discovery::Web::with_test_endpoint(
+        "xoxp-onboarding-secret",
+        server.base.clone(),
+    )
+    .unwrap();
+    server.json(json!({"ok":true,"user_id":"UOWNER","team_id":"TTEAM","url":"https://team.slack.com/",
+        "team":"echo xoxp-onboarding-secret","user":"xoxp-onboarding-secret","token":"xoxp-onboarding-secret"}));
     let value = web.get(Request::Identity).await.unwrap();
     assert!(!value.to_string().contains("xoxp-onboarding-secret"));
     let mut redirect = Reply::json(json!({"private":"xoxp-onboarding-secret"}));
@@ -1255,7 +1277,10 @@ async fn onboarding_discovery_redacts_echoes_and_never_follows_redirects_or_retr
         "xoxp-",
         "xoxp-private\nsecret",
     ] {
-        let error = Web::new(bad).err().unwrap().to_string();
+        let error = crate::slack::discovery::Web::new(bad)
+            .err()
+            .unwrap()
+            .to_string();
         assert!(!error.contains(bad));
     }
 }
