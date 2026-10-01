@@ -113,9 +113,12 @@ mcp_inventory_complete=true
         command("init-state", "--config", config)
         command("init-state", "--config", config)
         db = root / "private/state.sqlite3"
+        # The schema this candidate installs is the number of migrations it ships.
+        latest = len(list((installation / "share/assets/migrations").glob("*.sql")))
+        assert latest >= 6
         with sqlite3.connect(db) as conn:
-            assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("6",)
-        checks.append("offline init/configure/readiness/doctor/fresh v6 initialization")
+            assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == (str(latest),)
+        checks.append(f"offline init/configure/readiness/doctor/fresh v{latest} initialization")
         unit = command("service-print", "--config", config, "--environment-file", root / "private/credentials.env")
         # The default unit runs the daemon; --observe-only is an explicit opt-in.
         assert "--observe-only" not in unit and "--active" not in unit and "synthetic" not in unit
@@ -205,7 +208,7 @@ mcp_inventory_complete=true
         snapshot_command("backup", "--database", legacy, "--config", legacy_config, "--output", root / "legacy-snapshot")
         args = ["migrate", "--database", legacy, "--config", legacy_config]
         plan = json.loads(command(*args, "--dry-run"))
-        assert plan["from"] == 5 and plan["to"] == 6
+        assert plan["from"] == 5 and plan["to"] == latest
         command(*args)
         command(*args)
         command(*args, "--rollback")
