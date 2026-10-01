@@ -18,7 +18,7 @@ path = "src/bin/fridica.rs"
 [dependencies]
 fridica-core = { path = "crates/fridica-core", version = "0.1.0" }
 fridica-agent = "0.1"
-fridica-slack = "0.2"
+fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
@@ -45,7 +45,7 @@ http-body-util = "0.1"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
-fridica-slack = { version = "0.2", features = ["testing"] }
+fridica-slack = { version = "0.2.3", features = ["testing"] }
 syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
