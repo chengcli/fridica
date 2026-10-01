@@ -26,7 +26,7 @@ things.
    unblocking itself (rebase, force-push with lease to a review branch, re-sign requests, reminders,
    fresh self-contained restatements), and hands the human the one thing that stays human: the final
    squash-merge. Its duties are those of the PR-lead session that Xi drove by hand during the
-   campaign, written down and given to a program with a bounded clearance (`The overseer <overseer_>`_).
+   campaign, written down and given to a program with a bounded clearance (the overseer design, since dropped).
 
 4. **Daily reports and a desktop integration.** For every channel Fridica is in, a report per day:
    what happened, what is open, what needs the owner. Reports are Markdown files and are served by an

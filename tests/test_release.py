@@ -51,7 +51,7 @@ PLATFORM_TAGS = ["py3-none-manylinux_2_28_x86_64", "py3-none-manylinux_2_28_aarc
                  "py3-none-macosx_10_13_x86_64", "py3-none-macosx_11_0_arm64"]
 
 
-def make_wheel(directory, tag, name="fridica", version="1.2.3", scripts=("fridica", "fridica-overseer"),
+def make_wheel(directory, tag, name="fridica", version="1.2.3", scripts=("fridica",),
                metadata=True):
     wheel = directory / f"fridica-1.2.3-{tag}.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -90,7 +90,7 @@ def test_verify_artifacts_for_one_os(tmp_path, os_choice, tags):
 
 
 @pytest.mark.parametrize("changes, error", [
-    ({"scripts": ("fridica",)}, "executables"),
+    ({"scripts": ()}, "fridica executable"),
     ({"metadata": False}, "wheel metadata"),
     ({"source_metadata": False}, "source distribution metadata"),
     ({"name": "other"}, "name/version"),

@@ -111,7 +111,7 @@ fn control_credentials_are_removed_after_overrides_without_changing_owner_backen
         ],
         &[],
         &BTreeMap::from([
-            ("FRIDICA_OVERSEER_CAPABILITY".into(), "override".into()),
+            ("FRIDICA_CONTROL_CAPABILITY".into(), "override".into()),
             ("CUDA_VISIBLE_DEVICES".into(), "0".into()),
         ]),
     );

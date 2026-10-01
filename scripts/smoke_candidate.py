@@ -56,7 +56,6 @@ def smoke(archive, expected, report):
         installer.install(archive, expected, installation)
         checks.append("verified archive installed into new private directory")
         binary = installation / "bin/fridica-candidate"
-        overseer = installation / "bin/fridica-overseer-candidate"
         for directory in ("home", "project", "bin", "private"):
             (root / directory).mkdir(mode=0o700)
         environment = {"HOME": str(root / "home"), "PATH": f"{root}/bin:/usr/bin:/bin",
@@ -67,11 +66,10 @@ def smoke(archive, expected, report):
             return run(binary, *args, env=environment, cwd=root, ok=ok)
         assert json.loads(command("build-info")) == manifest["build"]
         assert manifest["build"]["version"] in command("--version")
-        assert manifest["build"]["version"] in run(overseer, "--version", env=environment, cwd=root)
         for line in command("assets", "--list").splitlines():
             digest, name = line.split("  ", 1)
             assert hashlib.sha256((installation / "share/assets" / name).read_bytes()).hexdigest() == digest
-        checks.append("both native binaries and every embedded asset match manifest")
+        checks.append("the native binary and every embedded asset match manifest")
         config = root / "private/config.toml"
         command("init", "--config", config)
         assert config.stat().st_mode & 0o777 == 0o600

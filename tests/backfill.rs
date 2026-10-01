@@ -131,11 +131,7 @@ async fn authorization_range_bounds_and_transaction_faults_cannot_partially_back
         apply: true,
         client_id: "backfill-1234".into(),
     };
-    for authority in [
-        Authority::Overseer,
-        Authority::DesktopReadOnly,
-        Authority::System,
-    ] {
+    for authority in [Authority::DesktopReadOnly, Authority::System] {
         assert!(
             backfill::run(&f.store, &f.config, request.clone(), authority, 200.)
                 .await

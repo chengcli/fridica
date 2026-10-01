@@ -37,10 +37,7 @@ pub struct Capability {
 }
 impl Capability {
     pub fn generate(authority: Authority) -> Result<Self, Failure> {
-        if !matches!(
-            authority,
-            Authority::Owner | Authority::Overseer | Authority::DesktopReadOnly
-        ) {
+        if !matches!(authority, Authority::Owner | Authority::DesktopReadOnly) {
             return Err(Failure::Configuration);
         }
         Ok(Self {

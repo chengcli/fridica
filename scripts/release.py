@@ -44,7 +44,7 @@ PLATFORMS = {
     "linux": {"manylinux x86_64": ("manylinux", "_x86_64"), "manylinux aarch64": ("manylinux", "_aarch64")},
     "macos": {"macosx x86_64": ("macosx", "_x86_64"), "macosx arm64": ("macosx", "_arm64")},
 }
-SCRIPTS = ("fridica", "fridica-overseer")
+SCRIPTS = ("fridica",)
 
 
 def required_platforms(os_choice: str) -> dict[str, tuple[str, str]]:
@@ -88,7 +88,7 @@ def verify_artifacts(directory: Path, tag: str, os_choice: str = "Both") -> None
                 raise ValueError(f"wheel metadata is missing from {wheel.name}")
             data = meta[0].split(".dist-info/")[0] + ".data/scripts/"
             if not all(data + script in names for script in SCRIPTS):
-                raise ValueError(f"{wheel.name} lacks the fridica and fridica-overseer executables")
+                raise ValueError(f"{wheel.name} lacks the fridica executable")
             tags = [line.split(":", 1)[1].strip() for line in archive.read(info[0]).decode().splitlines()
                     if line.startswith("Tag:")]
             metadata.append(archive.read(meta[0]))

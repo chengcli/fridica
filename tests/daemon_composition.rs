@@ -449,7 +449,7 @@ async fn composed_worker_approval_uses_the_runtime_owner_broker() {
         .unwrap();
     assert!(runtime
         .approvals
-        .decide(id.clone(), ApprovalDecision::Once, Authority::Overseer)
+        .decide(id.clone(), ApprovalDecision::Once, Authority::System)
         .await
         .is_err());
     assert!(runtime
@@ -494,7 +494,7 @@ async fn shared_observer_and_owner_paused_composition_never_start_external_work(
                 .await
                 .unwrap();
             assert!(runtime
-                .control(SESSION.into(), Control::Resume, Authority::Overseer)
+                .control(SESSION.into(), Control::Resume, Authority::System)
                 .await
                 .is_err());
         }

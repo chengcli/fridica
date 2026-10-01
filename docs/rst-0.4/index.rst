@@ -10,6 +10,8 @@ A Rust daemon, an attention guarantee for mentions, a standing overseer, and dai
 :Baseline: Python 0.3.3 (``5249e2e``) plus the unmerged review branches F1–F6 (PRs #26–#31) and the ``fix-exit-status`` branch
 :Evidence: the 2026-09-24 21:27 to 2026-09-27 10:18 run in ``state.sqlite3`` (1,831 messages, 1,533 inbox items, 232 jobs, 606 posts) and the Slack campaign threads of that run
 :Status: design only; nothing in this document is implemented
+:Overseer: dropped after this design. Fridica carries no overseer; the overseer passages that remain in
+   other sections describe a design that was not built, and its own section was removed.
 
 .. topic:: Abstract
    :class: abstract
@@ -65,7 +67,6 @@ A Rust daemon, an attention guarantee for mentions, a standing overseer, and dai
 .. include:: 03_evidence.rst
 .. include:: 04_rust_core.rst
 .. include:: 05_attention.rst
-.. include:: 06_overseer.rst
 .. include:: 07_reporting_mcp.rst
 .. include:: 08_data_model.rst
 .. include:: 09_security.rst

@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [tool.maturin]
-# The wheel carries the native `fridica` and `fridica-overseer` executables only; it
+# The wheel carries the native `fridica` executable only; it
 # links no Python ABI, so one py3-none-<platform> wheel serves every Python version.
 bindings = "bin"
 strip = true

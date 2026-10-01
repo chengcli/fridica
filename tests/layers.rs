@@ -13,7 +13,7 @@ fn level(name: &str) -> usize {
         "config" => 1,
         "store" => 2,
         "exec" | "workers" | "machines" | "github" => 3,
-        "attention" | "threads" | "parent" | "slack" | "approvals" | "report" | "overseer" => 4,
+        "attention" | "threads" | "parent" | "slack" | "approvals" | "report" => 4,
         "cli" | "control" | "daemon" | "dashboard" | "doctor" | "mcp" | "bin" => 5,
         _ => panic!("unclassified architecture module: {name}"),
     }

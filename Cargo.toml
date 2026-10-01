@@ -15,10 +15,6 @@ path = "src/lib.rs"
 name = "fridica"
 path = "src/bin/fridica.rs"
 
-[[bin]]
-name = "fridica-overseer"
-path = "src/bin/fridica-overseer.rs"
-
 [dependencies]
 fridica-core = { path = "crates/fridica-core", version = "0.1.0" }
 fridica-agent = "0.1"

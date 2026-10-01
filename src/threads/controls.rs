@@ -30,7 +30,7 @@ pub async fn apply(
     if !now.is_finite() {
         bail!("invalid control time");
     }
-    if !matches!(actor, Authority::Owner | Authority::Overseer) {
+    if actor != Authority::Owner {
         bail!("thread control requires an authenticated capability");
     }
     store
@@ -126,7 +126,7 @@ fn apply_tx(
             if reason.trim().is_empty() {
                 bail!("pause requires a reason");
             }
-            // An overseer cannot relabel an owner's pause and then resume it.
+            // No other actor can relabel an owner's pause and then resume it.
             if matches!(
                 prior,
                 ThreadControl::Paused {

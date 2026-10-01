@@ -146,13 +146,15 @@ async fn owner_peer_capabilities_and_cli_derive_authority_without_exposing_secre
     assert!(!f.config.state.control_socket.exists());
     let readonly = Capability::generate(Authority::DesktopReadOnly).unwrap();
     let owner = Capability::generate(Authority::Owner).unwrap();
-    let overseer = Capability::generate(Authority::Overseer).unwrap();
+    // Only the owner and the read-only desktop hold control capabilities.
+    assert!(Capability::generate(Authority::System).is_err());
+    let second = Capability::generate(Authority::Owner).unwrap();
     let tokens = [
         readonly.secret().to_string(),
         owner.secret().to_string(),
-        overseer.secret().to_string(),
+        second.secret().to_string(),
     ];
-    let access = Access::capabilities(&[readonly, owner, overseer]).unwrap();
+    let access = Access::capabilities(&[readonly, owner, second]).unwrap();
     let server = f.bind(echo.clone(), access, Options::default()).await;
     let token_file = f._dir.path().join("capability");
     std::fs::write(&token_file, &tokens[1]).unwrap();
@@ -199,7 +201,7 @@ async fn owner_peer_capabilities_and_cli_derive_authority_without_exposing_secre
             .request("POST", "/threads/t/resume", Some(json!({"actor":"owner"})))
             .await
             .unwrap()["authority"]["kind"],
-        "overseer"
+        "owner"
     );
     let result=f.raw(&format!("GET /status HTTP/1.1\r\nHost: fridica\r\nAuthorization: Bearer {}\r\nAuthorization: Bearer {}\r\n\r\n",tokens[1],tokens[2]),b"").await;
     assert!(result.starts_with("HTTP/1.1 401"));

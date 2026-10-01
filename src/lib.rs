@@ -9,7 +9,6 @@ pub mod doctor;
 pub mod exec;
 pub mod github;
 pub mod machines;
-pub mod overseer;
 pub mod parent;
 pub mod report;
 pub mod slack;

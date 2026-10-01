@@ -22,7 +22,7 @@ Processes and binaries
    * - the overseer
      - ``fridica-overseer``
      - a standing process with its own database and its own clearance; talks to the daemon over the
-       control socket and to GitHub and git directly (`The overseer <overseer_>`_). Optional; one per owner.
+       control socket and to GitHub and git directly (the overseer design, since dropped). Optional; one per owner.
    * - the MCP server
      - ``fridica`` (``fridica mcp``)
      - a stdio MCP server started by Claude Desktop or Codex Desktop; a client of the control socket,
@@ -313,7 +313,7 @@ Parent calls
 The parent stays a tool-less one-shot CLI call with a JSON schema. The schemas move from Python dicts
 to Rust types that derive both ``Deserialize`` and a JSON Schema (``schemars``), so the schema the CLI
 is given and the type the answer is decoded into cannot diverge. The ``Action`` type gains fields for
-`The attention guarantee <attention_>`_ and `The overseer <overseer_>`_:
+`The attention guarantee <attention_>`_ and the overseer design, since dropped:
 
 .. code-block:: rust
 
