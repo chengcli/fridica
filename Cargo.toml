@@ -20,6 +20,7 @@ name = "fridica-overseer"
 path = "src/bin/fridica-overseer.rs"
 
 [dependencies]
+fridica-agent = { path = "../fridica-agent" }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"

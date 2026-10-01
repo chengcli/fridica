@@ -132,21 +132,9 @@ fn report() -> String {
 fn queued() -> String {
     "queued".into()
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum Failure {
-    Execution,
-    Refusal,
-    Cancelled,
-    Interrupted,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerFailure {
-    pub kind: Failure,
-    pub code: String,
-    #[serde(default)]
-    pub backend_session_id: String,
-}
+// The failure and approval vocabulary is shared with the backend drivers.
+pub use fridica_agent::{ApprovalDecision, ApprovalRequest, Failure};
+pub type WorkerFailure = fridica_agent::Error;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Outcome {
     pub result: WorkerResult,
@@ -157,24 +145,6 @@ pub struct CollectedArtifact {
     pub reference: ArtifactRef,
     pub data: Option<Vec<u8>>,
     pub error: String,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ApprovalRequest {
-    pub kind: String,
-    pub summary: String,
-    #[serde(default)]
-    pub detail: Value,
-    #[serde(default)]
-    pub backend_request_id: String,
-    #[serde(default)]
-    pub cache_key: String,
-}
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ApprovalDecision {
-    Once,
-    Session,
-    Deny,
 }
 /// Private request contents belong in the state database, never diagnostic logs.
 #[derive(Clone, Serialize, Deserialize)]
