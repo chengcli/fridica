@@ -57,12 +57,19 @@ pub struct Runtime<P: Parent, D: Delivery> {
     machine_load: Option<Arc<Monitor>>,
     /// Owner-side reads of Slack text files (`fridica files get`).
     files: Option<Arc<dyn crate::slack::files::Downloader>>,
+    /// Fresh PR reads for verifying outbox sign-off lines.
+    github: Option<Arc<dyn crate::github::client::Api>>,
     pass: Mutex<()>,
 }
 impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     /// Lets owner controls read Slack text files through this client.
     pub fn with_files(mut self, files: Arc<dyn crate::slack::files::Downloader>) -> Self {
         self.files = Some(files);
+        self
+    }
+    /// Lets the dispatcher verify `SIGN-OFF` lines against live PR heads.
+    pub fn with_github(mut self, github: Arc<dyn crate::github::client::Api>) -> Self {
+        self.github = Some(github);
         self
     }
     pub fn files(&self) -> Option<Arc<dyn crate::slack::files::Downloader>> {
@@ -141,6 +148,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             approvals,
             machine_load: adapters.machine_load,
             files: None,
+            github: None,
             pass: Mutex::new(()),
         })
     }
@@ -372,7 +380,10 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         let turns = manager.sweep().await?;
         self.supervisor.reconcile_parent_controls().await?;
         let deny = self.config().egress.deny_list.clone();
-        let delivered = self.dispatcher.drain_checked(100, deny.as_deref()).await?;
+        let delivered = self
+            .dispatcher
+            .drain_with(100, deny.as_deref(), self.github.as_deref())
+            .await?;
         let started = self.supervisor.schedule().await?.len();
         Ok(Progress {
             turns,
