@@ -103,7 +103,7 @@ fn v6_attention_defaults_and_legacy_overrides_do_not_mutate_configuration() {
             config.attention.max_echo_replies_per_hour,
             config.attention.max_replies_per_hour
         ),
-        (2, 6, 20)
+        (2, 10, 20)
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
     let explicit = format!("{source}\n[attention]\nstreak_signal=7\nmention_grace=60\n");

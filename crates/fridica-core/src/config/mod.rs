@@ -108,7 +108,7 @@ impl Default for Attention {
         Self {
             mention_grace: 900.,
             max_replies_per_hour: 20,
-            max_echo_replies_per_hour: 6,
+            max_echo_replies_per_hour: 10,
             streak_signal: 3,
         }
     }

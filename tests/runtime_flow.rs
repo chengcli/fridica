@@ -834,8 +834,9 @@ async fn peer_result_throttling_persists_and_does_not_block_owner_instructions()
     h.intake(true).await;
     h.runtime.pass().await.unwrap();
     h.finish(1, 1).await;
-    // Fill the other five peer slots with confirmed historical reservations.
-    h.store.call(|c|{for n in 0..5{
+    // Fill the other peer slots with confirmed historical reservations.
+    let others = fridica::config::Attention::default().max_echo_replies_per_hour - 1;
+    h.store.call(move |c|{for n in 0..others{
         c.execute("INSERT INTO thread_inbox(session_id,kind,created,state) VALUES(?,'message',20,'done')",[SESSION])?;let inbox=c.last_insert_rowid();
         c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,text,created,state,delivered_at) VALUES(?,?,'reply','CROOM','100.1','historical',20,'sent',20)",rusqlite::params![format!("historic-{n}"),SESSION])?;
         let post=c.last_insert_rowid();
@@ -3769,8 +3770,9 @@ async fn restarted_throttling_and_concurrent_passes_preserve_owner_controls_and_
     h.intake(true).await;
     h.runtime.pass().await.unwrap();
     h.finish(1, 1).await;
-    // Fill the other five peer slots with confirmed historical reservations.
-    h.store.call(|c|{for n in 0..5{
+    // Fill the other peer slots with confirmed historical reservations.
+    let others = fridica::config::Attention::default().max_echo_replies_per_hour - 1;
+    h.store.call(move |c|{for n in 0..others{
         c.execute("INSERT INTO thread_inbox(session_id,kind,created,state) VALUES(?,'message',20,'done')",[SESSION])?;let inbox=c.last_insert_rowid();
         c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,text,created,state,delivered_at) VALUES(?,?,'reply','CROOM','100.1','historical',20,'sent',20)",rusqlite::params![format!("historic-{n}"),SESSION])?;
         let post=c.last_insert_rowid();
