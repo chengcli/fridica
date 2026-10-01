@@ -224,21 +224,20 @@ async fn cancelling_the_read_reaps_its_owned_ssh_process() {
             )
             .await
     });
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while !marker.exists() {
+    // The script creates the marker before its pid is written; wait for content.
+    let text = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                if !text.trim().is_empty() {
+                    break text;
+                }
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
-    let pid = rustix::process::Pid::from_raw(
-        std::fs::read_to_string(marker)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap(),
-    )
-    .unwrap();
+    let pid = rustix::process::Pid::from_raw(text.trim().parse().unwrap()).unwrap();
     read.abort();
     let _ = read.await;
     tokio::time::timeout(Duration::from_secs(4), async {
