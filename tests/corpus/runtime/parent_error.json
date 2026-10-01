@@ -155,7 +155,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -343,7 +343,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -950,7 +950,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",

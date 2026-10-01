@@ -82,7 +82,7 @@ impl LocalTransport {
         .await?
     }
 }
-fn expand_home(path: &Path, home: &Path) -> PathBuf {
+pub(crate) fn expand_home(path: &Path, home: &Path) -> PathBuf {
     match path.strip_prefix("~") {
         Ok(tail) => home.join(tail),
         Err(_) => path.to_path_buf(),

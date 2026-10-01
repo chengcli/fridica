@@ -125,6 +125,10 @@ pub fn dry_run(database: &Path, configuration: &Path) -> Result<Plan> {
     })
 }
 
+/// The backup suffix of the upgrade to this runtime's schema.
+pub fn backup_suffix() -> String {
+    format!(".pre-v{}", schema::VERSION)
+}
 pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> {
     migrate_with_checkpoint(database, configuration, now, |_| Ok(()))
 }
@@ -142,8 +146,9 @@ fn migrate_with_checkpoint(
     let database = fs::canonicalize(database)?;
     let configuration = fs::canonicalize(configuration)?;
     let journal_path = sibling(&database, ".migration.json");
-    let backup_path = sibling(&database, ".pre-v6");
-    let config_backup = sibling(&configuration, ".pre-v6");
+    // Named for the schema the upgrade reaches, so each upgrade keeps its own.
+    let backup_path = sibling(&database, &backup_suffix());
+    let config_backup = sibling(&configuration, &backup_suffix());
     let plan = dry_run(&database, &configuration)?;
     let mut journal: Journal = if journal_path.exists() {
         let prior: Journal = serde_json::from_slice(&fs::read(&journal_path)?)?;
@@ -353,8 +358,8 @@ fn rollback_with_checkpoint(
             bail!("configuration changed after migration");
         }
     }
-    let backup_path = sibling(&database, ".pre-v6");
-    let config_backup = fs::read(sibling(&configuration, ".pre-v6"))?;
+    let backup_path = sibling(&database, &backup_suffix());
+    let config_backup = fs::read(sibling(&configuration, &backup_suffix()))?;
     if digest(&fs::read(&backup_path)?) != journal.backup_hash
         || digest(&config_backup) != journal.config_before
     {

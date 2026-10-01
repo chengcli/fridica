@@ -35,6 +35,8 @@ pub struct Choices {
     pub fetch_repos: Vec<String>,
     /// Tags some machine has, for delegation selectors.
     pub tags: Vec<String>,
+    /// Files attached in this thread that a worker may be given.
+    pub files: Vec<String>,
 }
 impl Choices {
     pub fn from_session(session: &Value) -> Self {
@@ -76,6 +78,13 @@ impl Choices {
                     .map(String::from),
             );
         }
+        choices.files = session["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f["id"].as_str())
+            .map(String::from)
+            .collect();
         for values in [&mut choices.fetch_repos, &mut choices.tags] {
             values.sort();
             values.dedup();
@@ -88,7 +97,7 @@ pub fn decision(choices: &Choices) -> Value {
         json!({"send":{"type":"boolean"},"discussion":{"type":"string","enum":["ongoing","finished"]},"text":string(),"details":string(),"status":{"type":"string","enum":["complete","waiting","blocked"]},"answers":strings()}),
     );
     let delegation = object(
-        json!({"brief":string(),"worker_id":choice(&choices.delegable),"machine":string(),"workspace":string(),"backend":string(),"tags":{"type":"array","items":choice(&choices.tags)},"role":{"type":"string","enum":["general","implementer","reviewer","tester"]},"ephemeral":{"type":"boolean"},"deliverable":{"type":"string","enum":["report","markdown","figures_pdf"]},"fetch_repo":choice(&choices.fetch_repos),"fetch_ref":string()}),
+        json!({"brief":string(),"worker_id":choice(&choices.delegable),"machine":string(),"workspace":string(),"backend":string(),"tags":{"type":"array","items":choice(&choices.tags)},"role":{"type":"string","enum":["general","implementer","reviewer","tester"]},"ephemeral":{"type":"boolean"},"deliverable":{"type":"string","enum":["report","markdown","figures_pdf"]},"fetch_repo":choice(&choices.fetch_repos),"fetch_ref":string(),"files":{"type":"array","items":choice(&choices.files)}}),
     );
     let declined = object(
         json!({"state":{"type":"string","enum":["declined"]},"id":string(),"reason":string()}),

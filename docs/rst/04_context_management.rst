@@ -51,6 +51,8 @@ What the parent sees
   Fridica uploaded itself (details files, artifacts) are skipped and a file shared twice is read once.
   Attached text shares ``context_chars`` with the history: it gets what the history leaves and is cut
   with a marker beyond that. Without the scope, the parent sees only the file names.
+  Any attachment, text or binary, can be given to a worker through a delegation's ``files``:
+  Fridica downloads it into the worker's workspace before the job starts.
 * **Session**: status, turns, rolling summary, decisions and sticky context.
 * **Workers**: each worker of the thread with machine, workspace, backend, role, status, a short
   summary and its last result *without* the report field.

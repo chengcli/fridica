@@ -66,7 +66,7 @@ fn migration_is_additive_idempotent_and_conservative_about_pauses() {
     migration::migrate(&db, &cfg, 10.).unwrap();
     migration::migrate(&db, &cfg, 11.).unwrap();
     let c = Connection::open(&db).unwrap();
-    assert_eq!(schema::version(&c).unwrap(), 6);
+    assert_eq!(schema::version(&c).unwrap(), schema::VERSION);
     let paused: i64 = c
         .query_row(
             "SELECT count(*) FROM threads WHERE control='paused'",
@@ -186,8 +186,9 @@ fn migration_preflight_rejects_invalid_policy_and_mismatched_database_without_ba
         .to_string()
         .contains("fetch_repos"));
     assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 5);
-    assert!(!dir.path().join("state.sqlite3.pre-v6").exists());
-    assert!(!dir.path().join("config.toml.pre-v6").exists());
+    let suffix = migration::backup_suffix();
+    assert!(!dir.path().join(format!("state.sqlite3{suffix}")).exists());
+    assert!(!dir.path().join(format!("config.toml{suffix}")).exists());
     assert!(!dir.path().join("state.sqlite3.migration.json").exists());
     std::fs::write(&cfg, original.replace("state.sqlite3", "other.sqlite3")).unwrap();
     assert!(migration::dry_run(&db, &cfg)

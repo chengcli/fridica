@@ -184,6 +184,7 @@
             "deliverable": "report",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files": [],
             "id": "job-0000000000000005",
             "inbox_id": 1,
             "join_group": "1",
@@ -305,6 +306,7 @@
             "deliverable": "report",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files": [],
             "id": "job-0000000000000005",
             "inbox_id": 1,
             "join_group": "1",
@@ -512,7 +514,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -660,6 +662,7 @@
             "error": "",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files_json": [],
             "finished_at": 0.0,
             "id": "job-0000000000000005",
             "inbox_id": 1,
@@ -727,7 +730,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -811,6 +814,7 @@
                   "ephemeral": false,
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "machine": "local",
                   "role": "",
                   "tags": [],
@@ -1151,6 +1155,7 @@
                     "ephemeral": false,
                     "fetch_ref": "",
                     "fetch_repo": "",
+                    "files": [],
                     "machine": "local",
                     "role": "",
                     "tags": [],
@@ -1187,6 +1192,7 @@
                   "deliverable": "report",
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "id": "job-0000000000000005",
                   "inbox_id": 1,
                   "join_group": "1",
@@ -1563,6 +1569,7 @@
             "error": "",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files_json": [],
             "finished_at": 20.0,
             "id": "job-0000000000000005",
             "inbox_id": 1,
@@ -1645,7 +1652,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -1768,6 +1775,7 @@
                   "ephemeral": false,
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "machine": "local",
                   "role": "",
                   "tags": [],
@@ -2108,6 +2116,7 @@
                     "ephemeral": false,
                     "fetch_ref": "",
                     "fetch_repo": "",
+                    "files": [],
                     "machine": "local",
                     "role": "",
                     "tags": [],
@@ -2144,6 +2153,7 @@
                   "deliverable": "report",
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "id": "job-0000000000000005",
                   "inbox_id": 1,
                   "join_group": "1",
@@ -2840,6 +2850,7 @@
             "error": "",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files_json": [],
             "finished_at": 20.0,
             "id": "job-0000000000000005",
             "inbox_id": 1,
@@ -2922,7 +2933,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -3045,6 +3056,7 @@
                   "ephemeral": false,
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "machine": "local",
                   "role": "",
                   "tags": [],
@@ -3385,6 +3397,7 @@
                     "ephemeral": false,
                     "fetch_ref": "",
                     "fetch_repo": "",
+                    "files": [],
                     "machine": "local",
                     "role": "",
                     "tags": [],
@@ -3421,6 +3434,7 @@
                   "deliverable": "report",
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "id": "job-0000000000000005",
                   "inbox_id": 1,
                   "join_group": "1",
@@ -4117,6 +4131,7 @@
             "error": "",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files_json": [],
             "finished_at": 20.0,
             "id": "job-0000000000000005",
             "inbox_id": 1,
@@ -4199,7 +4214,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -4322,6 +4337,7 @@
                   "ephemeral": false,
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "machine": "local",
                   "role": "",
                   "tags": [],
@@ -4662,6 +4678,7 @@
                     "ephemeral": false,
                     "fetch_ref": "",
                     "fetch_repo": "",
+                    "files": [],
                     "machine": "local",
                     "role": "",
                     "tags": [],
@@ -4698,6 +4715,7 @@
                   "deliverable": "report",
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "id": "job-0000000000000005",
                   "inbox_id": 1,
                   "join_group": "1",
@@ -5394,6 +5412,7 @@
             "error": "",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files_json": [],
             "finished_at": 20.0,
             "id": "job-0000000000000005",
             "inbox_id": 1,
@@ -5476,7 +5495,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -5599,6 +5618,7 @@
                   "ephemeral": false,
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "machine": "local",
                   "role": "",
                   "tags": [],
@@ -5939,6 +5959,7 @@
                     "ephemeral": false,
                     "fetch_ref": "",
                     "fetch_repo": "",
+                    "files": [],
                     "machine": "local",
                     "role": "",
                     "tags": [],
@@ -5975,6 +5996,7 @@
                   "deliverable": "report",
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "id": "job-0000000000000005",
                   "inbox_id": 1,
                   "join_group": "1",
@@ -6671,6 +6693,7 @@
             "error": "",
             "fetch_ref": "",
             "fetch_repo": "",
+            "files_json": [],
             "finished_at": 20.0,
             "id": "job-0000000000000005",
             "inbox_id": 1,
@@ -6753,7 +6776,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "6"
+            "value": "7"
           },
           {
             "key": "durable_generation",
@@ -6876,6 +6899,7 @@
                   "ephemeral": false,
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "machine": "local",
                   "role": "",
                   "tags": [],
@@ -7216,6 +7240,7 @@
                     "ephemeral": false,
                     "fetch_ref": "",
                     "fetch_repo": "",
+                    "files": [],
                     "machine": "local",
                     "role": "",
                     "tags": [],
@@ -7252,6 +7277,7 @@
                   "deliverable": "report",
                   "fetch_ref": "",
                   "fetch_repo": "",
+                  "files": [],
                   "id": "job-0000000000000005",
                   "inbox_id": 1,
                   "join_group": "1",

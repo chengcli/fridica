@@ -139,9 +139,11 @@ pub(super) fn attachments(
             reply.details.as_bytes().to_vec(),
         ));
     }
+    // Only a file deliverable posts files; a report's result is its text, and
+    // files a worker kept along the way stay in its workspace.
     if let Some(results) = request.trigger["results"].as_array() {
         for r in results {
-            let artifacts: Vec<(String,Vec<u8>)> = c.prepare("SELECT path,blob FROM artifacts WHERE job_id=? AND session_id=? AND status='ready' AND blob IS NOT NULL ORDER BY id")?
+            let artifacts: Vec<(String,Vec<u8>)> = c.prepare("SELECT a.path,a.blob FROM artifacts a JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND a.session_id=? AND a.status='ready' AND a.blob IS NOT NULL AND j.deliverable IN ('markdown','figures_pdf') ORDER BY a.id")?
                 .query_map(rusqlite::params![r["id"].as_str(),session], |r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
             for (path, blob) in artifacts {
                 let name = std::path::Path::new(&path)

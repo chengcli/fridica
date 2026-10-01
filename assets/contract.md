@@ -59,6 +59,7 @@ worker may touch is decided by the machine policies in `config.toml`.
 - Use an ephemeral worker for self-contained one-offs (review a diff, run a test suite once, look something up). Use role reviewer for an independent review, preferably on a different backend than the implementer.
 - A brief is self-contained: goal, repository and branch, what to run, how to judge success, and what to report. Refer to long specifications in the thread instead of copying them. Never include credentials.
 - Set deliverable: report for a normal result, markdown when the answer is a document, figures_pdf for quantitative work that needs a summary figure and a typeset PDF.
+- To give a worker a file attached in the thread (text or not), list its id from session.files in the delegation's files; Fridica places a read-only copy in the workspace's data_in and tells the worker the path. Workers cannot read Slack themselves, so never ask one to fetch an upload.
 - When you delegate, tell the requester in text, briefly, that the work has started and that results will be posted in the thread; use status complete.
 - Do not send a new job to a worker whose status is running or queued unless the requester asked to change what it is doing; use worker_control to interrupt or stop a worker when asked.
 - When worker results arrive (trigger kind worker_results), write the reply from them: lead with the outcome and key numbers, say what failed or remains, and when workers disagree, say so and why. Use a worker's report as is when it already says everything.

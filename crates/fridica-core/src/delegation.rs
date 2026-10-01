@@ -170,6 +170,25 @@ pub fn prepare(
             }
             granted
         };
+        // Only files attached in this thread, each once, and few enough to
+        // place before the job starts.
+        let files: Vec<String> = d.files.iter().filter(|f| !f.is_empty()).cloned().collect();
+        if files.len() > 3 {
+            bail!("at most 3 files per delegation");
+        }
+        for (i, file) in files.iter().enumerate() {
+            if files[..i].contains(file) {
+                bail!("a file is listed twice");
+            }
+            if !request.session["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|f| f["id"] == file.as_str())
+            {
+                bail!("files must name attachments of this thread (see session.files)");
+            }
+        }
         if let Some(ids) = ids {
             if worker.id.is_empty() {
                 worker.id = ids.next("worker");
@@ -181,7 +200,7 @@ pub fn prepare(
             }
             work.jobs.push(serde_json::from_value(json!({"id":ids.next("job"),"worker_id":worker.id,
                 "session_id":session,"brief":d.brief.trim(),"join_group":request.inbox_id.to_string(),
-                "inbox_id":request.inbox_id,"deliverable":deliverable,"fetch_repo":fetch_repo,"fetch_ref":d.fetch_ref}))?);
+                "inbox_id":request.inbox_id,"deliverable":deliverable,"fetch_repo":fetch_repo,"fetch_ref":d.fetch_ref,"files":files}))?);
         }
     }
     Ok(work)

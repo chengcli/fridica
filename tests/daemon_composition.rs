@@ -189,7 +189,7 @@ mcp_aliases=["owner-fridica"]
     fn execution(&self, brief: String, fetch: bool) -> Execution {
         let root = self.dir.path();
         let action = json!({"reply":{"text":"Running checks.","status":"complete"},"delegations":[{
-            "brief":brief,"machine":"local","workspace":"project","backend":"codex",
+            "brief":brief,"machine":"local","workspace":"project","backend":"codex","deliverable":"figures_pdf",
             "fetch_repo":if fetch{"o/r"}else{""},"fetch_ref":if fetch{"HEAD"}else{""}
         }]});
         let environment = BTreeMap::from([

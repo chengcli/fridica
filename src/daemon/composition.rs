@@ -205,6 +205,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                 fetcher: execution.fetcher,
                 artifacts: execution.artifacts,
                 clock: clock.clone(),
+                files: Some(files.clone()),
             };
             (
                 Adapters {

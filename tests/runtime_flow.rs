@@ -1150,7 +1150,10 @@ impl JobIo for CollectedFiles {
 }
 #[tokio::test]
 async fn ready_worker_artifacts_are_ordered_after_report_and_linked_to_answer_delivery() {
-    let h = Harness::with_io(vec![delegate()], false, Arc::new(CollectedFiles)).await;
+    // Only a file deliverable posts the worker's artifacts.
+    let mut delegation = delegate();
+    delegation["delegations"][0]["deliverable"] = json!("markdown");
+    let h = Harness::with_io(vec![delegation], false, Arc::new(CollectedFiles)).await;
     h.worker.outcomes.lock().unwrap().push_back(Ok(Outcome{result:serde_json::from_value(json!({"status":"done","summary":"done","report":"Artifact ready.","artifacts":[{"path":"output/checks.md","kind":"md"},{"path":"missing.md","kind":"md"}]})).unwrap(),backend_session_id:"b".into()}));
     h.intake(false).await;
     h.runtime.pass().await.unwrap();
