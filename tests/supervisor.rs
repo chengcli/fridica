@@ -223,6 +223,9 @@ impl Harness {
         Self::with_io(Arc::new(NoJobIo)).await
     }
     async fn with_io(io: Arc<dyn JobIo>) -> Self {
+        Self::with(io, |_| {}).await
+    }
+    async fn with(io: Arc<dyn JobIo>, edit: impl FnOnce(&mut Config)) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path().join("db")).await.unwrap();
         store.call(|c|{c.execute("INSERT INTO threads(id,workspace,channel,root_ts,created,updated) VALUES(?,'TTEAM','CROOM','100.1',1,1)",[SESSION])?;Ok(())}).await.unwrap();
@@ -240,6 +243,7 @@ impl Harness {
         )
         .unwrap();
         config.limits.max_jobs = 3;
+        edit(&mut config);
         let config = Arc::new(config);
         let factory = Arc::new(Fakes::default());
         let gate = Arc::new(Gate::default());
@@ -1233,4 +1237,25 @@ async fn stop_closes_a_warm_process_when_the_job_finishes_before_the_signal() {
         "stopped"
     );
     h.supervisor.close().await.unwrap();
+}
+#[tokio::test]
+async fn workers_on_the_parents_backend_use_its_model_and_effort() {
+    for (backend, model, effort) in [("claude", "", ""), ("codex", "gpt-test", "high")] {
+        let h = Harness::with(Arc::new(NoJobIo), |c| {
+            c.parent.backend = backend.into();
+            c.parent.model = "gpt-test".into();
+            c.parent.reasoning_effort = "high".into();
+        })
+        .await;
+        // Workers here run codex: only a codex parent's settings carry over.
+        h.add("a", "gpu", 1, false, 1).await;
+        assert_eq!(h.supervisor.schedule().await.unwrap(), vec!["a-0"]);
+        let spec = h.factory.created.lock().unwrap()[0].spec.clone();
+        assert_eq!(
+            (spec.model.as_str(), spec.reasoning_effort.as_str()),
+            (model, effort),
+            "{backend}"
+        );
+        h.supervisor.close().await.unwrap();
+    }
 }

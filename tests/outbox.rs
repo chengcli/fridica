@@ -4,8 +4,8 @@ use fridica::{
         time::ReplayClock,
         Authority,
     },
-    slack::outbox::Dispatcher,
     store::{outbox, Store},
+    threads::dispatcher::Dispatcher,
 };
 use serde_json::{json, Value};
 use std::{

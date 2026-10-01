@@ -594,14 +594,25 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
     if !m.backends.contains(&w.backend) {
         bail!("backend removed");
     }
+    let same_backend = w.backend == config.parent.backend;
     Ok(WorkerSpec {
         worker_id: w.id.clone(),
         machine: m.for_slot(w.slot),
         workspace: space.for_slot(w.slot),
         backend: w.backend.clone(),
         instructions: String::new(),
-        model: String::new(),
-        reasoning_effort: String::new(),
+        // Workers on the parent's backend use the parent's model and effort;
+        // a model name means nothing to the other backend.
+        model: if same_backend {
+            config.parent.model.clone()
+        } else {
+            String::new()
+        },
+        reasoning_effort: if same_backend {
+            config.parent.reasoning_effort.clone()
+        } else {
+            String::new()
+        },
         job_timeout: config.limits.job_timeout,
         idle_timeout: config.limits.worker_idle,
         excluded_env: config.secret_env().into_iter().map(str::to_owned).collect(),

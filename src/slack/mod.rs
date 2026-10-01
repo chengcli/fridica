@@ -5,7 +5,6 @@ pub mod ingress;
 pub mod journal;
 pub mod links;
 pub mod names;
-pub mod outbox;
 pub mod receiver;
 pub mod socket;
 pub mod web;

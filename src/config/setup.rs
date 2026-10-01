@@ -10,7 +10,7 @@ use std::{
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 pub const TEMPLATE: &str = include_str!("template.toml");
-pub const MANIFEST: &str = include_str!("../../slack/manifest.yaml");
+pub const MANIFEST: &str = include_str!("../../assets/slack-manifest.yaml");
 pub fn path(requested: Option<&Path>, context: &LoadContext) -> Result<PathBuf> {
     loader::resolve_path(
         requested.unwrap_or(&context.home.join(".config/fridica/config.toml")),

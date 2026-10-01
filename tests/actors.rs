@@ -7,8 +7,8 @@ use fridica::{
         time::{ReplayClock, SequenceIds},
         Authority,
     },
-    slack::outbox::Dispatcher,
     store::Store,
+    threads::dispatcher::Dispatcher,
     threads::{
         actor::{Actor, Step},
         controls::{self, Control},
@@ -312,7 +312,7 @@ async fn waiting_streak_creates_signal_without_pausing_and_parent_failure_settle
     assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
     assert_eq!(
         scalar(&s, "SELECT state FROM reply_reservations WHERE inbox_id=4").await,
-        "reserved"
+        "released"
     );
     assert_eq!(
         scalar(&s, "SELECT state FROM thread_inbox WHERE id=4").await,

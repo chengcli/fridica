@@ -114,3 +114,39 @@ async fn downloads_are_concurrent_bounded_and_cancelled_on_timeout() {
         .iter()
         .all(|v| v["note"] == "not read: only 3 files are read per reply"));
 }
+
+/// Knows files by ID only, as when the file event carried no url_private.
+struct ById;
+impl Downloader for ById {
+    fn download(&self, url: String, _: bool) -> AdapterFuture<'_, Result<Download, Failure>> {
+        Box::pin(async move {
+            assert_eq!(url, "https://files.slack.com/files-pri/T-F1/plan.txt");
+            Ok(Download {
+                data: b"the plan".to_vec(),
+                size: 8,
+            })
+        })
+    }
+    fn resolve(&self, id: String) -> AdapterFuture<'_, Result<String, Failure>> {
+        Box::pin(async move {
+            match id.as_str() {
+                "F1" => Ok("https://files.slack.com/files-pri/T-F1/plan.txt".into()),
+                _ => Err(Failure::Unavailable),
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn a_text_file_without_a_url_is_resolved_by_id_and_read() {
+    let messages = [json!({"event_id":"e1","attachments":[
+        {"id":"F1","name":"plan.txt","mimetype":"text/plain","size":8,"url":""},
+        {"id":"F2","name":"gone.txt","mimetype":"text/plain","size":3,"url":""}]})];
+    let views = files::read(&ById, &messages, &BTreeSet::new(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(views["e1"][0]["text"], "the plan");
+    assert_eq!(
+        views["e1"][1]["note"],
+        "not read: Slack did not return the file"
+    );
+}

@@ -96,6 +96,7 @@ pub fn parse(backend: &str, output: &[u8]) -> Result<Value, crate::core::parent:
         return Err(failure("parent_unknown_backend"));
     }
     let mut text = None;
+    let (mut started, mut completed, mut diagnostics) = (false, false, false);
     for line in output.lines().filter(|s| !s.trim().is_empty()) {
         // Unlike the frozen parser, malformed lines cannot hide tool events.
         let event: Value =
@@ -121,6 +122,11 @@ pub fn parse(backend: &str, output: &[u8]) -> Result<Value, crate::core::parent:
         if matches!(event["type"].as_str(), Some("error" | "turn.failed")) {
             return Err(failure("parent_backend_error"));
         }
+        match event["type"].as_str() {
+            Some("turn.started") => started = true,
+            Some("turn.completed") => completed = true,
+            _ => {}
+        }
         if let Some(item) = event.get("item") {
             if !item.is_object()
                 || !matches!(
@@ -130,13 +136,22 @@ pub fn parse(backend: &str, output: &[u8]) -> Result<Value, crate::core::parent:
             {
                 return Err(failure("parent_tools_attempted"));
             }
+            // Codex can report startup diagnostics as error items before the
+            // turn starts; those are tolerated only if the turn then completes.
+            // An error item inside the turn is fatal.
             if item["type"] == "error" {
-                return Err(failure("parent_backend_error"));
+                if started {
+                    return Err(failure("parent_backend_error"));
+                }
+                diagnostics = true;
             }
             if event["type"] == "item.completed" && item["type"] == "agent_message" {
                 text = item["text"].as_str().map(str::to_owned);
             }
         }
+    }
+    if diagnostics && !completed {
+        return Err(failure("parent_backend_error"));
     }
     let text = text.ok_or_else(|| failure("parent_missing_structured_output"))?;
     let result: Value =

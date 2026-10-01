@@ -1504,3 +1504,58 @@ fn decision_schema_allows_only_known_workers_and_granted_fetches() {
     assert_eq!(delegation["worker_id"]["enum"], json!([""]));
     assert_eq!(delegation["fetch_repo"]["enum"], json!([""]));
 }
+
+#[test]
+fn codex_startup_diagnostics_are_tolerated_only_before_a_completed_turn() {
+    let lines = |events: &[Value]| {
+        events
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let diagnostic = json!({"type":"item.completed","item":{"id":"0","type":"error","message":"MCP server failed to start"}});
+    let answer = json!({"type":"item.completed","item":{"id":"1","type":"agent_message","text":"{\"summary\":\"ok\"}"}});
+    let started = json!({"type":"turn.started"});
+    let completed = json!({"type":"turn.completed","usage":{}});
+    let parse = |events: &[Value]| parent::cli::parse("codex", lines(events).as_bytes());
+    // The recorded ordering: a diagnostic before the turn, then a completed answer.
+    assert_eq!(
+        parse(&[
+            diagnostic.clone(),
+            started.clone(),
+            answer.clone(),
+            completed.clone()
+        ])
+        .unwrap(),
+        json!({"summary":"ok"})
+    );
+    // Still fatal: an error inside the turn, a turn that never completes after a
+    // diagnostic, a failed turn and a top-level error.
+    for events in [
+        vec![
+            started.clone(),
+            diagnostic.clone(),
+            answer.clone(),
+            completed.clone(),
+        ],
+        vec![diagnostic.clone(), started.clone(), answer.clone()],
+        vec![
+            diagnostic.clone(),
+            started.clone(),
+            json!({"type":"turn.failed","error":{}}),
+        ],
+        vec![
+            json!({"type":"error","message":"x"}),
+            started.clone(),
+            answer.clone(),
+            completed.clone(),
+        ],
+    ] {
+        assert_eq!(
+            parse(&events).unwrap_err().code,
+            "parent_backend_error",
+            "{events:?}"
+        );
+    }
+}

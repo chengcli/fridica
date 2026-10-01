@@ -1,3 +1,5 @@
+//! Drains the durable outbox through a delivery adapter, a bounded batch per
+//! pass; the outcome mapping (sent, retry, ambiguous, rejected) is the store's.
 use crate::{
     core::{
         delivery::{Delivery, DeliveryOutcome},

@@ -147,7 +147,7 @@ events rather than broadcasting them to every connection. See
 
 Open [Slack app management](https://api.slack.com/apps), choose **Create New App →
 From an app manifest**, select your workspace, and paste
-[`slack/manifest.yaml`](slack/manifest.yaml). The manifest sets up public channels.
+[`assets/slack-manifest.yaml`](assets/slack-manifest.yaml). The manifest sets up public channels.
 Verify these settings before installation:
 
 | Slack settings page | Setting | Required value |

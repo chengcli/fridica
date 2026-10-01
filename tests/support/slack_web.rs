@@ -6,8 +6,9 @@ use crate::{
         delivery::Post,
         time::{ReplayClock, SequenceIds},
     },
-    slack::{catchup::Catchup, outbox::Dispatcher, receiver::Receiver},
+    slack::{catchup::Catchup, receiver::Receiver},
     store::outbox,
+    threads::dispatcher::Dispatcher,
 };
 use reqwest::Url;
 use sha2::Digest;

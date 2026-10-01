@@ -20,7 +20,7 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "contract.md" => "../../assets/contract.md",
         "repos.toml" => "../../assets/repos.toml",
         "template.toml" => "../config/template.toml",
-        "manifest.yaml" => "../../slack/manifest.yaml",
+        "manifest.yaml" => "../../assets/slack-manifest.yaml",
         "dashboard/index.html" => "../../assets/dashboard/index.html",
         "dashboard/app.js" => "../../assets/dashboard/app.js",
         "dashboard/app.css" => "../../assets/dashboard/app.css",

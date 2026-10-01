@@ -1,6 +1,6 @@
 //! Runtime composition with injected external adapters. Socket/control servers
 //! can drive bounded passes; the database, not notifications, owns queued work.
-use super::{actor, controls, manager::Manager};
+use super::{actor, controls, dispatcher::Dispatcher, manager::Manager};
 use crate::machines::probe::Monitor;
 use crate::{
     approvals::Broker,
@@ -12,7 +12,6 @@ use crate::{
         time::{Clock, Identifiers},
         Authority,
     },
-    slack::outbox::Dispatcher,
     store::{configuration, outbox, work, Store},
     workers::{
         protocol::{Factory, JobIo},
