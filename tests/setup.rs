@@ -124,7 +124,7 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
             config.attention.max_replies_per_hour,
             config.attention.streak_signal
         ),
-        (6, 20, 3)
+        (10, 20, 3)
     );
     assert!(!config.isolation.mcp_inventory_complete);
     let assets = f.cli(&["assets"]).await;

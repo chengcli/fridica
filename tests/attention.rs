@@ -148,7 +148,8 @@ async fn answer_closes_only_after_confirmed_delivery_and_due_events_are_deduplic
 async fn peer_ceiling_persists_and_deferred_items_do_not_block_controls() {
     let dir = tempfile::tempdir().unwrap();
     let s = Store::open(dir.path().join("state.sqlite3")).await.unwrap();
-    for i in 1..=7 {
+    let limit = Attention::default().max_echo_replies_per_hour;
+    for i in 1..=limit + 1 {
         let inbox = intake(&s, i).await;
         let outcome = attention::reserve(
             &s,
@@ -161,12 +162,12 @@ async fn peer_ceiling_persists_and_deferred_items_do_not_block_controls() {
         )
         .await
         .unwrap();
-        if i < 7 {
+        if i <= limit {
             assert_eq!(outcome, Capacity::Reserved);
         } else {
             assert_eq!(outcome, Capacity::Deferred(3800.));
         }
-        if i < 7 {
+        if i <= limit {
             s.call(move |c| {
                 c.execute("UPDATE thread_inbox SET state='done' WHERE id=?", [inbox])?;
                 Ok(())
@@ -207,7 +208,7 @@ async fn peer_ceiling_persists_and_deferred_items_do_not_block_controls() {
         })
         .await
         .unwrap();
-    assert_eq!(rows, 6);
+    assert_eq!(rows, limit as i64);
     assert!(attention::signal_streak(&s, session(), 3, 3, 202.)
         .await
         .unwrap());

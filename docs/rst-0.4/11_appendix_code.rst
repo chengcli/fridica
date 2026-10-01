@@ -1109,7 +1109,7 @@ Configuration additions
    [attention]
    mention_grace = 900
    max_replies_per_hour = 20
-   max_echo_replies_per_hour = 6
+   max_echo_replies_per_hour = 10
    streak_signal = 3
    ask_status_turns = true          # drive a status turn when an ask comes due
 

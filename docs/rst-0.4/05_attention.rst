@@ -187,7 +187,7 @@ one cause.
    * - **Echo ceiling**
      - two Fridicas answering each other
      - replies whose trigger carries Fridica metadata (a post by some owner's Fridica) count
-       against ``max_echo_replies_per_hour`` per thread (default 6). Over the ceiling, the reply is
+       against ``max_echo_replies_per_hour`` per thread (default 10). Over the ceiling, the reply is
        *throttled*: the inbox item waits until the trailing hour has room, the obligation is
        escalated with reason ``throttled``, and the owner is told once per hour per thread. The
        peer's turn counter in the metadata is still honoured.

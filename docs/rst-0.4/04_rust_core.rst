@@ -500,7 +500,7 @@ that matter for behaviour are:
    [attention]
    mention_grace = 900              # seconds a mention may stay unanswered before it escalates
    max_replies_per_hour = 20        # per thread, to non-owner triggers; over it: defer + escalate
-   max_echo_replies_per_hour = 6    # per thread, replies to triggers carrying Fridica metadata
+   max_echo_replies_per_hour = 10   # per thread, replies to triggers carrying Fridica metadata
    streak_signal = 3                # wait/quiet streak that raises a signal to the owner (no pause)
 
    [overseer]
