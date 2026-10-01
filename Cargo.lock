@@ -547,6 +547,8 @@ dependencies = [
 [[package]]
 name = "fridica-slack"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64832c758d020eb32b68e25ce2b7e9a99407ffa39e1081892dc3357ba835ef7c"
 dependencies = [
  "futures-util",
  "reqwest",
