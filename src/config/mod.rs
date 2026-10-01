@@ -3,48 +3,15 @@ pub mod contract;
 pub mod editor;
 pub mod isolation;
 pub mod loader;
-pub mod registry;
 pub mod repos;
 pub mod schema;
 pub mod setup;
+pub use fridica_core::config::{registry, Attention};
 pub use loader::{load, LoadContext};
 pub use schema::Config;
 
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
 use toml_edit::{value, DocumentMut, Item, Table};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Attention {
-    pub mention_grace: f64,
-    pub max_replies_per_hour: usize,
-    pub max_echo_replies_per_hour: usize,
-    pub streak_signal: usize,
-}
-impl Default for Attention {
-    fn default() -> Self {
-        Self {
-            mention_grace: 900.,
-            max_replies_per_hour: 20,
-            max_echo_replies_per_hour: 6,
-            streak_signal: 3,
-        }
-    }
-}
-impl Attention {
-    pub fn validate(&self) -> Result<()> {
-        if !self.mention_grace.is_finite()
-            || self.mention_grace <= 0.
-            || self.streak_signal == 0
-            || self.max_replies_per_hour == 0
-            || self.max_echo_replies_per_hour == 0
-        {
-            bail!("attention limits must be positive");
-        }
-        Ok(())
-    }
-}
 
 pub fn migrate_text(source: &str) -> Result<String> {
     let mut doc = source

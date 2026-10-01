@@ -2,9 +2,7 @@
 //! Complete prompts, schemas and bounded CLI output live only in the private DB.
 pub mod attachments;
 pub mod cli;
-pub mod context;
 pub mod prompts;
-pub mod schema;
 use crate::{
     config::Config,
     core::{
@@ -15,6 +13,7 @@ use crate::{
     exec::process,
     store::Store,
 };
+pub use fridica_core::parent::{context, schema};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::{

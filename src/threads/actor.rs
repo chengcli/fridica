@@ -341,7 +341,12 @@ impl<P: Parent> Actor<P> {
                 break;
             };
             match validate(&raw, &request, now).and_then(|d| {
-                super::delegation::prepare(&d, &request, self.config.as_deref(), None)?;
+                super::delegation::prepare(
+                    &d,
+                    &request,
+                    delegation_scope(self.config.as_deref(), &request),
+                    None,
+                )?;
                 Ok(d)
             }) {
                 Ok(decision) => {
@@ -363,7 +368,7 @@ impl<P: Parent> Actor<P> {
         let work = super::delegation::prepare(
             &decision,
             &request,
-            self.config.as_deref(),
+            delegation_scope(self.config.as_deref(), &request),
             Some(self.ids.as_ref()),
         )?;
         commit(
@@ -770,6 +775,22 @@ async fn settle_triage(
     }).await
 }
 
+/// What this thread's turn may delegate to: a channel must be configured and
+/// allowed to delegate.
+fn delegation_scope<'a>(
+    config: Option<&'a Config>,
+    request: &ParentRequest,
+) -> Option<super::delegation::Scope<'a>> {
+    config.map(|config| {
+        let channel = request.session["channel"].as_str().unwrap_or("");
+        super::delegation::Scope {
+            allowed: config.slack.channels.iter().any(|c| c == channel)
+                && config.slack.may_delegate(channel),
+            limits: &config.limits,
+            machines: &config.machines,
+        }
+    })
+}
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;

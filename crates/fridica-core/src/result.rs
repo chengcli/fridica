@@ -1,12 +1,14 @@
 //! Tolerant, bounded WorkerResult parsing compatible with the frozen contract.
-use crate::core::worker::*;
+use crate::worker::*;
 use serde_json::Value;
 pub const SUMMARY_LIMIT: usize = 1500;
 pub const REPORT_LIMIT: usize = 4000;
 pub const FORMAT_NOTE: &str = include_str!("result-format.txt");
+/// The JSON schema of a `WorkerResult`.
+pub const SCHEMA_JSON: &str = include_str!("result-schema.json");
 pub const SUMMARIZE_PROMPT: &str="Return only the WorkerResult JSON object for the work you just did, in one fenced ```json block, with no other text.";
 pub fn schema() -> Value {
-    serde_json::from_str(include_str!("result-schema.json")).expect("embedded worker schema")
+    serde_json::from_str(SCHEMA_JSON).expect("embedded worker schema")
 }
 fn text(v: &Value, limit: usize) -> String {
     v.as_str().unwrap_or("").chars().take(limit).collect()

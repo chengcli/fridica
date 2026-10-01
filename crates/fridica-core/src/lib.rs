@@ -1,9 +1,19 @@
-//! Shared domain types and adapter contracts; no orchestration or I/O dependencies.
+//! Fridica's domain: threads and their control, parent decisions and
+//! delegation, workers and their results, machines and placement, delivery
+//! outcomes, attention policy and reply rendering. No I/O: storage, Slack and
+//! worker processes belong to the host, which calls into these types and
+//! functions and implements the adapter traits (`Parent`, `Delivery`).
+pub mod approvals;
+pub mod config;
+pub mod delegation;
 pub mod delivery;
+pub mod failure;
 pub mod ids;
 pub mod parent;
+pub mod placement;
 pub mod policy;
 pub mod render;
+pub mod result;
 pub mod time;
 pub mod worker;
 

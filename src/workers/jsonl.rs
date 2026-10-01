@@ -270,7 +270,69 @@ impl Default for Options {
         }
     }
 }
-pub use fridica_agent::{DiscardWire, Recorder as WireRecorder};
+/// Records every backend wire event before it takes effect.
+pub trait WireRecorder: Send + Sync {
+    fn record(&self, context: Value, event: Value) -> AdapterFuture<'_, Result<(), WorkerFailure>>;
+}
+pub struct DiscardWire;
+impl WireRecorder for DiscardWire {
+    fn record(&self, _: Value, _: Value) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+/// A Fridica recorder as the driver's recorder.
+struct Recording(Arc<dyn WireRecorder>);
+impl fridica_agent::Recorder for Recording {
+    fn record(
+        &self,
+        context: Value,
+        event: Value,
+    ) -> BoxFuture<'_, Result<(), fridica_agent::Error>> {
+        Box::pin(async move { self.0.record(context, event).await.map_err(agent_error) })
+    }
+}
+// The driver's failure and approval types mirror fridica-core's field for
+// field, so conversion is exact both ways.
+fn kind(kind: fridica_agent::Failure) -> Failure {
+    match kind {
+        fridica_agent::Failure::Execution => Failure::Execution,
+        fridica_agent::Failure::Refusal => Failure::Refusal,
+        fridica_agent::Failure::Cancelled => Failure::Cancelled,
+        fridica_agent::Failure::Interrupted => Failure::Interrupted,
+    }
+}
+fn worker_failure(e: fridica_agent::Error) -> WorkerFailure {
+    WorkerFailure {
+        kind: kind(e.kind),
+        code: e.code,
+        backend_session_id: e.backend_session_id,
+    }
+}
+fn agent_error(f: WorkerFailure) -> fridica_agent::Error {
+    let kind = match f.kind {
+        Failure::Execution => fridica_agent::Failure::Execution,
+        Failure::Refusal => fridica_agent::Failure::Refusal,
+        Failure::Cancelled => fridica_agent::Failure::Cancelled,
+        Failure::Interrupted => fridica_agent::Failure::Interrupted,
+    };
+    fridica_agent::Error::new(kind, &f.code, &f.backend_session_id)
+}
+pub(crate) fn approval_request(r: fridica_agent::ApprovalRequest) -> ApprovalRequest {
+    ApprovalRequest {
+        kind: r.kind,
+        summary: r.summary,
+        detail: r.detail,
+        backend_request_id: r.backend_request_id,
+        cache_key: r.cache_key,
+    }
+}
+pub(crate) fn agent_decision(d: ApprovalDecision) -> fridica_agent::ApprovalDecision {
+    match d {
+        ApprovalDecision::Once => fridica_agent::ApprovalDecision::Once,
+        ApprovalDecision::Session => fridica_agent::ApprovalDecision::Session,
+        ApprovalDecision::Deny => fridica_agent::ApprovalDecision::Deny,
+    }
+}
 pub struct StoreWireRecorder {
     pub store: Store,
     pub clock: Arc<dyn Clock>,
@@ -437,7 +499,7 @@ impl fridica_agent::Launcher for WorkerLauncher {
         let launch = self
             .launcher
             .launch(&self.spec, command)
-            .map_err(LaunchError::Refused)?;
+            .map_err(|f| LaunchError::Refused(agent_error(f)))?;
         let process = Process::start(&launch).map_err(|_| LaunchError::StartFailed)?;
         Ok(Box::new(ProcessChild(process)))
     }
@@ -461,9 +523,21 @@ struct JobApprover {
     job: Job,
 }
 impl fridica_agent::Approver for JobApprover {
-    fn request(&self, request: ApprovalRequest) -> BoxFuture<'_, ApprovalDecision> {
-        self.approvals
-            .request(self.worker.clone(), self.job.clone(), request)
+    fn request(
+        &self,
+        request: fridica_agent::ApprovalRequest,
+    ) -> BoxFuture<'_, fridica_agent::ApprovalDecision> {
+        Box::pin(async move {
+            let decision = self
+                .approvals
+                .request(
+                    self.worker.clone(),
+                    self.job.clone(),
+                    approval_request(request),
+                )
+                .await;
+            agent_decision(decision)
+        })
     }
 }
 fn worker_result() -> OutputFormat {
@@ -514,8 +588,9 @@ impl JsonlWorker {
                 launcher,
             }),
             Arc::new(SessionUuids(ids)),
-            recorder,
-        )?;
+            Arc::new(Recording(recorder)),
+        )
+        .map_err(worker_failure)?;
         Ok(Self {
             agent,
             backend: spec.backend,
@@ -551,7 +626,8 @@ impl Worker for JsonlWorker {
                     }),
                     output: Some(worker_result()),
                 })
-                .await?;
+                .await
+                .map_err(worker_failure)?;
             Ok(Outcome {
                 result: result::parse(&reply.text).unwrap_or_else(|| result::fallback(&reply.text)),
                 backend_session_id: reply.backend_session_id,
@@ -559,9 +635,9 @@ impl Worker for JsonlWorker {
         })
     }
     fn interrupt(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
-        self.agent.interrupt()
+        Box::pin(async { self.agent.interrupt().await.map_err(worker_failure) })
     }
     fn close(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
-        self.agent.close()
+        Box::pin(async { self.agent.close().await.map_err(worker_failure) })
     }
 }

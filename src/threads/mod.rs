@@ -3,9 +3,9 @@ pub mod controls;
 pub mod manager;
 
 mod debrief;
-mod delegation;
+use fridica_core::delegation;
 mod effects;
-mod failure;
+use fridica_core::failure;
 mod replies;
 mod results;
 

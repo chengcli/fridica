@@ -132,13 +132,43 @@ fn report() -> String {
 fn queued() -> String {
     "queued".into()
 }
-// The failure and approval vocabulary is shared with the backend drivers.
-pub use fridica_agent::{ApprovalDecision, ApprovalRequest, Failure};
-pub type WorkerFailure = fridica_agent::Error;
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Failure {
+    Execution,
+    Refusal,
+    Cancelled,
+    Interrupted,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerFailure {
+    pub kind: Failure,
+    pub code: String,
+    #[serde(default)]
+    pub backend_session_id: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Outcome {
     pub result: WorkerResult,
     pub backend_session_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub kind: String,
+    pub summary: String,
+    #[serde(default)]
+    pub detail: Value,
+    #[serde(default)]
+    pub backend_request_id: String,
+    #[serde(default)]
+    pub cache_key: String,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecision {
+    Once,
+    Session,
+    Deny,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CollectedArtifact {

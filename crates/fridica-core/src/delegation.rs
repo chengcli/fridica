@@ -1,33 +1,45 @@
 //! Pure validation/placement before committing an actor turn. IDs are allocated
 //! only after the entire response passes validation, including repair attempts.
 use crate::{
-    config::{registry::valid_fetch_ref, Config},
-    core::{
-        parent::{Decision, ParentRequest, WorkerOperation},
-        time::Identifiers,
-        worker::{Job, WorkerRecord},
+    config::{
+        registry::{valid_fetch_ref, Registry},
+        Limits,
     },
-    machines::{self, Selector},
+    parent::{Decision, ParentRequest, WorkerOperation},
+    placement::{self, Selector},
+    time::Identifiers,
+    worker::{Job, WorkerRecord},
 };
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 
+/// What a turn may delegate to, from the host's configuration.
+#[derive(Clone, Copy)]
+pub struct Scope<'a> {
+    /// Whether the thread's channel may delegate at all.
+    pub allowed: bool,
+    pub limits: &'a Limits,
+    pub machines: &'a Registry,
+}
 #[derive(Default)]
-pub(super) struct Work {
+pub struct Work {
     pub workers: Vec<WorkerRecord>,
     pub jobs: Vec<Job>,
     pub context: Value,
 }
 
-pub(super) fn prepare(
+/// Validate a decision's context change, worker controls and delegations, and
+/// place new workers. With `ids`, also allocate worker and job IDs; without,
+/// only validate (as before a repair round is accepted).
+pub fn prepare(
     decision: &Decision,
     request: &ParentRequest,
-    config: Option<&Config>,
+    scope: Option<Scope<'_>>,
     ids: Option<&dyn Identifiers>,
 ) -> Result<Work> {
     let mut work = Work {
-        context: super::effects::context(decision, request, config)?,
+        context: context(decision, request, scope.map(|s| s.machines))?,
         ..Work::default()
     };
     let existing: Vec<WorkerRecord> =
@@ -55,24 +67,24 @@ pub(super) fn prepare(
     if decision.delegations.is_empty() {
         return Ok(work);
     }
-    let config = config.context("delegation is not configured")?;
-    let channel = request.session["channel"]
+    let scope = scope.context("delegation is not configured")?;
+    request.session["channel"]
         .as_str()
         .context("missing channel")?;
-    if !config.slack.channels.iter().any(|c| c == channel) || !config.slack.may_delegate(channel) {
+    if !scope.allowed {
         bail!("delegation is disabled in this channel");
     }
-    if decision.delegations.len() > config.limits.max_delegations_per_turn {
+    if decision.delegations.len() > scope.limits.max_delegations_per_turn {
         bail!("too many delegations in one turn");
     }
     let busy: BTreeMap<String, usize> =
         serde_json::from_value(request.session["work"]["busy"].clone())?;
     // Recorded probe readings (absent when probing is off or unavailable).
-    let load: BTreeMap<String, machines::probe::Assessment> = match &request.session["work"]["load"]
-    {
-        Value::Null => BTreeMap::new(),
-        value => serde_json::from_value(value.clone())?,
-    };
+    let load: BTreeMap<String, placement::probe::Assessment> =
+        match &request.session["work"]["load"] {
+            Value::Null => BTreeMap::new(),
+            value => serde_json::from_value(value.clone())?,
+        };
     let mut live = existing
         .iter()
         .filter(|w| !w.ephemeral && w.status != "stopped")
@@ -94,12 +106,12 @@ pub(super) fn prepare(
         let mut worker = if d.worker_id.is_empty() {
             if !d.ephemeral {
                 live += 1;
-                if live > config.limits.max_workers_per_thread {
+                if live > scope.limits.max_workers_per_thread {
                     bail!("too many persistent workers in this thread");
                 }
             }
-            let placement = machines::resolve(
-                &config.machines,
+            let placement = placement::resolve(
+                scope.machines,
                 &Selector {
                     machine: d.machine.clone(),
                     tags: d.tags.clone(),
@@ -129,7 +141,7 @@ pub(super) fn prepare(
                 .context("worker_id is not a live worker of this thread (see session.work.workers); leave worker_id empty to start a new worker")?
                 .clone()
         };
-        let machine = config
+        let machine = scope
             .machines
             .get(&worker.machine)
             .context("worker machine no longer configured")?;
@@ -172,4 +184,45 @@ pub(super) fn prepare(
         }
     }
     Ok(work)
+}
+/// The thread context patch a decision asks for (machine, workspace, repo,
+/// branch), checked against the registry.
+pub fn context(
+    decision: &Decision,
+    request: &ParentRequest,
+    machines: Option<&Registry>,
+) -> Result<Value> {
+    let context = &decision.context;
+    if !context.machine.is_empty() || !context.workspace.is_empty() {
+        let registry = machines.context("context placement is not configured")?;
+        let target = if context.machine.is_empty() {
+            request.session["context"]["machine"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&registry.default)
+        } else {
+            &context.machine
+        };
+        let machine = registry.get(target).context("unknown context machine")?;
+        if !context.workspace.is_empty() && machine.workspace(&context.workspace).is_none() {
+            bail!("context workspace is not on the selected machine");
+        }
+        // A machine-only update must not retain an invalid workspace on the new
+        // machine. The parent can repair the pair explicitly.
+        let workspace = request.session["context"]["workspace"]
+            .as_str()
+            .unwrap_or("");
+        if context.workspace.is_empty()
+            && !workspace.is_empty()
+            && machine.workspace(workspace).is_none()
+        {
+            bail!("context machine change needs a valid workspace");
+        }
+    }
+    let mut patch = serde_json::to_value(context)?;
+    patch
+        .as_object_mut()
+        .unwrap()
+        .retain(|_, v| v.as_str().is_some_and(|s| !s.is_empty()));
+    Ok(patch)
 }

@@ -6,9 +6,17 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
     macro_rules! assets {
         ($($name:literal => $path:literal),* $(,)?) => {vec![$(($name.to_owned(), include_bytes!($path).as_slice())),*]};
     }
-    let mut entries = assets![
-        "workers/result-format.txt" => "../workers/result-format.txt",
-        "workers/result-schema.json" => "../workers/result-schema.json",
+    let mut entries = vec![
+        (
+            "workers/result-format.txt".to_owned(),
+            crate::workers::result::FORMAT_NOTE.as_bytes(),
+        ),
+        (
+            "workers/result-schema.json".to_owned(),
+            crate::workers::result::SCHEMA_JSON.as_bytes(),
+        ),
+    ];
+    entries.extend(assets![
         "contract.md" => "../../assets/contract.md",
         "repos.toml" => "../../assets/repos.toml",
         "template.toml" => "../config/template.toml",
@@ -26,7 +34,7 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "helpers/mcp_startup.py" => "../exec/mcp_startup.py",
         "helpers/readiness.py" => "../exec/readiness.py",
         "helpers/diagnostics.py" => "../exec/diagnostics.py",
-    ];
+    ]);
     entries.extend(
         crate::store::schema::MIGRATIONS
             .iter()

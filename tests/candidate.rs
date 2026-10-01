@@ -66,7 +66,7 @@ fn exported_assets_are_complete_and_never_overwrite() {
             fs::read(path.join("workers").join(name)).unwrap(),
             fs::read(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("src/workers")
+                    .join("crates/fridica-core/src")
                     .join(name)
             )
             .unwrap()
