@@ -651,6 +651,48 @@ struct Task {
     clock: Arc<dyn Clock>,
     grace: Duration,
 }
+/// A resumed backend session keeps the instructions it began with, and what
+/// the worker concluded under them, even when new instructions are sent. So
+/// resume only a session begun with the current instructions; otherwise drop
+/// it in the same transaction that records the new fingerprint.
+async fn fresh_unless_same_instructions(t: &Task, resume: String) -> Result<String, WorkerFailure> {
+    use rusqlite::OptionalExtension;
+    use sha2::{Digest, Sha256};
+    let key = format!("worker_instructions:{}", t.record.id);
+    let fingerprint = format!("{:x}", Sha256::digest(t.spec.instructions.as_bytes()));
+    let worker = t.record.id.clone();
+    t.store
+        .call(move |c| {
+            let tx = c.transaction()?;
+            let started: Option<String> = tx
+                .query_row("SELECT value FROM meta WHERE key=?", [&key], |r| r.get(0))
+                .optional()?;
+            // No fingerprint means the session predates this check: keep it.
+            let resume = if started.as_deref().is_none_or(|f| f == fingerprint) {
+                resume
+            } else {
+                String::new()
+            };
+            if resume.is_empty() {
+                tx.execute(
+                    "UPDATE workers SET backend_session_id='' WHERE id=?",
+                    [&worker],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                rusqlite::params![key, fingerprint],
+            )?;
+            tx.commit()?;
+            Ok(resume)
+        })
+        .await
+        .map_err(|_| WorkerFailure {
+            kind: Failure::Execution,
+            code: "worker_intent_storage_failed".into(),
+            backend_session_id: String::new(),
+        })
+}
 async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskEnd> {
     let stale = t.record.updated != 0.
         && t.clock.now() - t.record.updated > t.config.limits.session_timeout;
@@ -663,6 +705,7 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
     let mut operation = Box::pin(async {
         t.factory.admit(t.config.clone(), t.spec.clone()).await?;
         let prepared = t.io.prepare(t.spec.clone(), t.job.clone()).await?;
+        let resume = fresh_unless_same_instructions(&t, resume).await?;
         let mut brief = frame(&t.job, &t.record);
         brief.push_str(&prepared);
         let request = RunRequest {
