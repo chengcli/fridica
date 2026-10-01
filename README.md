@@ -617,11 +617,18 @@ The CLI uses it and never writes the database.
 fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
 fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
+fridica files list '#ai-human-plume:1790790458.842149'   # a thread's Slack files
+fridica files get F0ABC123 --out ~/Downloads               # save one text file
 ```
 
 `instruct` tells the parent something as you, in the channel's most recently active
 thread (a thread ID instead targets that thread). It prints the `client_id` it used;
 after an uncertain response, rerun with `--client-id` so it is not queued twice.
+
+`files get` downloads a text file (64 KiB at most) through the daemon's own Slack
+client, so your other tools never handle the Slack token. It writes the exact bytes,
+never overwrites an existing file, prints the path and SHA-256, and posts nothing,
+so it works in observe-only mode too.
 
 The dashboard's page (`assets/dashboard/`) is embedded in the binary
 (`fridica assets --export DIR`); serving it from the v0.4 daemon is not implemented

@@ -133,6 +133,21 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
+    /// List a thread's Slack files, or save one text file locally.
+    ///
+    /// `get` writes the exact bytes (text files up to 64 KiB) and prints the
+    /// path and SHA-256. It posts nothing and works in observe-only mode.
+    Files {
+        #[arg(value_parser=["list","get"])]
+        action: String,
+        /// A thread (`#channel:TS` or its ID) for list; a file ID for get.
+        target: String,
+        /// Directory to save into; defaults to the current directory.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[command(flatten)]
+        connection: Connection,
+    },
     /// Send an owner instruction to the parent in a channel's latest thread.
     ///
     /// After an uncertain response, retry with the printed client_id.
@@ -148,6 +163,43 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
+}
+/// Write a downloaded file into `dir` without overwriting anything, after
+/// checking its bytes against the daemon's SHA-256.
+fn save(file: &Value, dir: &std::path::Path) -> Result<Value> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    let hex = file["hex"].as_str().context("invalid file response")?;
+    if hex.len() % 2 != 0 {
+        bail!("invalid file response");
+    }
+    let data = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .context("invalid file response")?;
+    let sha256 = format!("{:x}", Sha256::digest(&data));
+    if file["sha256"] != sha256 {
+        bail!("downloaded bytes do not match their SHA-256");
+    }
+    // Slack's file name, reduced to a plain name inside `dir`.
+    let name = file["name"]
+        .as_str()
+        .and_then(|n| n.rsplit('/').next())
+        .filter(|n| !n.is_empty() && !n.starts_with('.') && !n.contains('\\'))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{}.txt", file["id"].as_str().unwrap_or("file")));
+    let path = dir.join(name);
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .with_context(|| format!("cannot create {}", path.display()))?;
+    out.write_all(&data)?;
+    Ok(
+        json!({"path":path,"sha256":sha256,"size":data.len(),"name":file["name"],"mimetype":file["mimetype"]}),
+    )
 }
 /// A thread ID or its readable `#channel:TS` form; the daemon resolves names.
 fn thread(value: &str) -> Result<&str> {
@@ -264,6 +316,22 @@ impl Commands {
                     (connection, "GET", "/obligations".into(), None)
                 }
             }
+            Self::Files {
+                action,
+                target,
+                out,
+                connection,
+            } => {
+                if action == "list" {
+                    let route = format!("/files?thread={}", thread(&target)?);
+                    return Ok(connection.client()?.request("GET", &route, None).await?);
+                }
+                let file = connection
+                    .client()?
+                    .request("GET", &format!("/files/{}", segment(&target)?), None)
+                    .await?;
+                return save(&file, &out.unwrap_or_else(|| PathBuf::from(".")));
+            }
             Self::Instruct {
                 target,
                 text,
@@ -299,5 +367,32 @@ impl Commands {
             }
         };
         Ok(connection.client()?.request(method, &target, body).await?)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    fn file(name: &str, data: &[u8]) -> Value {
+        let hex: String = data.iter().map(|b| format!("{b:02x}")).collect();
+        json!({"id":"F1","name":name,"mimetype":"text/plain","hex":hex,
+            "sha256":format!("{:x}", Sha256::digest(data))})
+    }
+    #[test]
+    fn saved_files_keep_exact_bytes_stay_in_the_directory_and_never_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved = save(&file("../../plan.txt", b"exact\nbytes"), dir.path()).unwrap();
+        assert_eq!(saved["path"], json!(dir.path().join("plan.txt")));
+        assert_eq!(
+            std::fs::read(dir.path().join("plan.txt")).unwrap(),
+            b"exact\nbytes"
+        );
+        assert!(save(&file("plan.txt", b"other"), dir.path()).is_err());
+        let hidden = save(&file(".bashrc", b"x"), dir.path()).unwrap();
+        assert_eq!(hidden["path"], json!(dir.path().join("F1.txt")));
+        let mut tampered = file("t.txt", b"one");
+        tampered["sha256"] = json!("00");
+        assert!(save(&tampered, dir.path()).is_err());
+        assert!(!dir.path().join("t.txt").exists());
     }
 }

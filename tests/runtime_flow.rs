@@ -264,6 +264,7 @@ path="{}"
         )
         .await
         .unwrap()
+        .with_files(Arc::new(TextFiles))
         .with_configuration_editor(
             {
                 let parent = parent.clone();
@@ -3847,4 +3848,115 @@ async fn restarted_throttling_and_concurrent_passes_preserve_owner_controls_and_
         "peer"
     );
     h.runtime.close().await.unwrap();
+}
+
+/// Slack files for the owner-side `files` routes.
+struct TextFiles;
+impl fridica::slack::files::Downloader for TextFiles {
+    fn download(
+        &self,
+        url: String,
+        _: bool,
+    ) -> AdapterFuture<'_, Result<fridica::slack::files::Download, fridica::slack::files::Failure>>
+    {
+        Box::pin(async move {
+            let data = match url.as_str() {
+                "https://files.slack.com/plan.txt" => b"the plan\n".to_vec(),
+                "https://files.slack.com/big.txt" => {
+                    vec![b'x'; fridica::slack::files::FILE_LIMIT + 1]
+                }
+                _ => return Err(fridica::slack::files::Failure::Unavailable),
+            };
+            let size = data.len() as u64;
+            Ok(fridica::slack::files::Download { data, size })
+        })
+    }
+    fn resolve(
+        &self,
+        id: String,
+    ) -> AdapterFuture<'_, Result<String, fridica::slack::files::Failure>> {
+        Box::pin(async move {
+            (id == "F3")
+                .then(|| "https://files.slack.com/plan.txt".to_string())
+                .ok_or(fridica::slack::files::Failure::Unavailable)
+        })
+    }
+}
+#[tokio::test]
+async fn owner_file_routes_list_a_thread_and_read_text_files_exactly() {
+    let h = Harness::new(vec![], false).await;
+    let mut message = Message {
+        files: vec![],
+        event_id: "e-files".into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: "100.1".into(),
+        thread_ts: None,
+        sender: "UPEER".into(),
+        text: "deliverables attached".into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![
+            json!({"id":"F1","name":"plan.txt","mimetype":"text/plain","size":9,"url":"https://files.slack.com/plan.txt"}),
+            json!({"id":"F2","name":"plot.png","mimetype":"image/png","size":10,"url":"https://files.slack.com/plot.png"}),
+            json!({"id":"F3","name":"nourl.md","mimetype":"text/markdown","size":9,"url":""}),
+            json!({"id":"F4","name":"big.txt","mimetype":"text/plain","size":65537,"url":"https://files.slack.com/big.txt"}),
+        ],
+    };
+    message.files = vec![json!("plan.txt")];
+    h.runtime.intake(message).await.unwrap();
+    async fn get(h: &Harness, target: &str) -> fridica::control::Response {
+        control_call(h, "GET", target, json!({}), Authority::Owner).await
+    }
+    let listed = get(&h, "/files?thread=CROOM:100.1").await;
+    assert_eq!(listed.status, 200, "{:?}", listed.body);
+    let ids: Vec<_> = listed
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| (f["id"].clone(), f["text"].clone()))
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            (json!("F1"), json!(true)),
+            (json!("F2"), json!(false)),
+            (json!("F3"), json!(true)),
+            (json!("F4"), json!(true))
+        ]
+    );
+    for id in ["F1", "F3"] {
+        let file = get(&h, &format!("/files/{id}")).await;
+        assert_eq!(file.status, 200, "{id}: {:?}", file.body);
+        assert_eq!(file.body["hex"], "74686520706c616e0a", "{id}");
+        assert_eq!(
+            file.body["sha256"],
+            format!(
+                "{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(b"the plan\n")
+            )
+        );
+    }
+    for (target, status, code) in [
+        ("/files/F2", 415, "not_text"),
+        ("/files/F4", 413, "file_too_large"),
+        ("/files/F9", 404, "unknown_file"),
+        ("/files/x/../y", 400, "invalid_target"),
+        ("/files?thread=CROOM:999.1", 404, "unknown_thread"),
+    ] {
+        let reply = get(&h, target).await;
+        assert_eq!(
+            (reply.status, reply.body["error"].as_str()),
+            (status, Some(code)),
+            "{target}"
+        );
+    }
+    let refused = control_call(&h, "GET", "/files/F1", json!({}), Authority::Overseer).await;
+    assert_eq!(refused.status, 403);
+    // Reading posts nothing.
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
 }
