@@ -1258,10 +1258,23 @@ async fn channel_instructions_reach_the_most_recent_thread_by_name_or_id() {
     ] {
         let reply = control_call(&h, "POST", &route(channel), body(id), Authority::Owner).await;
         assert_eq!(reply.status, 200, "{channel}: {:?}", reply.body);
-        assert_eq!(reply.body["thread"], "TTEAM:CROOM:200.1", "{channel}");
-        assert_eq!(reply.body["name"], "#ai-human-plume:200.1", "{channel}");
+        // As in every view: `thread` reads as a name, `id` is the key.
+        assert_eq!(reply.body["thread"], "#ai-human-plume:200.1", "{channel}");
+        assert_eq!(reply.body["id"], "TTEAM:CROOM:200.1", "{channel}");
         assert_eq!(reply.body["queued"], true);
     }
+    // The thread route answers in the same shape.
+    let direct = control_call(
+        &h,
+        "POST",
+        "/threads/TTEAM:CROOM:200.1/instruct",
+        body("thread-3333"),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(direct.status, 200, "{:?}", direct.body);
+    assert_eq!(direct.body["thread"], "#ai-human-plume:200.1");
+    assert_eq!(direct.body["id"], "TTEAM:CROOM:200.1");
     // Views show the readable name, and it addresses the thread in controls.
     h.store
         .call(|c| {
@@ -1333,10 +1346,11 @@ async fn channel_instructions_reach_the_most_recent_thread_by_name_or_id() {
     )
     .await;
     assert_eq!(retry.status, 200);
+    // Three through the channel route (one a retry) and one through the thread route.
     assert_eq!(
         h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='owner_instruction' AND session_id='TTEAM:CROOM:200.1'")
             .await,
-        "3"
+        "4"
     );
     for (channel, authority, status, code) in [
         ("general", Authority::Owner, 404, "unknown_channel"),

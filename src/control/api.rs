@@ -385,8 +385,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     .instruct(thread.clone(), text.into(), client_id.into(), authority)
                     .await
                 {
+                    // Like every view: `thread` is the readable name, `id` the key.
                     Ok(id) => Response::ok(
-                        json!({"instruction_id":id,"queued":true,"thread":thread,"name":name}),
+                        json!({"instruction_id":id,"queued":true,"thread":name,"id":thread}),
                     ),
                     Err(error) => operation_error(error),
                 }
@@ -454,12 +455,20 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     {
                         return Response::error(400, "invalid_instruction");
                     }
+                    let slack = config.slack.clone();
+                    let key = id.clone();
+                    let name = store
+                        .call(move |c| Ok(Names::load(c, &slack)?.thread(&key)))
+                        .await
+                        .unwrap_or_else(|_| id.clone());
                     return match self
                         .runtime
-                        .instruct(id, text.into(), client_id.into(), authority)
+                        .instruct(id.clone(), text.into(), client_id.into(), authority)
                         .await
                     {
-                        Ok(id) => Response::ok(json!({"instruction_id":id,"queued":true})),
+                        Ok(instruction) => Response::ok(
+                            json!({"instruction_id":instruction,"queued":true,"thread":name,"id":id}),
+                        ),
                         Err(error) => operation_error(error),
                     };
                 }
