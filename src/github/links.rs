@@ -146,9 +146,13 @@ impl<A: Api + ?Sized> Links<A> {
                 .items
                 .iter()
                 .find(|(k, expiry, _)| *k == key && *expiry > now)
-                .map(|(_, _, v)| v.clone())
+                .map(|(_, expiry, v)| (expiry - self.cache_seconds, v.clone()))
         };
-        if let Some(value) = cached {
+        if let Some((fetched, mut value)) = cached {
+            // A cached state is quoted as of when it was read, never as live.
+            if value.is_object() {
+                value["age_seconds"] = json!((now - fetched).max(0.).round());
+            }
             let record = json!({"key":key,"value":value});
             self.store.call(move|c|{c.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('github_cache_hit',?,?)",params![now,record.to_string()])?;Ok(())}).await.map_err(|_|Failure::Recording)?;
             return Ok(value);
@@ -167,6 +171,10 @@ impl<A: Api + ?Sized> Links<A> {
             cache.items.pop_front();
         }
         cache.items.push_back((key, expiry, value.clone()));
+        let mut value = value;
+        if value.is_object() {
+            value["age_seconds"] = json!(0.);
+        }
         Ok(value)
     }
     async fn object(&self, link: &Link, operation: Operation) -> Result<Value, Failure> {
