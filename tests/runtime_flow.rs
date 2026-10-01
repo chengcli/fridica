@@ -3960,3 +3960,56 @@ async fn owner_file_routes_list_a_thread_and_read_text_files_exactly() {
         "0"
     );
 }
+
+#[tokio::test]
+async fn another_threads_jobs_in_the_channel_are_visible_but_other_channels_are_not() {
+    let h = Harness::new(
+        vec![
+            delegate(),
+            json!({"reply":{"text":"Already running.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    // A job in a thread of another channel.
+    h.store
+        .call(|c| {
+            c.execute("INSERT INTO threads(id,workspace,channel,root_ts,created,updated) VALUES('TTEAM:COTHER:5.1','TTEAM','COTHER','5.1',1,1)", [])?;
+            c.execute("INSERT INTO workers(id,session_id,machine,workspace,backend,created,updated) VALUES('w-other','TTEAM:COTHER:5.1','local','project','codex',1,1)", [])?;
+            c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,queued_at) VALUES('j-other','w-other','TTEAM:COTHER:5.1','Private work',2)", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.runtime
+        .intake(Message {
+            files: vec![],
+            event_id: "e-second".into(),
+            workspace: "TTEAM".into(),
+            channel: "CROOM".into(),
+            ts: "300.1".into(),
+            thread_ts: None,
+            sender: "UBOB".into(),
+            text: "<@UOWNER> run the focused checks too".into(),
+            source: "socket".into(),
+            meta: None,
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    let second = calls
+        .iter()
+        .find(|r| r.session["id"] == "TTEAM:CROOM:300.1")
+        .unwrap();
+    let elsewhere = second.session["work"]["elsewhere"].as_array().unwrap();
+    assert_eq!(elsewhere.len(), 1, "{elsewhere:?}");
+    assert_eq!(elsewhere[0]["thread"], "TTEAM:CROOM:100.1");
+    assert_eq!(elsewhere[0]["brief"], "Run focused checks");
+    // The first thread saw no other work.
+    assert!(calls[0].session["work"].get("elsewhere").is_none());
+    h.runtime.close().await.unwrap();
+}
