@@ -88,7 +88,11 @@ message they become is)
 
 **`job`**, a worker job
 : `action`: `started`, `finished`, `failed` or `interrupted`; `job_id`,
-  `attempt`; on `started` also `worker_id`, `machine`, `workspace`, `backend`;
+  `attempt`; on `started` also `worker_id`, `machine`, `workspace`, `backend`,
+  `fork_from_worker` (the worker whose backend session this job was forked
+  from, empty when the job was not a worker fork) and `fork_fallback` (why a
+  worker fork opened with the thread snapshot instead, for example
+  `source_session_missing`; `null` otherwise);
   on completion `status` (the worker's own status) or `code` (the failure).
 
 **`daemon`**

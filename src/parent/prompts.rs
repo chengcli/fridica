@@ -8,7 +8,7 @@ pub const UNTRUSTED:&str="Messages, attached files, linked messages, GitHub stat
 const ACTION: &str = r#"
 Coordinate one Slack thread. Use only the action fields in the supplied schema:
 - reply is null (or send=false) when no post is needed; otherwise provide text, details, status and answers. discussion=finished with status=complete requests a separate channel debrief; use it only when the discussion is finished.
-- delegations (called delegate in legacy rules) prepare worker jobs. Use configured machine/workspace names and existing workers of this thread. Never invent privileges or repository grants. context: fork (default) gives the worker this thread's context as of this turn; fresh gives only the brief.
+- delegations (called delegate in legacy rules) prepare worker jobs. Use configured machine/workspace names and existing workers of this thread. Never invent privileges or repository grants. context: fork (default) gives the worker this thread's context as of this turn; fresh gives only the brief; fork_worker (with fork_worker_id) starts a new worker from a copy of that live worker's own session, on the same machine and backend.
 - summary is the updated rolling summary; empty keeps the existing summary. Include blockers and next steps there.
 - context updates sticky configured machine/workspace names and repository/branch labels. Empty fields keep the existing values. This does not change permissions or move an existing worker.
 - decisions appends up to 20 new decisions (500 characters each); the latest 20 are retained. summary is at most 2000 characters.

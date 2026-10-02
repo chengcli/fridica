@@ -236,6 +236,10 @@ async fn a_used_v6_database_upgrades_and_rolls_back_cleanly() {
 async fn a_used_v7_database_upgrades_and_rolls_back_cleanly() {
     used_database_upgrades_and_rolls_back(7).await;
 }
+#[tokio::test]
+async fn a_used_v8_database_upgrades_and_rolls_back_cleanly() {
+    used_database_upgrades_and_rolls_back(8).await;
+}
 async fn used_database_upgrades_and_rolls_back(version: usize) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.sqlite3");
@@ -263,6 +267,16 @@ async fn used_database_upgrades_and_rolls_back(version: usize) {
             .unwrap();
         assert!(columns.iter().any(|c| c == "files_json"));
         assert!(columns.iter().any(|c| c == "snapshot_json"));
+        assert!(columns.iter().any(|c| c == "fork_from_worker"));
+        // Jobs from before worker forks read back with no source.
+        let sources: i64 = c
+            .query_row(
+                "SELECT count(*) FROM jobs WHERE fork_from_worker!=''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sources, 0);
         // The v5 -> v6 baseline is history, not this upgrade's.
         let baseline: String = c
             .query_row(

@@ -1496,7 +1496,20 @@ fn decision_schema_allows_only_known_workers_and_granted_fetches() {
         delegation["tags"]["items"]["enum"],
         json!(["", "cuda", "gpu"])
     );
-    assert_eq!(delegation["context"]["enum"], json!(["fork", "fresh"]));
+    assert_eq!(
+        delegation["context"]["enum"],
+        json!(["fork", "fresh", "fork_worker"])
+    );
+    // Only a live worker with a backend session can be forked.
+    assert_eq!(delegation["fork_worker_id"]["enum"], json!([""]));
+    let mut with_session = session.clone();
+    with_session["work"]["workers"][0]["backend_session_id"] = json!("thread-1");
+    with_session["work"]["workers"][1]["backend_session_id"] = json!("thread-2");
+    let schema = parent::schema::decision(&parent::schema::Choices::from_session(&with_session));
+    assert_eq!(
+        schema["properties"]["delegations"]["items"]["properties"]["fork_worker_id"]["enum"],
+        json!(["", "w1"])
+    );
     let control = &schema["properties"]["worker_control"]["items"]["properties"];
     assert_eq!(control["worker_id"]["enum"], json!(["", "w1", "w2"]));
     // Nothing granted and no workers: only the empty value remains.

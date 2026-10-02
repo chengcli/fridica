@@ -4,7 +4,7 @@ use fridica_core::{
         registry::{Machine, Policy, Registry, Resources, Workspace},
         Limits,
     },
-    delegation::{prepare, Scope},
+    delegation::{prepare, Scope, Work},
     fork::ContextMode,
     ids::ThreadId,
     parent::{Decision, ParentRequest},
@@ -136,4 +136,81 @@ fn delegations_fork_the_turn_by_default_and_fresh_carries_no_snapshot() {
         json!({"delegations":[{"brief":"x","context":"bogus"}]})
     )
     .is_err());
+}
+
+#[test]
+fn a_fork_worker_delegation_needs_a_live_source_session_on_the_same_placement() {
+    let (limits, machines) = (Limits::default(), registry());
+    let scope = Some(Scope {
+        allowed: true,
+        limits: &limits,
+        machines: &machines,
+    });
+    let mut request = request();
+    request.session["work"]["workers"] = json!([
+        {"id":"w1","session_id":"T:C:1.1","machine":"local","workspace":"project","backend":"codex","backend_session_id":"codex-thread-1"},
+        {"id":"w2","ephemeral":true,"session_id":"T:C:1.1","machine":"local","workspace":"project","backend":"codex"},
+        {"id":"w3","session_id":"T:C:1.1","machine":"local","workspace":"project","backend":"codex","backend_session_id":"gone","status":"stopped"},
+        {"id":"w4","ephemeral":true,"session_id":"T:C:1.1","machine":"gpu","workspace":"project","backend":"codex","backend_session_id":"codex-thread-4"},
+        {"id":"w5","ephemeral":true,"session_id":"T:C:2.1","machine":"local","workspace":"project","backend":"codex","backend_session_id":"codex-thread-5"},
+    ]);
+    let decide = |delegation: serde_json::Value| -> anyhow::Result<Work> {
+        let decision: Decision =
+            serde_json::from_value(json!({"summary":"Plume fit","delegations":[delegation]}))
+                .unwrap();
+        prepare(&decision, &request, scope, Some(&SequenceIds::default()))
+    };
+    let work = decide(
+        json!({"brief":"Run the second experiment","tags":["cpu"],"context":"fork_worker","fork_worker_id":"w1"}),
+    )
+    .unwrap();
+    // A new worker on the source's placement; the job names its source and
+    // keeps the thread snapshot as its fallback.
+    assert_eq!(work.workers.len(), 1);
+    assert_eq!(work.jobs[0].context, ContextMode::ForkWorker);
+    assert_eq!(work.jobs[0].fork_from_worker, "w1");
+    assert!(work.jobs[0].snapshot.is_some());
+    assert_eq!(work.jobs[0].context.as_str(), "fork_worker");
+    // Thread forks and fresh jobs never carry a source.
+    let work = decide(json!({"brief":"Review","tags":["cpu"],"context":"fresh"})).unwrap();
+    assert_eq!(work.jobs[0].fork_from_worker, "");
+    for (delegation, message) in [
+        (
+            json!({"brief":"x","tags":["cpu"],"context":"fork_worker"}),
+            "needs fork_worker_id",
+        ),
+        (
+            json!({"brief":"x","tags":["cpu"],"context":"fork_worker","fork_worker_id":"w2"}),
+            "no backend session",
+        ),
+        (
+            json!({"brief":"x","tags":["cpu"],"context":"fork_worker","fork_worker_id":"w3"}),
+            "not a live worker",
+        ),
+        (
+            json!({"brief":"x","tags":["cpu"],"context":"fork_worker","fork_worker_id":"w5"}),
+            "not a live worker",
+        ),
+        (
+            json!({"brief":"x","tags":["cpu"],"context":"fork_worker","fork_worker_id":"w4"}),
+            "same machine and backend",
+        ),
+        (
+            json!({"brief":"x","worker_id":"w2","context":"fork_worker","fork_worker_id":"w1"}),
+            "leave worker_id empty",
+        ),
+        (
+            json!({"brief":"x","tags":["cpu"],"fork_worker_id":"w1"}),
+            "needs context: fork_worker",
+        ),
+    ] {
+        let error = match decide(delegation) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("accepted a delegation that should repair: {message}"),
+        };
+        assert!(
+            error.contains(message) && error.contains("context: fork"),
+            "{error}"
+        );
+    }
 }

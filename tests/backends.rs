@@ -179,6 +179,7 @@ async fn run(
                 attempt: 1,
                 brief: prompt,
                 resume,
+                fork_from: String::new(),
             },
             record,
             job,

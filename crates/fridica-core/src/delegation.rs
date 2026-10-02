@@ -91,14 +91,15 @@ pub fn prepare(
         .count();
     let session = request.session["id"].as_str().context("missing session")?;
     let sticky = &request.session["context"];
-    // One snapshot of this turn for every forked job; only when IDs are
-    // allocated, since a repair round may still change the decision.
+    // One snapshot of this turn for every forked job (a worker fork keeps it
+    // as its fallback); only when IDs are allocated, since a repair round may
+    // still change the decision.
     let snapshot = ids
         .filter(|_| {
             decision
                 .delegations
                 .iter()
-                .any(|d| d.context == crate::fork::ContextMode::Fork)
+                .any(|d| d.context != crate::fork::ContextMode::Fresh)
         })
         .map(|_| crate::fork::snapshot(request, decision, scope.limits.worker_context_chars));
     for d in &decision.delegations {
@@ -151,6 +152,37 @@ pub fn prepare(
                 .find(|w| w.id == d.worker_id && w.status != "stopped")
                 .context("worker_id is not a live worker of this thread (see session.work.workers); leave worker_id empty to start a new worker")?
                 .clone()
+        };
+        // A worker fork copies a live backend session, which only the same
+        // backend on the same machine can open; anything else repairs to a
+        // thread fork.
+        let fork_from_worker = if d.context == crate::fork::ContextMode::ForkWorker {
+            if d.fork_worker_id.is_empty() {
+                bail!("context fork_worker needs fork_worker_id, a live worker of this thread with a backend session (see session.work.workers); use context: fork to fork the thread instead");
+            }
+            if !d.worker_id.is_empty() {
+                bail!("context fork_worker starts a new worker from a copy of fork_worker_id's session; leave worker_id empty, or delegate to worker_id with context: fork");
+            }
+            let source = existing
+                .iter()
+                .find(|w| {
+                    w.id == d.fork_worker_id && w.session_id == session && w.status != "stopped"
+                })
+                .context("fork_worker_id is not a live worker of this thread (see session.work.workers); use context: fork instead")?;
+            if source.backend_session_id.is_empty() {
+                bail!(
+                    "fork_worker_id has no backend session to fork yet; use context: fork instead"
+                );
+            }
+            if source.backend != worker.backend || source.machine != worker.machine {
+                bail!("a fork_worker delegation must place the new worker on the same machine and backend as fork_worker_id (set machine, workspace and backend to match), or use context: fork instead");
+            }
+            source.id.clone()
+        } else {
+            if !d.fork_worker_id.is_empty() {
+                bail!("fork_worker_id needs context: fork_worker");
+            }
+            String::new()
         };
         let machine = scope
             .machines
@@ -208,13 +240,13 @@ pub fn prepare(
                     work.context["workspace"] = json!(worker.workspace);
                 }
             }
-            let forked = (d.context == crate::fork::ContextMode::Fork)
+            let forked = (d.context != crate::fork::ContextMode::Fresh)
                 .then(|| snapshot.clone())
                 .flatten();
             work.jobs.push(serde_json::from_value(json!({"id":ids.next("job"),"worker_id":worker.id,
                 "session_id":session,"brief":d.brief.trim(),"join_group":request.inbox_id.to_string(),
                 "inbox_id":request.inbox_id,"deliverable":deliverable,"fetch_repo":fetch_repo,"fetch_ref":d.fetch_ref,"files":files,
-                "context":d.context,"snapshot":forked}))?);
+                "context":d.context,"snapshot":forked,"fork_from_worker":fork_from_worker}))?);
         }
     }
     Ok(work)

@@ -522,9 +522,9 @@ dependencies = [
 
 [[package]]
 name = "fridica-agent"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70457a7e903a09949d25357d549cc6f4232e139aad1748e680c2efbd6db3ca02"
+checksum = "e0d1ee4ae96c112a8314b7171e760dc0d6d0b71006e06e81c1aae7c3fc7d90f3"
 dependencies = [
  "serde",
  "serde_json",

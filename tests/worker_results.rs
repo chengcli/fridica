@@ -46,7 +46,7 @@ fn frozen_worker_results_and_policy_envelopes_match() {
         } else {
             let mut expected: Vec<String> =
                 serde_json::from_value(case["expected"]["command"].clone()).unwrap();
-            let mut actual = claude::command(&spec, "previous-session", "previous-session");
+            let mut actual = claude::command(&spec, "previous-session", "previous-session", "");
             for command in [&mut actual, &mut expected] {
                 let i = command.iter().position(|s| s == "--settings").unwrap() + 1;
                 let settings: Value = serde_json::from_str(&command[i]).unwrap();
