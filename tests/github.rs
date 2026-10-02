@@ -173,6 +173,12 @@ fn fixed_routes_reject_injection_and_bound_pagination() {
         },
         Request {
             repo: "o/r".into(),
+            operation: Operation::Branch {
+                name: "study/./secret".into(),
+            },
+        },
+        Request {
+            repo: "o/r".into(),
             operation: Operation::Compare {
                 head: "a".repeat(40),
                 base: "../../user".into(),
@@ -198,6 +204,17 @@ fn fixed_routes_reject_injection_and_bound_pagination() {
             "/repos/o/r/compare/feature/%7Bowner%7D%3Fx%3D%23evil...{}",
             "a".repeat(40)
         )
+    );
+    assert_eq!(
+        Request {
+            repo: "o/r".into(),
+            operation: Operation::Branch {
+                name: "study/7".into(),
+            },
+        }
+        .endpoint()
+        .unwrap(),
+        "/repos/o/r/git/ref/heads/study/7"
     );
 }
 

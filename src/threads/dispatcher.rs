@@ -35,10 +35,10 @@ impl<D: Delivery> Dispatcher<D> {
     pub async fn drain_checked(&self, limit: usize, deny: Option<&Path>) -> Result<usize> {
         self.drain_with(limit, deny, None).await
     }
-    /// Like `drain_checked`, also verifying `SIGN-OFF #<PR> <sha>` lines
-    /// against a fresh read of the PR's head through `heads`. A sign-off that
-    /// cannot be verified (no GitHub reader, no repository for the thread, or
-    /// a failed read) is not sent, like one that names a stale head.
+    /// Like `drain_checked`, also verifying PR or branch sign-offs against
+    /// a fresh GitHub head through `heads`. A sign-off that
+    /// cannot be verified (no GitHub reader, no repository, or a failed read)
+    /// is not sent, like one that names a stale head.
     pub async fn drain_with(
         &self,
         limit: usize,
@@ -111,8 +111,7 @@ impl<D: Delivery> Dispatcher<D> {
 impl<D: Delivery> Dispatcher<D> {
     /// The rule a post's sign-off lines break, if any. A sign-off clears a
     /// pull request for merge, so the PR's title, body and commit messages,
-    /// read back from GitHub, must also pass the egress rules: text a worker
-    /// pushed reaches upstream history once the PR is squashed.
+    /// read back from GitHub, must also pass the egress rules.
     async fn signoffs(
         &self,
         post: &ClaimedPost,
@@ -129,7 +128,7 @@ impl<D: Delivery> Dispatcher<D> {
             return Ok(Some("signoff_unverified".into()));
         };
         let session = post.post.session_id.clone();
-        let repo: String = self
+        let context_repo: String = self
             .store
             .call(move |c| {
                 Ok(c.query_row(
@@ -140,18 +139,49 @@ impl<D: Delivery> Dispatcher<D> {
                 .unwrap_or_default())
             })
             .await?;
-        if !crate::github::client::repository(&repo) {
-            return Ok(Some("signoff_repo_unknown".into()));
-        }
         use crate::github::client::{Failure, Operation, Request};
-        let read = |operation| {
-            heads.get(Request {
-                repo: repo.clone(),
-                operation,
+        for line in lines {
+            let repo = line.repo.unwrap_or_else(|| context_repo.clone());
+            if !crate::github::client::repository(&repo) {
+                return Ok(Some("signoff_repo_unknown".into()));
+            }
+            let read = |operation| {
+                heads.get(Request {
+                    repo: repo.clone(),
+                    operation,
+                })
+            };
+            if let Some(branch) = line.branch {
+                let reference = match read(Operation::Branch { name: branch }).await {
+                    Ok(reference) => reference,
+                    Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
+                    Err(_) => return Ok(Some("signoff_unverified".into())),
+                };
+                let head = reference["object"]["sha"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if head.len() < 40 || !head.starts_with(&line.sha) {
+                    return Ok(Some("signoff_stale_head".into()));
+                }
+                let commit = match read(Operation::Tree { head }).await {
+                    Ok(commit) => commit,
+                    Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
+                    Err(_) => return Ok(Some("signoff_unverified".into())),
+                };
+                let Some(message) = commit["message"].as_str() else {
+                    return Ok(Some("signoff_unverified".into()));
+                };
+                if let Some(rule) = egress::scan(message, rules) {
+                    return Ok(Some(format!("signoff_branch_{rule}")));
+                }
+                continue;
+            }
+            let pull = match read(Operation::Pull {
+                number: line.number,
             })
-        };
-        for (number, sha) in lines {
-            let pull = match read(Operation::Pull { number }).await {
+            .await
+            {
                 Ok(pull) => pull,
                 Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
                 Err(_) => return Ok(Some("signoff_unverified".into())),
@@ -160,7 +190,7 @@ impl<D: Delivery> Dispatcher<D> {
                 .as_str()
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            if head.len() < 40 || !head.starts_with(&sha) {
+            if head.len() < 40 || !head.starts_with(&line.sha) {
                 return Ok(Some("signoff_stale_head".into()));
             }
             let base = pull["base"]["sha"].as_str().unwrap_or("").to_string();
@@ -192,21 +222,51 @@ impl<D: Delivery> Dispatcher<D> {
         Ok(None)
     }
 }
-/// `SIGN-OFF #<PR> <sha> ...` lines (provision04): each PR number and sha, or
-/// `None` when a line starts like a sign-off but is not in that form.
-fn signoff_lines(text: &str) -> Option<Vec<(u64, String)>> {
+struct Signoff {
+    repo: Option<String>,
+    branch: Option<String>,
+    number: u64,
+    sha: String,
+}
+/// `SIGN-OFF [owner/repo[@branch]] #<number> <sha> ...` lines (provision04).
+/// A preceding `TARGET owner/repo@branch #<number>` keeps the sign-off line bare
+/// for consumers that require that format, while retaining a verifiable ref.
+fn signoff_lines(text: &str) -> Option<Vec<Signoff>> {
     static LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"^SIGN-OFF #([1-9][0-9]{0,9}) ([0-9a-f]{7,40}) (approve|approve \(code review\)|changes)$")
+        regex::Regex::new(r"^SIGN-OFF (?:(?P<repo>[A-Za-z0-9-]+/[A-Za-z0-9._-]+)(?:@(?P<branch>[A-Za-z0-9._/-]+))? )?#(?P<number>[1-9][0-9]{0,9}) (?P<sha>[0-9a-f]{7,40}) (approve|approve \(code review\)|changes)$")
             .unwrap()
     });
-    text.lines()
-        .map(str::trim)
-        .filter(|line| line.to_ascii_uppercase().starts_with("SIGN-OFF"))
-        .map(|line| {
+    static TARGET: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^TARGET (?P<repo>[A-Za-z0-9-]+/[A-Za-z0-9._-]+)@(?P<branch>[A-Za-z0-9._/-]+) #(?P<number>[1-9][0-9]{0,9})$")
+            .unwrap()
+    });
+    let mut previous = "";
+    let mut lines = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.to_ascii_uppercase().starts_with("SIGN-OFF") {
             let c = LINE.captures(line)?;
-            Some((c[1].parse().ok()?, c[2].to_string()))
-        })
-        .collect()
+            let number = c.name("number")?.as_str().parse().ok()?;
+            let mut repo = c.name("repo").map(|m| m.as_str().to_string());
+            let mut branch = c.name("branch").map(|m| m.as_str().to_string());
+            if previous.starts_with("TARGET ") {
+                let target = TARGET.captures(previous)?;
+                if repo.is_some() || target.name("number")?.as_str().parse::<u64>().ok()? != number
+                {
+                    return None;
+                }
+                repo = Some(target.name("repo")?.as_str().to_string());
+                branch = Some(target.name("branch")?.as_str().to_string());
+            }
+            lines.push(Signoff {
+                repo,
+                branch,
+                number,
+                sha: c.name("sha")?.as_str().to_string(),
+            });
+        }
+        previous = line;
+    }
+    Some(lines)
 }
 /// The text a post would publish: its message, its file name and, for an
 /// upload of text, its contents.
