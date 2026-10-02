@@ -51,7 +51,3 @@ syn = { version = "2", features = ["full", "visit"] }
 [lints.rust]
 unsafe_code = "forbid"
 
-# Until fridica-core 0.1 is on crates.io, build against the sibling checkout.
-[patch.crates-io]
-fridica-core = { path = "../fridica-core" }
-
