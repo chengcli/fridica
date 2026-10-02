@@ -104,46 +104,60 @@ def check(request):
         code, _ = run(["bwrap", "--unshare-user", "--unshare-net", "--ro-bind", "/", "/",
                        "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--", "/bin/true"])
         return "passed" if code == 0 else "failed"
-    if backend not in ("claude", "codex"):
+    if backend not in ("claude", "codex") or action != "backend":
         raise Refused()
     if not shutil.which(backend):
         return "missing"
-    if action == "auth":
-        code, text = run([backend, "auth", "status"] if backend == "claude"
-                         else [backend, "login", "status"])
-        if code != 0:
-            return "signed_out"
-        if backend == "claude":
-            try:
-                value = json.loads(text)
-            except ValueError:
-                return "signed_out"
-            if not isinstance(value, dict) or value.get("loggedIn") is not True:
-                return "signed_out"
-        return "passed"
-    if action != "capabilities":
-        raise Refused()
+    # Independent facets, every shortcoming reported: protocol, automatic
+    # approvals, sign-in. One run shows all there is to upgrade or sign in.
+    shortcomings = []
+    code, text = capabilities(request, backend)
+    if code != 0 or any(flag not in text for flag in required_flags(request, backend)):
+        shortcomings.append("protocol_missing")
+    if code == 0 and request["auto"] and auto_token(request, backend) not in text:
+        shortcomings.append("auto_missing")
+    if not signed_in(backend):
+        shortcomings.append("signed_out")
+    return ",".join(shortcomings) if shortcomings else "passed"
+
+
+def signed_in(backend):
+    code, text = run([backend, "auth", "status"] if backend == "claude"
+                     else [backend, "login", "status"])
+    if code != 0:
+        return False
     if backend == "claude":
-        code, text = run([backend, "--help"])
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return False
+        return isinstance(value, dict) and value.get("loggedIn") is True
+    return True
+
+
+def required_flags(request, backend):
+    if backend == "claude":
         required = ["--json-schema", "--setting-sources", "--strict-mcp-config"]
         required += (["dontAsk"] if request["parent"] else
                      ["--input-format", "--permission-prompts", "--append-system-prompt", "--session-id"])
-        auto = '"auto"'
-    elif request["parent"]:
-        code, text = run([backend, "exec", "--help"])
-        required = ["--ignore-user-config", "--ignore-rules", "--output-schema", "--ephemeral"]
-        auto = "auto_review"
-    else:
-        with tempfile.TemporaryDirectory(prefix="fridica-doctor-") as directory:
-            code, _ = run([backend, "app-server", "generate-json-schema", "--out", directory])
-            text = schema_text(directory) if code == 0 else ""
-        required = ["turn/interrupt", "item/commandExecution/requestApproval", "outputSchema"]
-        auto = "auto_review"
-    if code != 0 or any(flag not in text for flag in required):
-        return "protocol_missing"
-    if request["auto"] and auto not in text:
-        return "auto_missing"
-    return "passed"
+        return required
+    if request["parent"]:
+        return ["--ignore-user-config", "--ignore-rules", "--output-schema", "--ephemeral"]
+    return ["turn/interrupt", "item/commandExecution/requestApproval", "outputSchema"]
+
+
+def auto_token(request, backend):
+    return '"auto"' if backend == "claude" else "auto_review"
+
+
+def capabilities(request, backend):
+    if backend == "claude":
+        return run([backend, "--help"])
+    if request["parent"]:
+        return run([backend, "exec", "--help"])
+    with tempfile.TemporaryDirectory(prefix="fridica-doctor-") as directory:
+        code, _ = run([backend, "app-server", "generate-json-schema", "--out", directory])
+        return code, schema_text(directory) if code == 0 else ""
 
 
 try:
