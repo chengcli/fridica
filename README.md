@@ -534,7 +534,8 @@ It never prints message text, briefs or credentials. Set `FRIDICA_LOG=off` to si
 - that each SSH machine is reachable without a prompt;
 - that every workspace exists;
 - that each backend is installed, new enough, and signed in (for Codex, the app-server
-  protocol must include approvals, `turn/interrupt` and `outputSchema`);
+  protocol must include approvals, `turn/interrupt` and `outputSchema`); a backend gets
+  one line per role, listing every shortcoming at once;
 - the bubblewrap and socat sandbox, including user namespaces;
 - a warning when `~/.codex/config.toml` defines MCP servers, because `codex app-server`
   cannot ignore the user config.

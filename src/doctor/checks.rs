@@ -361,6 +361,8 @@ async fn machine(
     report
 }
 
+/// One line per backend and role: its shortcomings are independent facets
+/// (protocol, automatic approvals, sign-in), all reported at once.
 async fn backend(
     probe: &Probe,
     machine: &Machine,
@@ -374,12 +376,15 @@ async fn backend(
     } else {
         format!("worker on {}", machine.name)
     };
-    for action in ["capabilities", "auth"] {
-        if *probe.stop.borrow() {
-            return;
-        }
-        let result = probe.run(machine, action, backend, parent, auto, "").await;
-        let detail = match result.as_str() {
+    if *probe.stop.borrow() {
+        return;
+    }
+    let result = probe
+        .run(machine, "backend", backend, parent, auto, "")
+        .await;
+    let detail: Vec<&str> = result
+        .split(',')
+        .map(|code| match code {
             "passed" => "",
             "missing" => "install the backend on the target PATH",
             "auto_missing" if backend == "claude" => "upgrade Claude for --permission-mode auto",
@@ -389,17 +394,17 @@ async fn backend(
             }
             "signed_out" => "backend is not signed in; sign in on this target",
             _ => "probe failed, timed out, or exceeded its output limit",
-        };
-        report.add(
-            if result == "passed" {
-                Status::Pass
-            } else {
-                Status::Fail
-            },
-            format!("{backend} ({role}) {action}"),
-            detail,
-        );
-    }
+        })
+        .collect();
+    report.add(
+        if result == "passed" {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        format!("{backend} ({role})"),
+        detail.join("; "),
+    );
 }
 
 struct Probe {
@@ -488,10 +493,23 @@ impl Probe {
             .strip_prefix("fridica-doctor:")
             .and_then(|s| s.strip_suffix('\n'))
             .unwrap_or("failed");
-        Ok(match value {
-            "passed" | "linux" | "darwin" | "missing" | "auto_missing" | "protocol_missing"
-            | "signed_out" => value,
-            _ => "failed",
+        // A backend probe lists its shortcomings as a comma-separated set.
+        let known = |code: &str| {
+            matches!(
+                code,
+                "passed"
+                    | "linux"
+                    | "darwin"
+                    | "missing"
+                    | "auto_missing"
+                    | "protocol_missing"
+                    | "signed_out"
+            )
+        };
+        Ok(if !value.is_empty() && value.split(',').all(known) {
+            value
+        } else {
+            "failed"
         }
         .into())
     }

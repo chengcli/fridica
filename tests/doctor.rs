@@ -22,21 +22,22 @@ assert not any('SLACK' in k or k.startswith('FRIDICA_') or k == 'SECRET_GITHUB' 
 with open(os.environ['CALLS'], 'a') as stream:
     stream.write(json.dumps([name,args])+'\n')
 mode = os.environ.get('MODE','')
+modes = set(mode.split(','))
 if mode == 'flood':
     print('private-secret-' * 400000)
     sys.exit(1)
 if name == 'claude':
     if args == ['--help']:
-        print('--input-format --permission-prompts --json-schema --setting-sources --strict-mcp-config --append-system-prompt --session-id dontAsk' + (' "auto"' if mode != 'noauto' else ''))
-        sys.exit(0 if mode != 'badexit' else 1)
+        print('--input-format --permission-prompts --json-schema --setting-sources --strict-mcp-config --append-system-prompt --session-id dontAsk' + (' "auto"' if 'noauto' not in modes else ''))
+        sys.exit(0 if 'badexit' not in modes else 1)
     if args == ['auth','status']:
-        print(json.dumps({'loggedIn':mode != 'logout'}))
+        print(json.dumps({'loggedIn':'logout' not in modes}))
         sys.exit(0)
 if name == 'codex':
     if args == ['exec','--help']:
         print('--ignore-user-config --ignore-rules --output-schema --ephemeral'); sys.exit(0)
     if args == ['login','status']:
-        sys.exit(1 if mode == 'logout' else 0)
+        sys.exit(1 if 'logout' in modes else 0)
     if args[:2] == ['app-server','generate-json-schema']:
         out = Path(args[3])
         if mode == 'hang':
@@ -49,7 +50,7 @@ if name == 'codex':
         if mode == 'symlink':
             (out / 'schema.json').symlink_to(os.environ['SECRET_FILE'])
         else:
-            (out / 'schema.json').write_text('turn/interrupt item/commandExecution/requestApproval outputSchema' + (' auto_review' if mode != 'noauto' else ''))
+            (out / 'schema.json').write_text('turn/interrupt item/commandExecution/requestApproval outputSchema' + (' auto_review' if 'noauto' not in modes else ''))
         sys.exit(0)
 if name in ('bwrap','socat'): sys.exit(0)
 sys.exit(92)
@@ -234,10 +235,7 @@ os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
         status(&report, "Machine remote workspace missing"),
         Status::Fail
     );
-    assert_eq!(
-        status(&report, "codex (worker on remote) capabilities"),
-        Status::Pass
-    );
+    assert_eq!(status(&report, "codex (worker on remote)"), Status::Pass);
     assert_eq!(status(&report, "Machine batch"), Status::Skip);
     assert!(!report.passed());
     let text = serde_json::to_string(&report).unwrap();
@@ -251,30 +249,34 @@ async fn auth_capability_exit_status_and_auto_requirements_are_checked() {
     let mut fixture = Fixture::new();
     assert!(fixture.run().await.passed());
     for (mode, expected, detail) in [
-        ("logout", "claude (parent locally) auth", "not signed in"),
-        (
-            "noauto",
-            "codex (worker on local) capabilities",
-            "auto_review",
-        ),
-        (
-            "badexit",
-            "claude (parent locally) capabilities",
-            "protocol",
-        ),
+        ("logout", "claude (parent locally)", "not signed in"),
+        ("noauto", "codex (worker on local)", "auto_review"),
+        ("badexit", "claude (parent locally)", "protocol"),
     ] {
         fixture.env.insert("MODE".into(), mode.into());
         let report = fixture.run().await;
         assert_eq!(status(&report, expected), Status::Fail);
         assert!(report.text().contains(detail));
         if mode == "noauto" {
-            assert_eq!(
-                status(&report, "claude (parent locally) capabilities"),
-                Status::Pass
-            );
+            assert_eq!(status(&report, "claude (parent locally)"), Status::Pass);
             assert!(report.text().contains("--permission-mode auto"));
         }
     }
+    // Shortcomings are independent facets: a backend missing a protocol flag
+    // and signed out shows both on its one line.
+    fixture.env.insert("MODE".into(), "badexit,logout".into());
+    let report = fixture.run().await;
+    let line = report
+        .checks
+        .iter()
+        .find(|c| c.name == "claude (parent locally)")
+        .unwrap();
+    assert_eq!(line.status, Status::Fail);
+    assert!(
+        line.detail.contains("protocol") && line.detail.contains("not signed in"),
+        "{}",
+        line.detail
+    );
     fixture.pristine();
 }
 
@@ -291,14 +293,8 @@ async fn malformed_auth_missing_backend_and_failed_ssh_have_fixed_diagnostics() 
     );
     fixture.executable("ssh", "#!/bin/sh\nprintf 'private-secret' >&2\nexit 255\n");
     let report = fixture.run().await;
-    assert_eq!(
-        status(&report, "claude (parent locally) auth"),
-        Status::Fail
-    );
-    assert_eq!(
-        status(&report, "codex (worker on local) capabilities"),
-        Status::Fail
-    );
+    assert_eq!(status(&report, "claude (parent locally)"), Status::Fail);
+    assert_eq!(status(&report, "codex (worker on local)"), Status::Fail);
     assert_eq!(status(&report, "Machine remote"), Status::Fail);
     assert!(report.text().contains("without a prompt"));
     assert!(!report.text().contains("private-secret"));
@@ -317,10 +313,7 @@ async fn schema_reads_reject_symlinks_and_backend_output_is_bounded() {
         fixture.env.insert("MODE".into(), mode.into());
         let report = fixture.run().await;
         assert!(!report.passed());
-        assert_eq!(
-            status(&report, "codex (worker on local) capabilities"),
-            Status::Fail
-        );
+        assert_eq!(status(&report, "codex (worker on local)"), Status::Fail);
         assert!(!report.text().contains("private-secret"));
     }
     fixture.pristine();
@@ -331,10 +324,7 @@ async fn timeout_reaps_descendants_and_removes_schema_scratch_directory() {
     let mut fixture = Fixture::new();
     fixture.env.insert("MODE".into(), "hang".into());
     let report = fixture.run().await;
-    assert_eq!(
-        status(&report, "codex (worker on local) capabilities"),
-        Status::Fail
-    );
+    assert_eq!(status(&report, "codex (worker on local)"), Status::Fail);
     let scratch = std::fs::read_to_string(fixture.dir.path().join("out")).unwrap();
     assert!(!Path::new(&scratch).exists());
     let pid = std::fs::read_to_string(fixture.dir.path().join("pid")).unwrap();
@@ -387,7 +377,7 @@ async fn stopping_finishes_current_probe_and_skips_later_targets() {
     assert!(!report
         .checks
         .iter()
-        .any(|c| c.name == "claude (worker on local) capabilities"));
+        .any(|c| c.name == "claude (worker on local)"));
     let scratch = std::fs::read_to_string(fixture.dir.path().join("out")).unwrap();
     assert!(!Path::new(&scratch).exists());
     fixture.pristine();
@@ -487,21 +477,12 @@ async fn codex_parent_owner_inputs_and_sandbox_failures_are_independent() {
     fixture.env.insert("MODE".into(), "noauto".into());
     fixture.executable("bwrap", "#!/bin/sh\nprintf 'private-secret' >&2\nexit 1\n");
     let report = fixture.run().await;
-    assert_eq!(
-        status(&report, "codex (parent locally) capabilities"),
-        Status::Pass
-    );
-    assert_eq!(status(&report, "codex (parent locally) auth"), Status::Pass);
+    assert_eq!(status(&report, "codex (parent locally)"), Status::Pass);
+    assert_eq!(status(&report, "codex (parent locally)"), Status::Pass);
     assert_eq!(status(&report, "Agent contract"), Status::Fail);
     assert_eq!(status(&report, "Repository list"), Status::Fail);
-    assert_eq!(
-        status(&report, "codex (worker on local) capabilities"),
-        Status::Pass
-    );
-    assert_eq!(
-        status(&report, "claude (worker on local) capabilities"),
-        Status::Pass
-    );
+    assert_eq!(status(&report, "codex (worker on local)"), Status::Pass);
+    assert_eq!(status(&report, "claude (worker on local)"), Status::Pass);
     #[cfg(target_os = "linux")]
     assert_eq!(status(&report, "Machine local sandbox"), Status::Fail);
     assert!(!report.text().contains("private-secret"));
