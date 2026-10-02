@@ -55,8 +55,6 @@ project={}
 [state]
 path="state.db"
 control_socket="control.sock"
-[isolation]
-mcp_inventory_complete=true
 "#,
             json!(root.join("project"))
         );
@@ -175,16 +173,9 @@ async fn cli_checks_all_backends_without_tokens_state_or_backend_invocation() {
 }
 
 #[tokio::test]
-async fn missing_executables_workspaces_and_unreviewed_sources_are_fixed_blockers() {
-    let mut f = Fixture::new();
-    f.config.isolation.mcp_inventory_complete = false;
-    let report = f.check().await;
-    assert!(!report.startup_checks_passed);
-    assert!(report
-        .targets
-        .iter()
-        .all(|t| t.check == Check::McpInventoryUnreviewed));
-    f.config.isolation.mcp_inventory_complete = true;
+async fn missing_executables_and_workspaces_are_fixed_blockers() {
+    let f = Fixture::new();
+    assert!(f.check().await.startup_checks_passed);
     std::fs::remove_file(f.root.join("bin/codex")).unwrap();
     assert_eq!(f.check().await.targets[0].check, Check::BackendMissing);
     std::fs::remove_dir(f.root.join("project")).unwrap();
@@ -196,29 +187,10 @@ async fn missing_executables_workspaces_and_unreviewed_sources_are_fixed_blocker
 }
 
 #[tokio::test]
-async fn extra_source_files_are_required_rechecked_and_never_exposed_in_reports() {
-    let mut f = Fixture::new();
-    let source = f.root.join("extra-owner-settings.json");
-    f.config.isolation.settings_files.push(source.clone());
-    assert_eq!(f.check().await.targets[0].check, Check::SettingsRefused);
-    std::fs::write(
-        &source,
-        r#"{"mcpServers":{"opaque":{"command":"fridica","env":{"KEY":"private-source"}}}}"#,
-    )
-    .unwrap();
-    assert!(f.check().await.startup_checks_passed);
-    std::fs::write(&source, "MALFORMED private-source").unwrap();
-    let report = f.check().await;
-    assert_eq!(report.targets[0].check, Check::SettingsRefused);
-    let text = serde_json::to_string(&report).unwrap();
-    assert!(!text.contains("private-source") && !text.contains("extra-owner-settings"));
-    f.pristine();
-}
-
-#[tokio::test]
 async fn active_host_refuses_before_state_or_network_and_pre_cancelled_start_has_no_effects() {
-    let mut f = Fixture::new();
-    f.config.isolation.mcp_inventory_complete = false;
+    let f = Fixture::new();
+    // A missing worker backend is a readiness blocker; nothing starts.
+    std::fs::remove_file(f.root.join("bin/codex")).unwrap();
     let credentials = || {
         daemon::Credentials::read(&f.config, |name| {
             Some(
@@ -257,49 +229,21 @@ async fn active_host_refuses_before_state_or_network_and_pre_cancelled_start_has
 }
 
 #[tokio::test]
-async fn remote_readiness_uses_target_sources_without_forwarding_local_inventory_or_running_backends(
-) {
+async fn remote_readiness_probes_the_target_without_running_backends() {
     let mut f = Fixture::new();
     let remote = f.root.join("target-home");
     std::fs::create_dir_all(remote.join("project")).unwrap();
-    std::fs::write(
-        remote.join("extra.json"),
-        r#"{"mcpServers":{"remote":{"command":"fridica"}}}"#,
-    )
-    .unwrap();
     f.config.machines.machines[0].transport = "ssh".into();
     f.config.machines.machines[0].host = "owner@fixture".into();
     f.config.machines.machines[0].workspaces[0].path = "~/project".into();
-    f.config
-        .isolation
-        .settings_files
-        .push(f.root.join("missing-local-file.toml"));
-    f.config.isolation.remote.insert(
-        "local".into(),
-        config::isolation::Remote {
-            host: "owner@fixture".into(),
-            settings_files: vec!["~/extra.json".into()],
-            mcp_inventory_complete: true,
-        },
-    );
     let ssh = f.root.join("bin/ssh");
     std::fs::write(&ssh,format!("#!/bin/sh\ncase \"$*\" in *ControlMaster=no*ControlPath=none*StrictHostKeyChecking=yes*UpdateHostKeys=no*) ;; *) exit 255;; esac\nwhile [ \"$1\" != -- ]; do shift; done\nshift\ntest \"$1\" = owner@fixture || exit 255\nshift\nexport HOME={}\nexec /bin/sh -c \"$1\"\n",shell::quote(remote.to_str().unwrap()))).unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(f.check().await.startup_checks_passed);
-    std::fs::remove_file(remote.join("extra.json")).unwrap();
-    assert_eq!(f.check().await.targets[0].check, Check::SettingsRefused);
-    f.config
-        .isolation
-        .remote
-        .get_mut("local")
-        .unwrap()
-        .mcp_inventory_complete = false;
-    std::fs::remove_file(&ssh).unwrap();
-    assert_eq!(
-        f.check().await.targets[0].check,
-        Check::McpInventoryUnreviewed
-    );
+    // The target's own settings are read in place: nothing is created there.
     assert!(!remote.join(".codex").exists());
+    std::fs::remove_file(&ssh).unwrap();
+    assert_ne!(f.check().await.targets[0].check, Check::Passed);
     f.pristine();
 }
 
@@ -338,14 +282,6 @@ async fn stopping_readiness_reaps_the_current_probe_and_skips_remaining_backends
     let mut f = Fixture::new();
     f.config.machines.machines[0].transport = "ssh".into();
     f.config.machines.machines[0].host = "owner@fixture".into();
-    f.config.isolation.remote.insert(
-        "local".into(),
-        config::isolation::Remote {
-            host: "owner@fixture".into(),
-            settings_files: vec![],
-            mcp_inventory_complete: true,
-        },
-    );
     let marker = f.root.join("ssh-pids");
     let ssh = f.root.join("bin/ssh");
     std::fs::write(

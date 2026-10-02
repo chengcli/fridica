@@ -16,9 +16,8 @@ native Rust toolchain and binutils `readelf`; reproducibility is scoped to the
 same source, toolchain and host environment, with separate clean target trees. The native binaries
 need no Python Fridica package or source checkout. Execution helpers require
 `/usr/bin/python3`; packaged operator tools require Python 3.11+. Enable only
-execution machines whose backend authentication, MCP inventory and confinement
-prerequisites pass `doctor`, `doctor-isolation` and `start --check-ready` on the
-deployment host. SSH keys/agent and `gh` login remain owner-managed.
+execution machines whose backend authentication and confinement prerequisites
+pass `doctor` and `start --check-ready` on the deployment host. SSH keys/agent and `gh` login remain owner-managed.
 
 Verify the archive SHA-256 against the trusted build output, and use the supplied
 stdlib installer (from the same trusted build):
@@ -44,16 +43,15 @@ configured Slack credentials; it is unnecessary for an offline rehearsal.
 
 ```sh
 /absolute/install/bin/fridica-candidate init --config /private/fridica/config.toml
-/absolute/install/bin/fridica-candidate check-config --config /private/fridica/config.toml
 /absolute/install/bin/fridica-candidate init-state --config /private/fridica/config.toml
 /absolute/install/bin/fridica-candidate start --check-ready --config /private/fridica/config.toml
 /absolute/install/bin/fridica-candidate doctor --config /private/fridica/config.toml --json
 ```
 
 `init-state` creates a fresh v6 database without credentials or network calls;
-legacy schemas require explicit migration. `check-config` returns the config
-fingerprint. Record it with `build-info` in the deployment checklist. Complete the MCP
-inventory for every enabled execution target. Workers see the target's normal files,
+legacy schemas require explicit migration. `doctor --json` reports the config
+fingerprint under `configuration`. Record it with `build-info` in the deployment
+checklist. Workers never get MCP servers. Workers see the target's normal files,
 including SSH keys and git/`gh` credentials, so keep other secrets off worker hosts; unrestricted workers remain within the trusted-owner
 model. No automatic SSH agent forwarding is introduced.
 

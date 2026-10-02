@@ -1,8 +1,8 @@
 """Bounded settings snapshots for the fixed confinement helper.
 
 Uses the helper's no-follow file opens. Never executes a discovery command or
-prints source text. Unsupported/ambiguous inputs refuse admission. This is not
-an inventory of arbitrary credential copies, external includes or opaque wrappers.
+prints source text. Unsupported/ambiguous inputs refuse admission. Every MCP
+server found in a backend settings layer is disabled: workers run without MCP.
 """
 
 
@@ -23,17 +23,6 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
                               ("CLAUDE_CONFIG_DIR", home + "/.claude")]:
             if key in environment and path(environment[key]) != expected:
                 raise Refused()
-
-    required = set()
-    for name in request.get("settings_files", []):
-        if name.startswith("~/"):
-            name = home + name[1:]
-        name = path(name)
-        if not name.endswith((".toml", ".json")):
-            raise Refused()
-        required.add(name)
-    if len(required) > 64:
-        raise Refused()
 
     limit = 1024 * 1024
     candidates = {codex_home + "/config.toml", "/etc/codex/config.toml",
@@ -66,7 +55,6 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         if ancestor == "/":
             break
         ancestor = os.path.dirname(ancestor)
-    candidates.update(required)
     if len(candidates) > 256:
         raise Refused()
 
@@ -87,14 +75,10 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         # Do not restore a layer already hidden by a private-directory mask.
         if (any(within(name, mask) for mask in masks)
                 and not any(within(name, root) for root in [workspace] + state)):
-            if name in required:
-                raise Refused()
             continue
         try:
             fd = regular(name)
         except FileNotFoundError:
-            if name in required:
-                raise Refused()
             continue
         with os.fdopen(fd, "rb") as source:
             raw = source.read(limit + 1)
@@ -108,51 +92,15 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
             raise Refused()
         documents.append((name, document))
 
-    def endpoint(value):
-        if not isinstance(value, str):
-            return ""
-        parts = urlsplit(value)
-        # Queries/fragments may hold credentials; compare only the endpoint.
-        authority = parts.netloc.rsplit("@", 1)[-1].lower()
-        return urlunsplit((parts.scheme, authority, parts.path, "", ""))
-
-    aliases = set(request.get("mcp_aliases", []))
-    urls = {endpoint(value) for value in request.get("mcp_urls", [])}
-    # Reuse the backend factory's explicit disable list as a sanitization
-    # identity too, so an opaque wrapper cannot retain credentials in its file.
-    if os.path.basename(command[0]) == "codex" and command[1:2] == ["app-server"]:
-        for index, word in enumerate(command[:-1]):
-            if word in ("-c", "--config"):
-                override = tomllib.loads(command[index + 1]).get("mcp_servers", {})
-                if not isinstance(override, dict):
-                    raise Refused()
-                for alias, value in override.items():
-                    if isinstance(value, dict) and value.get("enabled") is False:
-                        aliases.add(alias)
-
-    def fridica_reference(value, depth=0):
-        if depth > 64:
-            raise Refused()
-        if isinstance(value, str):
-            return "FRIDICA_" in value.upper()
-        if isinstance(value, dict):
-            return any(fridica_reference(key, depth + 1) or fridica_reference(v, depth + 1)
-                       for key, v in value.items())
-        if isinstance(value, list):
-            return any(fridica_reference(v, depth + 1) for v in value)
-        return False
+    aliases = set()
 
     def recognized(alias, server):
+        # Every server, whatever it points at: a worker gets no MCP at all.
         command = server.get("command", "")
         args = server.get("args", [])
         if not isinstance(command, str) or not isinstance(args, list):
             raise Refused()
-        return (alias in aliases or alias.lower() == "fridica"
-                or os.path.basename(command) == "fridica"
-                or (os.path.basename(command).startswith("python")
-                    and any(args[i:i + 2] == ["-m", "fridica"] for i in range(len(args))))
-                or endpoint(server.get("url")) in urls
-                or fridica_reference(server))
+        return True
 
     def visit(value, clean=False, depth=0):
         if depth > 64:

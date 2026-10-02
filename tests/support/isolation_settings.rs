@@ -19,7 +19,7 @@ fn write(path: &std::path::Path, content: &str) {
 }
 
 #[tokio::test]
-async fn settings_are_sanitized_across_layers_without_changing_owner_files_or_other_servers() {
+async fn settings_are_sanitized_across_layers_without_changing_owner_files() {
     let f = Fixture::new();
     let config = f.home.join(".codex/config.toml");
     let profile = f.home.join(".codex/review.config.toml");
@@ -70,8 +70,8 @@ assert data['model'] == 'owner-model'
 assert data['sample_date'] == datetime.datetime(2026, 9, 28, 12, tzinfo=datetime.timezone.utc)
 assert data['sample_array'] == [dict(name='one', enabled=True), dict(name='two', enabled=False)]
 assert data['model_providers']['corp']['env_key'] == 'MODEL_AUTH'
-assert data['mcp_servers']['docs']['command'] == 'documentation-server'
-assert data['mcp_servers']['renamed control'] == dict(command='/bin/false', enabled=False)
+for alias in ['docs', 'renamed control']:
+    assert data['mcp_servers'][alias] == dict(command='/bin/false', enabled=False)
 assert pathlib.Path('config-alias').read_text() == raw
 for p in [home/'.codex/review.config.toml', pathlib.Path('.codex/config.toml')]:
     text = p.read_text()
@@ -86,9 +86,9 @@ for p in [home/'.codex/review.config.toml', pathlib.Path('.codex/config.toml')]:
 claude = home/'.claude.json'
 data = json.loads(claude.read_text())
 assert data['session'] == 'owner-session'
-assert set(data['projects']['/project']['mcpServers']) == {'docs'}
+assert data['projects']['/project']['mcpServers'] == {}
 claude.write_text('{"session":"worker-private-update"}')
-assert set(json.loads(pathlib.Path('.mcp.json').read_text())['mcpServers']) == {'docs'}
+assert json.loads(pathlib.Path('.mcp.json').read_text())['mcpServers'] == {}
 for name in os.listdir('/proc/self/fd'):
     if int(name) > 2:
         try:
@@ -117,7 +117,7 @@ print('sanitized')
 }
 
 #[tokio::test]
-async fn discovered_and_registered_identities_are_disabled_before_backend_start() {
+async fn every_discovered_server_is_disabled_before_backend_start() {
     let f = Fixture::new();
     let config = f.home.join(".codex/config.toml");
     write(
@@ -139,13 +139,7 @@ env={KEY="factory-secret"}
     let fake = f.workspace.join("codex");
     write(&fake, "#!/usr/bin/python3 -I\nimport json, pathlib, os, sys\ntext=(pathlib.Path(os.environ['HOME'])/'.codex/config.toml').read_text()\nassert 'secret' not in text\nprint(json.dumps(sys.argv[1:]))\n");
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let isolation = Isolation::new(&f.config, &[])
-        .unwrap()
-        .with_mcp_identities(
-            &["wrapped.🚦".into()],
-            &["http://localhost:8123/fridica".into()],
-        )
-        .unwrap();
+    let isolation = Isolation::new(&f.config, &[]).unwrap();
     let launch = isolation
         .launch(
             &f.transport(),
@@ -232,24 +226,4 @@ async fn malformed_oversized_linked_settings_and_uninventoried_homes_refuse_befo
             "{kind}"
         );
     }
-}
-
-#[test]
-fn registered_mcp_identities_reject_credential_urls_and_control_characters() {
-    let f = Fixture::new();
-    for url in [
-        "relative",
-        "https://user:secret@host/",
-        "https://host/?key=secret",
-        "https://host/#secret",
-    ] {
-        assert!(Isolation::new(&f.config, &[])
-            .unwrap()
-            .with_mcp_identities(&[], &[url.into()])
-            .is_err());
-    }
-    assert!(Isolation::new(&f.config, &[])
-        .unwrap()
-        .with_mcp_identities(&["bad\nalias".into()], &[])
-        .is_err());
 }

@@ -248,25 +248,19 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     };
     registry.validate()?;
     // Workers see the target's normal files so git push/commit and gh work; only
-    // Fridica's own daemon files are hidden, automatically.
+    // Fridica's own daemon files are hidden, automatically. Workers never get
+    // MCP servers, so there is no inventory to review either.
     if let Some(table) = root.get("isolation").and_then(Item::as_table_like) {
-        let remote = table.get("remote").and_then(Item::as_table_like);
-        if table.contains_key("private_files")
-            || remote.is_some_and(|r| {
-                r.iter().any(|(_, t)| {
-                    t.as_table_like()
-                        .is_some_and(|t| t.contains_key("private_files"))
-                })
-            })
-        {
+        if table.contains_key("private_files") {
             bail!("isolation private_files was removed: workers now see the target's normal files; delete the setting");
         }
+        for key in super::isolation::REMOVED {
+            if table.contains_key(key) {
+                bail!("isolation {key} was removed: workers always run without MCP servers and confinement needs no inventory; delete the setting (and any [isolation.remote.*] tables)");
+            }
+        }
     }
-    let mut isolation: super::isolation::Settings = decode(root.get("isolation"))?;
-    for path in isolation.settings_files.iter_mut() {
-        *path = resolve_path(path, base, &context.home)?;
-    }
-    isolation.validate(&registry)?;
+    let isolation: super::isolation::Settings = decode(root.get("isolation"))?;
     let config = Config {
         owner,
         slack,

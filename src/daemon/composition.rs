@@ -115,10 +115,7 @@ impl Execution {
                 environment: host.environment,
             },
             github,
-            workers: jsonl::Options {
-                disabled_mcp_servers: config.isolation.mcp_aliases.clone(),
-                ..Default::default()
-            },
+            workers: jsonl::Options::default(),
         })
     }
 }

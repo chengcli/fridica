@@ -47,14 +47,6 @@ impl Remote {
         let mut provisioned = local.config.clone();
         provisioned.machines.machines = vec![machine.clone()];
         provisioned.machines.default = machine.name.clone();
-        provisioned.isolation.remote.insert(
-            machine.name.clone(),
-            fridica::config::isolation::Remote {
-                settings_files: vec![],
-                mcp_inventory_complete: true,
-                host: machine.host.clone(),
-            },
-        );
         let launcher = SystemLauncher::from_config(
             &provisioned,
             local.home.clone(),
@@ -187,13 +179,10 @@ sys.exit(42)
 }
 
 #[test]
-fn mismatched_remote_bindings_refuse_and_confinement_needs_no_private_inventory() {
+fn confinement_needs_no_private_inventory() {
     let mut r = Remote::new();
     let command = vec!["/bin/true".into()];
-    r.spec.machine.host = "different-target".into();
-    assert!(r.launcher.launch(&r.spec, command.clone()).is_err());
-    r.spec.machine.host = "owner@target".into();
-    // No [isolation.remote] table at all: confined SSH still launches.
+    // Confined SSH launches from the machine entry alone; nothing else is bound.
     r.launcher.isolation = Isolation::new(&r.local.config, &[]).unwrap();
     assert!(r.launcher.launch(&r.spec, command.clone()).is_ok());
     r.spec.workspace.policy.gpu_confine = Some(false);

@@ -8,9 +8,9 @@ certify deployment readiness. Do not put secrets in this record.
 
 - Archive filename and trusted SHA-256:
 - `build-info` version, full source_id, target:
-- `check-config` fingerprint:
+- `doctor` configuration fingerprint:
 - Hostname/platform/glibc and enabled targets/backends:
-- Config/state/control paths and private/MCP inventories:
+- Config/state/control paths:
 - Operator/date and retained backup locations:
 
 ## Checkout evidence (milestones 1–4)

@@ -173,7 +173,6 @@ impl Launcher for SystemLauncher {
                     self.isolation
                         .mcp_startup(
                             command,
-                            &spec.machine,
                             Some(&self.home),
                             &spec.workspace.path,
                             &spec.excluded_env,
@@ -220,7 +219,6 @@ impl Launcher for SystemLauncher {
                     self.isolation
                         .mcp_startup(
                             command,
-                            &spec.machine,
                             None,
                             &spec.workspace.path,
                             &spec.excluded_env,
@@ -255,16 +253,12 @@ impl Launcher for SystemLauncher {
 }
 #[derive(Clone)]
 pub struct Options {
-    /// Every configured alias for Fridica MCP must be supplied by daemon wiring.
-    /// Overrides are added before app-server starts, never after MCP initialization.
-    pub disabled_mcp_servers: Vec<String>,
     pub eof_wait: Duration,
     pub close_grace: Duration,
 }
 impl Default for Options {
     fn default() -> Self {
         Self {
-            disabled_mcp_servers: vec![],
             eof_wait: Duration::from_secs(1),
             close_grace: Duration::from_secs(1),
         }
@@ -365,9 +359,6 @@ pub struct BackendFactory {
 }
 impl Factory for BackendFactory {
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
-        if self.options.disabled_mcp_servers != config.isolation.mcp_aliases {
-            anyhow::bail!("worker MCP identities changed; rebuild runtime adapters");
-        }
         self.launcher.validate_config(config)
     }
     fn admit(
@@ -442,7 +433,10 @@ fn driver_options(options: &Options) -> fridica_agent::Options {
             title: "Fridica".into(),
             version: "2".into(),
         },
-        disabled_mcp_servers: options.disabled_mcp_servers.clone(),
+        // Workers never get MCP servers: Claude starts with a strict empty MCP
+        // configuration, and the Codex startup helper disables every server it
+        // finds in the target's settings before app-server initializes.
+        disabled_mcp_servers: vec![],
         eof_wait: options.eof_wait,
         close_grace: options.close_grace,
     }

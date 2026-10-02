@@ -37,7 +37,7 @@ fn frozen_worker_results_and_policy_envelopes_match() {
                 )
                 .unwrap(),
             );
-            assert_eq!(codex::command(&spec, &[]), expected);
+            assert_eq!(codex::command(&spec), expected);
             assert_eq!(codex::sandbox_mode(&spec), case["expected"]["sandbox_mode"]);
             assert_eq!(
                 codex::sandbox_policy(&spec),

@@ -24,29 +24,6 @@ impl Report {
     }
 }
 
-/// Check only the explicitly selected machine/workspace. The inventory remains
-/// an owner assertion: this cannot discover arbitrary secret copies or custom
-/// backend configuration sources. No database, backend, or API is opened.
-pub async fn isolation(
-    config: &Config,
-    context: &LoadContext,
-    environment: BTreeMap<OsString, OsString>,
-    machine: &str,
-    workspace: &str,
-    timeout: Duration,
-) -> Result<Report> {
-    isolation_backend(
-        config,
-        context,
-        environment,
-        machine,
-        workspace,
-        timeout,
-        None,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn isolation_backend(
     config: &Config,
