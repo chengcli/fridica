@@ -107,20 +107,9 @@ impl Fixture {
             clock,
             ids,
         } = self;
-        drop(store);
-        let store = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                match Store::open(config.state.path.clone()).await {
-                    Ok(store) => break store,
-                    Err(error) if error.to_string().contains("locked") => {
-                        tokio::time::sleep(Duration::from_millis(10)).await
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            }
-        })
-        .await
-        .unwrap();
+        // Closing waits for the lock to be released; dropping would race it.
+        store.close().await.unwrap();
+        let store = Store::open(config.state.path.clone()).await.unwrap();
         Self {
             _dir,
             store,

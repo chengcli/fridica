@@ -265,18 +265,11 @@ async fn a_used_v6_database_upgrades_and_rolls_back_cleanly() {
             .unwrap();
         assert_eq!(baseline, "1");
     }
-    // The daemon's store accepts the result.
+    // The daemon's store accepts the result; closing it releases the lock
+    // before the rollback takes it (dropping alone would race the thread).
     let store = Store::open(db.clone()).await.unwrap();
-    drop(store);
-    // The store's thread releases the database lock after the handle is gone;
-    // wait for it rather than racing it (a fast runner saw EAGAIN here).
-    let released = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while fridica::store::lock(&db).is_err() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    released.expect("store released the database lock");
+    store.close().await.unwrap();
+    assert!(store.call(|_| Ok(())).await.is_err());
     migration::rollback(&db, &cfg).unwrap();
     assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 6);
 }

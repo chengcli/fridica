@@ -17,9 +17,14 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 type Request = Box<dyn FnOnce(&mut Connection) + Send>;
+/// What the database thread receives: work, or the order to stop.
+enum Message {
+    Call(Request),
+    Close,
+}
 
 pub fn lock(path: &Path) -> Result<File> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
@@ -59,13 +64,17 @@ pub fn private_file(path: &Path) -> Result<File> {
 
 #[derive(Clone)]
 pub struct Store {
-    sender: mpsc::Sender<Request>,
+    sender: mpsc::Sender<Message>,
+    /// Turns true once the database thread has closed the connection and
+    /// released the lock; `close` waits for it.
+    stopped: watch::Receiver<bool>,
 }
 impl Store {
     /// Existing databases must be explicitly migrated with backups first.
     pub async fn open(path: PathBuf) -> Result<Self> {
-        let (sender, mut receiver) = mpsc::channel::<Request>(128);
+        let (sender, mut receiver) = mpsc::channel::<Message>(128);
         let (ready, wait) = oneshot::channel();
+        let (stopped_tx, stopped) = watch::channel(false);
         std::thread::Builder::new()
             .name("fridica-sqlite".into())
             .spawn(move || {
@@ -90,19 +99,43 @@ impl Store {
                     Err(error) => {
                         let _ = ready.send(Err(error));
                     }
-                    Ok((mut connection, _guard)) => {
-                        if ready.send(Ok(())).is_err() {
-                            return;
+                    Ok((mut connection, guard)) => {
+                        if ready.send(Ok(())).is_ok() {
+                            while let Some(message) = receiver.blocking_recv() {
+                                match message {
+                                    Message::Call(request) => request(&mut connection),
+                                    Message::Close => break,
+                                }
+                            }
                         }
-                        while let Some(request) = receiver.blocking_recv() {
-                            request(&mut connection);
-                        }
+                        // Release the lock only after the connection is closed.
+                        drop(connection);
+                        drop(guard);
                     }
                 }
+                let _ = stopped_tx.send(true);
             })?;
         wait.await
             .context("database thread stopped during startup")??;
-        Ok(Self { sender })
+        Ok(Self { sender, stopped })
+    }
+    /// Close the database and release its lock, waiting until that is done,
+    /// so another opener (a second `Store`, `migrate`, `rollback`) in the
+    /// same process does not race the thread's exit. Every clone of this
+    /// store stops working; later calls fail with "database thread stopped".
+    pub async fn close(&self) -> Result<()> {
+        let _ = self.sender.send(Message::Close).await;
+        let mut stopped = self.stopped.clone();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !*stopped.borrow_and_update() {
+                if stopped.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await
+        .context("database thread did not stop")?;
+        Ok(())
     }
 
     pub async fn call<T, F>(&self, function: F) -> Result<T>
@@ -112,7 +145,7 @@ impl Store {
     {
         let (reply, wait) = oneshot::channel();
         self.sender
-            .send(Box::new(move |connection| {
+            .send(Message::Call(Box::new(move |connection| {
                 // A panicking adapter cannot silently kill the only database thread.
                 let mut result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| function(connection)))
@@ -124,7 +157,7 @@ impl Store {
                     ));
                 }
                 let _ = reply.send(result);
-            }))
+            })))
             .await
             .map_err(|_| anyhow!("database thread stopped"))?;
         wait.await.context("database request cancelled")?
