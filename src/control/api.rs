@@ -78,6 +78,37 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         }
         response
     }
+    /// The event feed (docs/events.md): `GET /events?after=<cursor>&limit=N`
+    /// scans the ledger after `after`; without `after` it only says where the
+    /// ledger ends, so a new follower can start from now.
+    async fn events(&self, authority: Authority, query: &BTreeMap<String, String>) -> Response {
+        use super::events;
+        if authority != Authority::Owner {
+            return Response::error(403, "owner_required");
+        }
+        let after = match query.get("after").map(|v| v.parse::<i64>()) {
+            None => None,
+            Some(Ok(n)) if n >= 0 => Some(n),
+            Some(_) => return Response::error(400, "invalid_cursor"),
+        };
+        let limit = query
+            .get("limit")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(100);
+        let slack = self.runtime.config().slack.clone();
+        let result = self
+            .runtime
+            .store()
+            .call(move |c| match after {
+                Some(after) => events::read(c, &Names::load(c, &slack)?, after, limit),
+                None => Ok(json!({"v":events::VERSION,"events":[],"next":events::end(c)?})),
+            })
+            .await;
+        match result {
+            Ok(value) => Response::ok(value),
+            Err(_) => Response::error(500, "view_unavailable"),
+        }
+    }
     /// Owner-only Slack file reads for local tools: list a thread's files, or
     /// read one text file (64 KiB at most) through the daemon's own client.
     async fn files(
@@ -211,6 +242,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             }
             if parts.first().is_some_and(|p| p == "files") {
                 return self.files(authority, parts, &query).await;
+            }
+            if parts == ["events"] {
+                return self.events(authority, &query).await;
             }
             let processes = if matches!(
                 parts.first().map(String::as_str),
@@ -702,7 +736,7 @@ pub fn target(value: &str) -> Option<(Vec<String>, BTreeMap<String, String>)> {
     let url = reqwest::Url::parse(&format!("http://fridica/?{query}")).ok()?;
     let mut fields = BTreeMap::new();
     for (k, v) in url.query_pairs() {
-        if !["limit", "control", "status", "state", "thread"].contains(&k.as_ref())
+        if !["limit", "control", "status", "state", "thread", "after"].contains(&k.as_ref())
             || v.len() > 200
             || fields.insert(k.into_owned(), v.into_owned()).is_some()
         {

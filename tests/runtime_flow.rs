@@ -1189,6 +1189,115 @@ async fn ready_worker_artifacts_are_ordered_after_report_and_linked_to_answer_de
     h.runtime.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn the_event_feed_shows_each_event_once_in_cursor_order_and_resumes_without_gaps() {
+    let h = Harness::new(vec![delegate()], false).await;
+    // Without a cursor the feed only says where the ledger ends.
+    let start = control_call(&h, "GET", "/events", json!({}), Authority::Owner).await;
+    assert_eq!(start.status, 200, "{:?}", start.body);
+    assert_eq!(start.body["events"], json!([]));
+    let origin = start.body["next"].as_i64().unwrap();
+    // A message, a delegating turn, a finished job, a refused post, a pause.
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    // The report of the finished job is refused by the egress gate.
+    h.sink
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(DeliveryOutcome::Rejected {
+            code: "egress_ai_trailer".into(),
+        });
+    h.runtime.pass().await.unwrap();
+    fridica::threads::controls::apply(
+        &h.store,
+        SESSION.into(),
+        Control::Pause {
+            reason: "Owner requests a review".into(),
+        },
+        Authority::Owner,
+        30.,
+    )
+    .await
+    .unwrap();
+    let route = |after: i64| format!("/events?after={after}&limit=1000");
+    let page = control_call(&h, "GET", &route(origin), json!({}), Authority::Owner).await;
+    assert_eq!(page.status, 200, "{:?}", page.body);
+    assert_eq!(page.body["v"], 1);
+    let events = page.body["events"].as_array().unwrap();
+    // What each event says it was: a turn's outcome set, or the action or
+    // outcome string of the other kinds.
+    let kinds: Vec<(&str, Value)> = events
+        .iter()
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap(),
+                match &e["outcome"] {
+                    Value::Null => e["action"].clone(),
+                    outcome => outcome.clone(),
+                },
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("message", Value::Null),
+            ("turn", json!(["delegated", "replied"])),
+            ("job", json!("started")),
+            ("job", json!("finished")),
+            ("turn", json!(["replied"])),
+            ("outbox", json!("rejected")),
+            ("thread_control", json!("paused")),
+        ],
+        "{events:#?}"
+    );
+    assert!(events[1].get("status").is_none());
+    // Cursors rise, every object is versioned and placed, and nothing private
+    // from the ledger (prompts, raw Slack bodies) comes along.
+    let cursors: Vec<i64> = events
+        .iter()
+        .map(|e| e["cursor"].as_i64().unwrap())
+        .collect();
+    assert!(cursors.windows(2).all(|w| w[0] < w[1]), "{cursors:?}");
+    assert!(cursors[0] > origin);
+    for e in events {
+        assert_eq!(e["v"], 1);
+        assert_eq!(e["channel"]["id"], "CROOM");
+        assert_eq!(e["thread"], "100.1");
+        assert!(e.get("request").is_none() && e.get("payload").is_none());
+    }
+    assert_eq!(events[0]["sender"], "UALICE");
+    assert_eq!(events[0]["mentions_owner"], true);
+    assert_eq!(events[5]["code"], "egress_ai_trailer");
+    assert_eq!(events[6]["actor"], "owner");
+    // `next` passed every record scanned, including the many that project to
+    // nothing, so resuming from it repeats nothing. The feed's own control
+    // calls are ledger records too: the cursor moves on, the events do not.
+    let next = page.body["next"].as_i64().unwrap();
+    assert!(next >= *cursors.last().unwrap());
+    assert!(page.body["scanned"].as_u64().unwrap() < 1000);
+    let again = control_call(&h, "GET", &route(next), json!({}), Authority::Owner).await;
+    assert_eq!(again.body["events"], json!([]));
+    assert!(again.body["next"].as_i64().unwrap() >= next);
+    // Resuming from the middle sees exactly the rest.
+    let middle = control_call(&h, "GET", &route(cursors[2]), json!({}), Authority::Owner).await;
+    let rest: Vec<i64> = middle.body["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["cursor"].as_i64().unwrap())
+        .collect();
+    assert_eq!(rest, cursors[3..]);
+    // Owner only, and a bad cursor is refused.
+    let denied = control_call(&h, "GET", &route(0), json!({}), Authority::DesktopReadOnly).await;
+    assert_eq!(denied.status, 403);
+    let bad = control_call(&h, "GET", "/events?after=-1", json!({}), Authority::Owner).await;
+    assert_eq!(bad.status, 400);
+    h.runtime.close().await.unwrap();
+}
+
 async fn control_call(
     h: &Harness,
     method: &str,

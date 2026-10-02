@@ -2,6 +2,7 @@
 pub mod api;
 pub mod cli;
 pub mod client;
+pub mod events;
 pub mod server;
 pub mod views;
 use crate::core::{delivery::AdapterFuture, Authority};

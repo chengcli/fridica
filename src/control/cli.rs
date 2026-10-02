@@ -148,6 +148,23 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
+    /// Follow what the daemon sees and decides, one JSON object per line.
+    ///
+    /// Each object carries a `cursor`; `--since` resumes after one with no gap
+    /// or repeat. Without `--since` only new events are shown. See docs/events.md.
+    Events {
+        /// Resume after this cursor (0 for everything the ledger still has).
+        #[arg(long)]
+        since: Option<i64>,
+        /// Keep printing new events until interrupted.
+        #[arg(long)]
+        follow: bool,
+        /// Ledger records scanned per request (at most 1000).
+        #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(1..=1000))]
+        limit: u64,
+        #[command(flatten)]
+        connection: Connection,
+    },
     /// Send an owner instruction to the parent in a channel's latest thread.
     ///
     /// After an uncertain response, retry with the printed client_id.
@@ -163,6 +180,69 @@ pub enum Commands {
         #[command(flatten)]
         connection: Connection,
     },
+}
+impl Commands {
+    /// `events`: print each event as one JSON line, and with `--follow` keep
+    /// polling the daemon from the last cursor until interrupted. Anything
+    /// else answers through `run`.
+    pub async fn events(self) -> Result<()> {
+        use std::io::Write;
+        let Self::Events {
+            since,
+            follow,
+            limit,
+            connection,
+        } = self
+        else {
+            let result = self.run().await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            return Ok(());
+        };
+        let client = connection.client()?;
+        let mut cursor = match since {
+            Some(after) => after,
+            None => {
+                let end = client.request("GET", "/events", None).await?;
+                let Some(next) = end["next"].as_i64() else {
+                    // Not a feed answer (a test echo, say): show it whole.
+                    println!("{}", serde_json::to_string_pretty(&end)?);
+                    return Ok(());
+                };
+                if !follow {
+                    println!("{}", json!({"v":end["v"],"next":next}));
+                    return Ok(());
+                }
+                next
+            }
+        };
+        loop {
+            let route = format!("/events?after={cursor}&limit={limit}");
+            let page = client.request("GET", &route, None).await?;
+            let Some(next) = page["next"].as_i64() else {
+                // Not a feed answer (a test echo, say): show it whole.
+                println!("{}", serde_json::to_string_pretty(&page)?);
+                return Ok(());
+            };
+            let events = page["events"].as_array().cloned().unwrap_or_default();
+            let mut out = std::io::stdout().lock();
+            for event in &events {
+                writeln!(out, "{event}")?;
+            }
+            out.flush()?;
+            cursor = next;
+            // Fewer records than asked means the ledger's end for now. The
+            // feed's own calls are records too, so the cursor alone never says.
+            let end = page["scanned"].as_u64().is_none_or(|n| n < limit);
+            if end {
+                if !follow {
+                    return Ok(());
+                }
+                if events.is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
 }
 /// Write a downloaded file into `dir` without overwriting anything, after
 /// checking its bytes against the daemon's SHA-256.
@@ -331,6 +411,18 @@ impl Commands {
                     .request("GET", &format!("/files/{}", segment(&target)?), None)
                     .await?;
                 return save(&file, &out.unwrap_or_else(|| PathBuf::from(".")));
+            }
+            Self::Events {
+                since,
+                limit,
+                connection,
+                ..
+            } => {
+                let route = match since {
+                    Some(after) => format!("/events?after={after}&limit={limit}"),
+                    None => "/events".into(),
+                };
+                return Ok(connection.client()?.request("GET", &route, None).await?);
             }
             Self::Instruct {
                 target,

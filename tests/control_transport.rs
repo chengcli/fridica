@@ -804,6 +804,56 @@ async fn bind_waits_out_transiently_duplicated_lock_and_listener_descriptors() {
 }
 
 #[tokio::test]
+async fn events_cli_reads_the_feed_from_a_cursor_or_asks_where_it_ends() {
+    let f = Fixture::new();
+    let server = f
+        .bind(
+            Arc::new(Echo::default()),
+            Access::OwnerPeer,
+            Options::default(),
+        )
+        .await;
+    let socket = f.config.state.control_socket.to_str().unwrap().to_string();
+    for (args, target) in [
+        (vec!["events", "--since", "0"], "/events?after=0&limit=1000"),
+        (
+            vec!["events", "--since", "41", "--limit", "5"],
+            "/events?after=41&limit=5",
+        ),
+        (vec!["events"], "/events"),
+    ] {
+        let mut args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        args.extend(["--socket".into(), socket.clone()]);
+        let output = bounded_cli(args).await;
+        assert_eq!(
+            output.returncode,
+            0,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The echo is not a feed answer, so it is shown whole.
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            (result["method"].as_str(), result["target"].as_str()),
+            (Some("GET"), Some(target))
+        );
+    }
+    assert_ne!(
+        bounded_cli(vec![
+            "events".into(),
+            "--limit".into(),
+            "5000".into(),
+            "--socket".into(),
+            socket.clone()
+        ])
+        .await
+        .returncode,
+        0
+    );
+    server.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn instruct_cli_takes_a_channel_and_text_and_always_shows_the_retry_key() {
     let f = Fixture::new();
     let server = f

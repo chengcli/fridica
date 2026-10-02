@@ -636,7 +636,12 @@ fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguou
 fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
 fridica files list '#ai-human-plume:1790790458.842149'   # a thread's Slack files
 fridica files get F0ABC123 --out ~/Downloads               # save one text file
+fridica events --since 0 [--follow]      # what the daemon sees and decides, one JSON object per line
 ```
+
+`events` is a versioned feed with a cursor, for your own tools to follow Fridica
+instead of reading its database: messages, turns and their outcomes, pauses, failed
+posts and jobs. See [`docs/events.md`](docs/events.md).
 
 `instruct` tells the parent something as you, in the channel's most recently active
 thread (a thread ID instead targets that thread). It prints the `client_id` it used;
