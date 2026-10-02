@@ -133,6 +133,18 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
                 }),
             )
         }
+        // The closing debrief is its own record: the finishing reply has
+        // already been committed, and this turn posts nothing new itself.
+        "debrief_commit" => (
+            session(names, text(&p["request"]["session"]["id"])),
+            json!({
+                "kind":"turn","outcome":["finished"],
+                "trigger_ts":p["request"]["trigger"]["message"]["ts"],
+                "delegations":0,
+                "summary":clip(&p["debrief"], 300),
+                "next_step":"","blocker":"",
+            }),
+        ),
         "thread_control" => {
             let control = p["control"].as_object()?;
             let (name, detail) = control.iter().next()?;
@@ -390,6 +402,15 @@ mod tests {
             project(19, 26., "actor_commit", &closing, &l).unwrap()["outcome"],
             json!(["finished", "replied"])
         );
+        // The debrief that closes a discussion carries no reply at all; it is
+        // its own ledger record and still reads as a finished turn.
+        let debrief = json!({"inbox_id":9,"debrief":"Debrief: this discussion is finished.\n\nChecks passed.","request":{"call":"debrief","session":{"id":"TTEAM:CROOM:100.1"},"trigger":{"kind":"debrief"}}});
+        let e = project(20, 27., "debrief_commit", &debrief, &l).unwrap();
+        assert_eq!(e["kind"], "turn");
+        assert_eq!(e["outcome"], json!(["finished"]));
+        assert_eq!(e["thread"], "100.1");
+        assert!(e["summary"].as_str().unwrap().starts_with("Debrief:"));
+        assert!(e.get("status").is_none());
         let control = json!({"authority":{"kind":"owner"},"control":{"pause":{"reason":"Owner requests a review"}},"session":"TTEAM:CROOM:100.1"});
         let e = project(8, 15., "thread_control", &control, &l).unwrap();
         assert_eq!(

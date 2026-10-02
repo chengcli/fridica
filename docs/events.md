@@ -65,7 +65,7 @@ and then fields of its kind:
   | `delegated` | one or more jobs were started |
   | `waiting` | the thread now waits for the requester |
   | `blocked` | the thread is now blocked on something outside it |
-  | `finished` | the decision declared the discussion finished |
+  | `finished` | the discussion was declared finished: by the closing reply, or by the debrief turn that follows it, which posts nothing new and reads as `["finished"]` alone |
 
   The array may be empty: the turn changed nothing visible. Composition says
   the rest: `["blocked"]` or `["waiting"]` without `replied` is a thread
