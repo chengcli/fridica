@@ -417,7 +417,7 @@ async fn owner_files_stay_visible_while_mcp_servers_are_disabled_in_the_local_la
         jsonl::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     };
-    let mut f = Fixture::new();
+    let f = Fixture::new();
     let separate = tempfile::tempdir_in("/var/tmp").unwrap();
     // Owner credentials outside Fridica's own files (git/gh/ssh) stay readable.
     let private = separate.path().join("control.key");
