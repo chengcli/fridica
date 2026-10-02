@@ -47,7 +47,9 @@ Source layout
 
 The Rust source is **one crate with modules**, not a workspace of crates. The modules mirror the
 0.3 Python packages one to one, so ``spec/fridica/store/`` and ``src/store/`` describe the same
-thing during the port and a reviewer can read them side by side.
+thing during the port and a reviewer can read them side by side. The one exception is the domain:
+it is the published `fridica-core <https://github.com/chengcli/fridica-core>`_ crate, which the
+``fridica`` crate re-exports as ``fridica::core``, like ``fridica-agent`` and ``fridica-slack``.
 
 .. code-block:: text
 

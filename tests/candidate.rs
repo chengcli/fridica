@@ -61,15 +61,14 @@ fn exported_assets_are_complete_and_never_overwrite() {
             );
         }
     }
-    for name in ["result-format.txt", "result-schema.json"] {
+    for (name, expected) in [
+        ("result-format.txt", fridica::workers::result::FORMAT_NOTE),
+        ("result-schema.json", fridica::workers::result::SCHEMA_JSON),
+    ] {
         assert_eq!(
-            fs::read(path.join("workers").join(name)).unwrap(),
-            fs::read(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("crates/fridica-core/src")
-                    .join(name)
-            )
-            .unwrap()
+            fs::read_to_string(path.join("workers").join(name)).unwrap(),
+            expected,
+            "{name}"
         );
     }
     for i in 1..=fridica::store::schema::VERSION {

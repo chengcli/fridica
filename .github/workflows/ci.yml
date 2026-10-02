@@ -50,8 +50,8 @@ jobs:
       - name: Formatting, lints and tests
         run: |
           cargo fmt --all --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo test --locked --workspace --all-targets -- --test-threads=2
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets -- --test-threads=2
 
   native-candidate:
     name: Native candidate packaging (Linux x86_64)
