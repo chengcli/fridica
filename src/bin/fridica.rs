@@ -220,6 +220,10 @@ async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Command::Control(command @ fridica::control::cli::Commands::Events { .. }) => command
+            .events()
+            .await
+            .map_err(fridica::cli::control_error)?,
         Command::Control(command) => {
             let result = command.run().await.map_err(fridica::cli::control_error)?;
             println!("{}", serde_json::to_string_pretty(&result)?)
