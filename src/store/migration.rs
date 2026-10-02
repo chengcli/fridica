@@ -129,6 +129,19 @@ pub fn dry_run(database: &Path, configuration: &Path) -> Result<Plan> {
 pub fn backup_suffix() -> String {
     format!(".pre-v{}", schema::VERSION)
 }
+/// The meta key holding this upgrade's rollback baseline.
+fn baseline_key() -> String {
+    format!("v{}_migration_generation", schema::VERSION)
+}
+/// `durable_generation` of a database, `None` before the guards exist.
+fn generation(c: &Connection) -> Result<Option<i64>> {
+    Ok(c.query_row(
+        "SELECT CAST(value AS INTEGER) FROM meta WHERE key='durable_generation'",
+        [],
+        |r| r.get(0),
+    )
+    .optional()?)
+}
 pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> {
     migrate_with_checkpoint(database, configuration, now, |_| Ok(()))
 }
@@ -285,30 +298,33 @@ fn migrate_with_checkpoint(
         [],
         |r| r.get(0),
     )?;
+    // The rollback baseline of this upgrade, keyed by the schema it reaches:
+    // a resumed run must find the generation where it left it, and an older
+    // upgrade's baseline (`v6_migration_generation`) says nothing about this one.
     let baseline: Option<i64> = tx
         .query_row(
-            "SELECT CAST(value AS INTEGER) FROM meta WHERE key='v6_migration_generation'",
-            [],
+            "SELECT CAST(value AS INTEGER) FROM meta WHERE key=?",
+            [baseline_key()],
             |r| r.get(0),
         )
         .optional()?;
     let baseline = match baseline {
-        Some(baseline) => baseline,
-        None => {
-            if converted && generation != 0 {
+        Some(baseline) => {
+            if baseline != generation {
                 bail!("durable mutations occurred during interrupted migration");
             }
+            baseline
+        }
+        None => {
+            // Recording the baseline is itself the last counted write.
             let baseline = generation + 1;
             tx.execute(
-                "INSERT INTO meta VALUES('v6_migration_generation',?)",
-                [baseline.to_string()],
+                "INSERT INTO meta VALUES(?,?)",
+                rusqlite::params![baseline_key(), baseline.to_string()],
             )?;
             baseline
         }
     };
-    if converted && baseline != generation && generation != 0 {
-        bail!("durable mutations occurred during interrupted migration");
-    }
     tx.commit()?;
     checkpoint("conversion")?;
     config::editor::replace(
@@ -341,24 +357,45 @@ fn rollback_with_checkpoint(
     if journal.database != database || journal.config != configuration {
         bail!("migration journal path mismatch");
     }
-    if !matches!(journal.phase.as_str(), "complete" | "rolling_back") {
+    // `prepared` is what a failed run leaves: the backup is whole and the
+    // database may be half migrated, so restoring is the way back.
+    if !matches!(
+        journal.phase.as_str(),
+        "complete" | "rolling_back" | "prepared"
+    ) {
         bail!("migration is not complete");
     }
     let mut c = Connection::open(&database)?;
+    let backup_path = sibling(&database, &backup_suffix());
     if journal.phase == "complete" {
-        let generation: i64 = c.query_row(
-            "SELECT CAST(value AS INTEGER) FROM meta WHERE key='durable_generation'",
-            [],
-            |r| r.get(0),
-        )?;
-        if Some(generation) != journal.generation {
+        if generation(&c)? != journal.generation {
             bail!("durable mutations occurred after migration; explicit backup restoration is required");
         }
         if fs::read(&configuration)? != journal.config_after.as_bytes() {
             bail!("configuration changed after migration");
         }
     }
-    let backup_path = sibling(&database, &backup_suffix());
+    if journal.phase == "prepared" {
+        // Only the migration's own steps may have touched the database: its
+        // recorded baseline once the conversion committed, else the backup's
+        // generation plus one counted write per schema step (each records its
+        // version in `meta`).
+        let recorded: Option<i64> = c
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM meta WHERE key=?",
+                [baseline_key()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let reference = match recorded {
+            Some(baseline) => Some(baseline),
+            None => generation(&read_connection(&backup_path)?)?
+                .map(|g| g + (schema::VERSION - journal.from) as i64),
+        };
+        if generation(&c)? != reference {
+            bail!("durable mutations occurred after the interrupted migration; explicit backup restoration is required");
+        }
+    }
     let config_backup = fs::read(sibling(&configuration, &backup_suffix()))?;
     if digest(&fs::read(&backup_path)?) != journal.backup_hash
         || digest(&config_backup) != journal.config_before

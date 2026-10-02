@@ -35,6 +35,18 @@ impl Fixture {
             original,
         }
     }
+    /// A v6 database converted from v5 and used since (#86).
+    fn used_v6() -> Self {
+        let f = Self::at_version(6);
+        let c = Connection::open(&f.db).unwrap();
+        c.execute_batch(
+            "INSERT INTO meta VALUES('v6_converted','1'); INSERT INTO meta VALUES('v6_migration_generation','1');",
+        )
+        .unwrap();
+        schema::install_mutation_guards(&c).unwrap();
+        c.execute("INSERT INTO threads(id,workspace,channel,root_ts,created,updated) VALUES('used','W','C','9',1,1)", []).unwrap();
+        f
+    }
     fn interrupt(&self, at: &str) {
         let error = migrate_with_checkpoint(&self.db, &self.cfg, 10., |phase| {
             if phase == at {
@@ -202,5 +214,30 @@ fn every_recognized_schema_upgrades_repeats_and_restores_its_own_backup() {
         rollback(&f.db, &f.cfg).unwrap();
         assert_eq!(schema::version(&c).unwrap(), version);
         assert_eq!(fs::read_to_string(&f.cfg).unwrap(), f.original);
+    }
+}
+
+#[test]
+fn a_used_v6_database_resumes_or_rolls_back_from_every_interruption() {
+    for phase in ["schema", "conversion", "configuration_export"] {
+        // Resume: the interrupted upgrade finishes on the next run.
+        let f = Fixture::used_v6();
+        f.interrupt(phase);
+        migrate(&f.db, &f.cfg, 20.).unwrap();
+        let c = Connection::open(&f.db).unwrap();
+        assert_eq!(schema::version(&c).unwrap(), schema::VERSION, "{phase}");
+        let journal: serde_json::Value =
+            serde_json::from_slice(&fs::read(sibling(&f.db, ".migration.json")).unwrap()).unwrap();
+        assert_eq!(journal["phase"], "complete", "{phase}");
+        drop(c);
+        // Rollback instead: a failed run leaves a `prepared` journal and a
+        // half-migrated database, and the backup takes it back to v6.
+        let f = Fixture::used_v6();
+        f.interrupt(phase);
+        rollback(&f.db, &f.cfg).unwrap();
+        let c = Connection::open(&f.db).unwrap();
+        assert_eq!(schema::version(&c).unwrap(), 6, "{phase}");
+        assert_eq!(fs::read_to_string(&f.cfg).unwrap(), f.original, "{phase}");
+        check_ready(&f.db).unwrap_err();
     }
 }
