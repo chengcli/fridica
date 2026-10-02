@@ -159,8 +159,6 @@ project="project"
 [state]
 path="private/db"
 control_socket="private/control.sock"
-[isolation]
-mcp_aliases=["owner-fridica"]
 "#;
         std::fs::write(root.join("config.toml"), source).unwrap();
         let config = Arc::new(
@@ -360,7 +358,6 @@ async fn composed_artifact_flow(remote: bool) {
     }
     let worker = std::fs::read_to_string(f.dir.path().join("worker.log")).unwrap();
     assert!(worker.contains("Fridica fetched o/r HEAD"));
-    assert!(worker.contains("owner-fridica"));
     assert!(!worker.contains("xoxp_private_fixture"));
     let events:Vec<Value>=f.store.call(|c|{
         let rows:Vec<String>=c.prepare("SELECT json_object('seq',seq,'kind',kind,'time',time,'payload',json(payload_json),'complete',complete) FROM replay_events ORDER BY seq")?.query_map([],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -580,38 +577,6 @@ async fn composed_isolation_refusal_is_durable_and_precedes_fetch_and_backend_st
         .unwrap()
         .contains("private-value"));
     runtime.close().await.unwrap();
-}
-
-#[tokio::test]
-async fn composition_rejects_stale_mcp_options_before_recovery_mutates_state() {
-    let mut f = Fixture::new().await;
-    let execution = f.execution("Run checks".into(), false);
-    Arc::make_mut(&mut f.config)
-        .isolation
-        .mcp_aliases
-        .push("new-owner-wrapper".into());
-    f.store.call(|c| {
-        c.execute("INSERT INTO threads(id,workspace,channel,root_ts,status,created,updated) VALUES(?,'TTEAM','CROOM','100.1','active',1,1)", [SESSION])?;
-        c.execute("INSERT INTO thread_inbox(session_id,kind,ref,payload_json,state,created) VALUES(?,'message','interrupted','{}','processing',1)", [SESSION])?;
-        Ok(())
-    }).await.unwrap();
-    let result = composition::start(
-        f.config.clone(),
-        f.store.clone(),
-        f.slack.clone(),
-        f.clock.clone(),
-        Arc::new(SequenceIds::default()),
-        Mode::Active(Box::new(execution)),
-    )
-    .await;
-    assert!(result.is_err());
-    assert_eq!(
-        f.scalar("SELECT count(*) FROM thread_inbox WHERE state='processing'")
-            .await,
-        1
-    );
-    assert!(!f.dir.path().join("parent.log").exists());
-    assert!(!f.dir.path().join("worker.log").exists());
 }
 
 #[tokio::test]

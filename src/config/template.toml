@@ -47,12 +47,6 @@ max_load = 1.0                    # load average per declared CPU at which a mac
 max_gpu_utilization = 90          # percent; a declared GPU above this, or above max_gpu_memory, is in use
 max_gpu_memory = 0.9              # a machine whose declared GPUs are all in use is saturated
 
-[isolation]
-mcp_inventory_complete = false   # set only after reviewing all local MCP sources
-# settings_files = ["~/.codex/config.toml"]
-# mcp_aliases = ["fridica"]        # all configured Fridica server identities
-# SSH targets need their own [isolation.remote.NAME] inventory; see worker-isolation.md.
-
 [policy]                          # defaults for every machine; machines and workspaces override
 mode = "write"                    # read-only | write | full
 network = ["github.com", "pypi.org", "files.pythonhosted.org"]

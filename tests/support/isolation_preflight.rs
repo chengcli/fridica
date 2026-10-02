@@ -18,38 +18,22 @@ fn launch(f: &Fixture) -> process::Launch {
 }
 
 #[tokio::test]
-async fn local_probe_and_cli_do_not_provision_state_or_start_backends() {
+async fn local_probe_does_not_provision_state_or_start_backends() {
     let f = Fixture::new();
     let source = std::fs::read(&f.config.path).unwrap();
     // Fresh backend homes are valid; the doctor must not create defaults.
-    let report = doctor::isolation(
+    let report = doctor::isolation_backend(
         &f.config,
         &context(&f),
         BTreeMap::new(),
         "local",
         "project",
         Duration::from_secs(10),
+        None,
     )
     .await
     .unwrap();
     assert!(report.passed(), "{report:?}");
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-        .args(["doctor-isolation", "--config"])
-        .arg(&f.config.path)
-        .args(["--machine", "local", "--workspace", "project"])
-        .env_clear()
-        .env("HOME", &f.home)
-        .output()
-        .await
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["check"], "passed");
-    assert!(result.get("active_launch_ready").is_none());
     assert_eq!(std::fs::read(&f.config.path).unwrap(), source);
     assert!(!f.config.state.path.exists());
     assert!(!f.config.state.control_socket.exists());
@@ -82,22 +66,6 @@ async fn probe_validates_settings_without_executing_or_rewriting_them() {
         doctor::run_probe(launch(&f), Duration::from_secs(10)).await,
         Check::SettingsRefused
     );
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-        .args(["doctor-isolation", "--config"])
-        .arg(&f.config.path)
-        .args(["--machine", "local", "--workspace", "project"])
-        .env_clear()
-        .env("HOME", &f.home)
-        .output()
-        .await
-        .unwrap();
-    assert!(!output.status.success());
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["check"], "settings_refused");
-    for output in [&output.stdout, &output.stderr] {
-        assert!(!String::from_utf8_lossy(output).contains("private-value"));
-        assert!(!String::from_utf8_lossy(output).contains(f.home.to_str().unwrap()));
-    }
     std::fs::remove_file(&settings).unwrap();
     std::os::unix::fs::symlink(&f.config.path, &settings).unwrap();
     assert_eq!(
@@ -159,15 +127,6 @@ async fn remote_doctor_probes_target_home_through_watchdog_without_a_private_inv
     machine.transport = "ssh".into();
     machine.host = "owner@synthetic".into();
     machine.workspaces[0].path = "~/project".into();
-    // The remote table only binds the MCP review to this exact SSH target.
-    f.config.isolation.remote.insert(
-        "local".into(),
-        fridica::config::isolation::Remote {
-            settings_files: vec![],
-            mcp_inventory_complete: true,
-            host: "owner@synthetic".into(),
-        },
-    );
     let tools = tempfile::tempdir().unwrap();
     std::fs::set_permissions(tools.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let fake_ssh = tools.path().join("ssh");
@@ -180,13 +139,14 @@ async fn remote_doctor_probes_target_home_through_watchdog_without_a_private_inv
         "PATH".into(),
         format!("{}:/usr/bin:/bin", tools.path().display()).into(),
     )]);
-    let report = doctor::isolation(
+    let report = doctor::isolation_backend(
         &f.config,
         &context(&f),
         environment.clone(),
         "local",
         "project",
         Duration::from_secs(10),
+        None,
     )
     .await
     .unwrap();
@@ -204,10 +164,6 @@ async fn remote_doctor_probes_target_home_through_watchdog_without_a_private_inv
         .admit(std::sync::Arc::new(f.config.clone()), spec.clone())
         .await
         .unwrap();
-    let mut changed = f.config.clone();
-    changed.machines.machines[0].host = "owner@replacement".into();
-    changed.isolation.remote.get_mut("local").unwrap().host = "owner@replacement".into();
-    assert!(launcher.validate_config(&changed).is_err());
     // Nothing on the target is masked, so the owner's files need no provisioning.
     std::fs::remove_dir(remote_home.join("private")).unwrap();
     launcher
@@ -274,7 +230,7 @@ async fn automatic_admission_probes_without_provisioning_and_rechecks_changed_se
 }
 
 #[tokio::test]
-async fn immutable_launcher_rejects_inventory_identity_and_private_path_changes() {
+async fn immutable_launcher_rejects_private_path_changes() {
     use fridica::workers::jsonl::{Launcher, SystemLauncher};
     use std::sync::Arc;
     let f = Fixture::new();
@@ -285,27 +241,14 @@ async fn immutable_launcher_rejects_inventory_identity_and_private_path_changes(
         f.home.join("ssh"),
     )
     .unwrap();
-    for index in 0..4 {
-        let mut config = f.config.clone();
-        match index {
-            0 => config
-                .isolation
-                .settings_files
-                .push(f.home.join("private/extra.toml")),
-            1 => config.isolation.mcp_aliases.push("owner-wrapper".into()),
-            2 => config
-                .isolation
-                .mcp_urls
-                .push("http://localhost:8765/mcp".into()),
-            _ => config.state.control_socket = f.home.join("private/new-control.sock"),
-        }
-        assert!(launcher.validate_config(&config).is_err());
-        let error = launcher
-            .admit(Arc::new(config), worker_spec(&f))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "worker_isolation_configuration_changed");
-    }
+    let mut config = f.config.clone();
+    config.state.control_socket = f.home.join("private/new-control.sock");
+    assert!(launcher.validate_config(&config).is_err());
+    let error = launcher
+        .admit(Arc::new(config), worker_spec(&f))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "worker_isolation_configuration_changed");
     assert_eq!(std::fs::read_dir(&f.home).unwrap().count(), 0);
 }
 
@@ -351,29 +294,4 @@ async fn cancelled_probe_retains_capacity_until_stubborn_child_is_reaped() {
         .unwrap()
         .unwrap();
     assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());
-}
-
-#[tokio::test]
-async fn explicit_extra_source_is_sanitized_in_confined_mounts_and_missing_source_refuses() {
-    let mut f = Fixture::new();
-    let extra = f.workspace.join("extra.json");
-    let source = r#"{"mcpServers":{"outside-default-layers":{"command":"fridica","env":{"KEY":"private-source"}}}}"#;
-    std::fs::write(&extra, source).unwrap();
-    f.config.isolation.settings_files.push(extra.clone());
-    let launch = f.command("import json, pathlib; assert json.loads(pathlib.Path('extra.json').read_text()) == {'mcpServers': {}}");
-    let result = process::run_once(launch, vec![], Duration::from_secs(10), 4096)
-        .await
-        .unwrap();
-    assert_eq!(
-        result.returncode,
-        0,
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert_eq!(std::fs::read_to_string(&extra).unwrap(), source);
-    std::fs::remove_file(&extra).unwrap();
-    assert_eq!(
-        doctor::run_probe(super::preflight::launch(&f), Duration::from_secs(10)).await,
-        Check::SettingsRefused
-    );
 }

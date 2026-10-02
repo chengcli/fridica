@@ -28,22 +28,33 @@ pub enum Status {
 pub struct Check {
     pub status: Status,
     pub name: String,
-    pub detail: &'static str,
+    pub detail: String,
+}
+/// What the loaded configuration resolves to, for the deployment record.
+/// Names and counts only: no paths, hosts or token values.
+#[derive(Debug, Serialize)]
+pub struct Configuration {
+    pub fingerprint: String,
+    pub machines: Vec<String>,
+    pub default_machine: String,
+    pub attention: crate::core::config::Attention,
 }
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub checks: Vec<Check>,
     pub cancelled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<Configuration>,
 }
 impl Report {
     pub fn passed(&self) -> bool {
         !self.cancelled && !self.checks.iter().any(|c| c.status == Status::Fail)
     }
-    fn add(&mut self, status: Status, name: impl Into<String>, detail: &'static str) {
+    fn add(&mut self, status: Status, name: impl Into<String>, detail: impl Into<String>) {
         self.checks.push(Check {
             status,
             name: name.into(),
-            detail,
+            detail: detail.into(),
         });
     }
     fn test(&mut self, name: impl Into<String>, ok: bool, failure: &'static str) {
@@ -54,24 +65,29 @@ impl Report {
         );
     }
     pub fn text(&self) -> String {
-        let mut lines: Vec<_> = self
-            .checks
-            .iter()
-            .map(|c| {
-                format!(
-                    "{} {}{}{}",
-                    match c.status {
-                        Status::Pass => "PASS",
-                        Status::Fail => "FAIL",
-                        Status::Warn => "WARN",
-                        Status::Skip => "SKIP",
-                    },
-                    c.name,
-                    if c.detail.is_empty() { "" } else { ": " },
-                    c.detail
-                )
-            })
-            .collect();
+        let mut lines = vec![];
+        if let Some(c) = &self.configuration {
+            lines.push(format!("Configuration fingerprint: {}", c.fingerprint));
+            lines.push(format!(
+                "Machines: {} (default: {})",
+                c.machines.join(", "),
+                c.default_machine
+            ));
+        }
+        lines.extend(self.checks.iter().map(|c| {
+            format!(
+                "{} {}{}{}",
+                match c.status {
+                    Status::Pass => "PASS",
+                    Status::Fail => "FAIL",
+                    Status::Warn => "WARN",
+                    Status::Skip => "SKIP",
+                },
+                c.name,
+                if c.detail.is_empty() { "" } else { ": " },
+                c.detail
+            )
+        }));
         let count = |status| self.checks.iter().filter(|c| c.status == status).count();
         lines.push(format!(
             "Checks: {} passed, {} failed, {} warnings, {} skipped.",
@@ -105,11 +121,17 @@ pub async fn run(
     );
     let config = match config::load(path, context) {
         Ok(config) => config,
-        Err(_) => {
+        Err(error) => {
+            // The loader's own message names the setting; only its first line,
+            // so a parser's source excerpt never appears here.
+            let reason = format!("{error:#}");
             report.add(
                 Status::Fail,
                 "Configuration",
-                "invalid or unreadable configuration; run check-config for details",
+                format!(
+                    "invalid or unreadable configuration: {}",
+                    reason.lines().next().unwrap_or("")
+                ),
             );
             report.add(
                 Status::Skip,
@@ -120,6 +142,12 @@ pub async fn run(
         }
     };
     report.add(Status::Pass, "Configuration", "");
+    report.configuration = Some(Configuration {
+        fingerprint: config.fingerprint.clone(),
+        machines: config.machines.names(),
+        default_machine: config.parent.default_machine.clone(),
+        attention: config.attention.clone(),
+    });
     report.test(
         "Agent contract",
         config::contract::load(config.owner.contract.as_deref()).is_ok(),
@@ -243,8 +271,8 @@ pub async fn run(
     }
     report.add(
         Status::Skip,
-        "Worker MCP isolation",
-        "run start --check-ready for reviewed inventories, settings and target isolation checks",
+        "Worker isolation",
+        "run start --check-ready for target isolation checks",
     );
     Ok(report)
 }

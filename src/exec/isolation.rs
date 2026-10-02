@@ -6,11 +6,7 @@ use super::{
     shell,
     ssh::{LaunchOptions, SshTransport},
 };
-use crate::config::{
-    isolation::{remote_path, validate_identities},
-    registry::Machine,
-    Config,
-};
+use crate::config::{isolation::remote_path, Config};
 use anyhow::{bail, Result};
 use serde::Serialize;
 use serde_json::json;
@@ -46,23 +42,11 @@ const BOOTSTRAP: &str = include_str!("isolation_bootstrap.py");
 #[derive(Clone, PartialEq, Eq)]
 pub struct Isolation {
     private: Vec<PathBuf>,
-    settings_files: Vec<PathBuf>,
-    inventory_complete: bool,
-    remote: BTreeMap<String, RemoteFiles>,
-    mcp_aliases: Vec<String>,
-    mcp_urls: Vec<String>,
-}
-#[derive(Clone, PartialEq, Eq)]
-struct RemoteFiles {
-    host: String,
-    settings_files: Vec<String>,
-    inventory_complete: bool,
 }
 impl Isolation {
     /// Additional capability files must be supplied by trusted daemon
     /// construction; they cannot come from a job or a model response.
     pub fn new(config: &Config, additional: &[PathBuf]) -> Result<Self> {
-        config.isolation.validate(&config.machines)?;
         let mut private = vec![
             config.path.clone(),
             config.state.path.clone(),
@@ -79,46 +63,14 @@ impl Isolation {
         {
             bail!("worker isolation requires private files below dedicated directories");
         }
-        let mut isolation = Self {
-            private,
-            settings_files: config.isolation.settings_files.clone(),
-            inventory_complete: config.isolation.mcp_inventory_complete,
-            remote: BTreeMap::new(),
-            mcp_aliases: vec![],
-            mcp_urls: vec![],
-        }
-        .with_mcp_identities(&config.isolation.mcp_aliases, &config.isolation.mcp_urls)?;
-        for (name, inventory) in &config.isolation.remote {
-            let machine = config
-                .machines
-                .get(name)
-                .expect("validated inventory machine");
-            isolation.remote.insert(
-                name.clone(),
-                RemoteFiles {
-                    host: machine.host.clone(),
-                    settings_files: inventory.settings_files.clone(),
-                    inventory_complete: inventory.mcp_inventory_complete,
-                },
-            );
-        }
-        Ok(isolation)
+        Ok(Self { private })
     }
-    /// Owner-provisioned identities for wrappers and HTTP servers that cannot
-    /// be identified from a direct Fridica executable or environment reference.
-    /// Endpoints must not contain credentials: these identities travel in argv.
-    pub fn with_mcp_identities(mut self, aliases: &[String], urls: &[String]) -> Result<Self> {
-        validate_identities(aliases, urls)?;
-        self.mcp_aliases = aliases.to_vec();
-        self.mcp_urls = urls.to_vec();
-        Ok(self)
-    }
-    /// Target-side discovery for unrestricted Codex. No private-file inventory,
-    /// mount namespace, copied state, or credentialed discovery command is used.
+    /// Target-side discovery for unrestricted Codex: every MCP server in the
+    /// target's Codex settings is disabled. No private-file inventory, mount
+    /// namespace, copied state, or credentialed discovery command is used.
     pub fn mcp_startup(
         &self,
         command: Vec<String>,
-        machine: &Machine,
         home: Option<&Path>,
         cwd: &Path,
         excluded_env: &[String],
@@ -132,15 +84,6 @@ impl Isolation {
         {
             bail!("invalid Codex startup settings request");
         }
-        let settings = if machine.transport == "ssh" {
-            self.remote
-                .get(&machine.name)
-                .filter(|p| p.host == machine.host)
-                .map(|p| json!(p.settings_files))
-                .unwrap_or_else(|| json!([]))
-        } else {
-            json!(self.settings_files)
-        };
         let mut argv = vec![
             "/usr/bin/python3".into(),
             "-I".into(),
@@ -148,10 +91,8 @@ impl Isolation {
             "-c".into(),
             BOOTSTRAP.into(),
             MCP_STARTUP.into(),
-            json!({"home":home,"workspace":cwd,"create":create,
-                   "excluded_env":excluded_env,"settings_files":settings,"mcp_aliases":self.mcp_aliases,
-                   "mcp_urls":self.mcp_urls})
-            .to_string(),
+            json!({"home":home,"workspace":cwd,"create":create,"excluded_env":excluded_env})
+                .to_string(),
         ];
         argv.extend(command);
         Ok(argv)
@@ -161,7 +102,6 @@ impl Isolation {
     /// Binary presence is checked without running a version/authentication command.
     pub fn readiness(
         &self,
-        machine: &Machine,
         home: Option<&Path>,
         workspace: &Path,
         backend: &str,
@@ -171,15 +111,6 @@ impl Isolation {
         if !["codex", "claude"].contains(&backend) {
             bail!("unknown readiness backend");
         }
-        let settings = if machine.transport == "ssh" {
-            self.remote
-                .get(&machine.name)
-                .filter(|p| p.host == machine.host)
-                .map(|p| json!(p.settings_files))
-                .unwrap_or_else(|| json!([]))
-        } else {
-            json!(self.settings_files)
-        };
         Ok(vec![
             "/usr/bin/python3".into(),
             "-I".into(),
@@ -187,10 +118,8 @@ impl Isolation {
             "-c".into(),
             BOOTSTRAP.into(),
             READINESS.into(),
-            json!({"home":home,"workspace":workspace,"backend":backend,"parent":parent,
-                   "excluded_env":excluded_env,"settings_files":settings,
-                   "mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
-            .to_string(),
+            json!({"home":home,"workspace":workspace,"backend":backend,"parent":parent,"excluded_env":excluded_env})
+                .to_string(),
         ])
     }
 
@@ -269,12 +198,9 @@ impl Isolation {
     ) -> Result<Launch> {
         // Workers keep the target's normal files (SSH keys, git and gh credentials)
         // so they can commit and push; confinement bounds writes and devices only.
-        let profile = self.remote.get(&transport.machine.name);
-        if profile.is_some_and(|p| p.host != transport.machine.host) || !remote_path(cwd) {
-            bail!("confined SSH target or workspace does not match its inventory");
+        if !remote_path(cwd) {
+            bail!("confined SSH workspace must be an absolute or home-relative path");
         }
-        let no_settings = vec![];
-        let settings_files = profile.map_or(&no_settings, |p| &p.settings_files);
         shell::validate(&command)?;
         let mut argv = vec![
             "/usr/bin/python3".into(),
@@ -284,8 +210,7 @@ impl Isolation {
             BOOTSTRAP.into(),
             HELPER.into(),
             json!({"home":null,"workspace":cwd,"private":[],
-                "create":create,"preflight":preflight,"probe_backend":probe_backend,"excluded_env":transport.excluded_env,
-                "settings_files":settings_files,"mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
+                "create":create,"preflight":preflight,"probe_backend":probe_backend,"excluded_env":transport.excluded_env})
             .to_string(),
         ];
         argv.extend(command);
@@ -359,9 +284,8 @@ impl Isolation {
             "-c".into(),
             BOOTSTRAP.into(),
             HELPER.into(),
-            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,"preflight":preflight,"probe_backend":probe_backend,
-                "settings_files":self.settings_files,"mcp_aliases":self.mcp_aliases,"mcp_urls":self.mcp_urls})
-            .to_string(),
+            json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,"preflight":preflight,"probe_backend":probe_backend})
+                .to_string(),
         ];
         argv.extend(command);
         // No repository cwd, PYTHONPATH, shell expansion or repository-controlled
@@ -392,7 +316,6 @@ pub enum Check {
     NamespaceFailed,
     RuntimeOrTransportFailed,
     ProbeFailed,
-    McpInventoryUnreviewed,
     BackendMissing,
     WorkspaceRefused,
     HostPathsRefused,

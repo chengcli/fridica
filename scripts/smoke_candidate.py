@@ -94,8 +94,6 @@ path="state.sqlite3"
 control_socket="control.sock"
 [github]
 enabled=false
-[isolation]
-mcp_inventory_complete=true
 ''')
         fake = root / "bin/claude"
         fake.write_text(BACKEND)
@@ -104,12 +102,12 @@ mcp_inventory_complete=true
             path = root / "bin" / helper
             path.write_text("#!/bin/sh\nexit 0\n")
             path.chmod(0o700)
-        fingerprint = json.loads(command("check-config", "--config", config))["fingerprint"]
+        diagnostics = json.loads(command("doctor", "--config", config, "--json"))
+        assert not diagnostics["cancelled"]
+        fingerprint = diagnostics["configuration"]["fingerprint"]
         assert not (root / "private/state.sqlite3").exists()
         ready = json.loads(command("start", "--check-ready", "--config", config))
         assert ready["startup_checks_passed"] and "active_launch_ready" not in ready
-        diagnostics = json.loads(command("doctor", "--config", config, "--json"))
-        assert not diagnostics["cancelled"]
         command("init-state", "--config", config)
         command("init-state", "--config", config)
         db = root / "private/state.sqlite3"

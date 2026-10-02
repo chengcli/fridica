@@ -100,47 +100,35 @@ pub async fn check(
                 report.cancelled = true;
                 break;
             }
-            let inventoried = if machine.transport == "local" {
-                config.isolation.mcp_inventory_complete
-            } else {
-                config
-                    .isolation
-                    .remote
-                    .get(&machine.name)
-                    .is_some_and(|p| p.host == machine.host && p.mcp_inventory_complete)
-            };
             let supported = matches!(machine.transport.as_str(), "local" | "ssh");
             for backend in &machine.backends {
                 if *stop.borrow() {
                     report.cancelled = true;
                     break;
                 }
-                let isolation =
-                    if supported && inventoried && workspace.policy.gpu_confine == Some(true) {
-                        Some(
-                            isolation_backend(
-                                config,
-                                context,
-                                environment.clone(),
-                                &machine.name,
-                                &workspace.name,
-                                timeout,
-                                Some(backend),
-                            )
-                            .await?
-                            .check,
+                let isolation = if supported && workspace.policy.gpu_confine == Some(true) {
+                    Some(
+                        isolation_backend(
+                            config,
+                            context,
+                            environment.clone(),
+                            &machine.name,
+                            &workspace.name,
+                            timeout,
+                            Some(backend),
                         )
-                    } else {
-                        None
-                    };
+                        .await?
+                        .check,
+                    )
+                } else {
+                    None
+                };
                 if *stop.borrow() {
                     report.cancelled = true;
                     break;
                 }
                 let check = if !supported {
                     Check::UnsupportedTransport
-                } else if !inventoried {
-                    Check::McpInventoryUnreviewed
                 } else if isolation.is_some_and(|c| c != Check::Passed) {
                     isolation.unwrap()
                 } else {
@@ -192,7 +180,6 @@ async fn probe(
         config.slack.user_token_env.clone(),
     ];
     let args = match boundary.readiness(
-        machine,
         (machine.transport == "local").then_some(context.home.as_path()),
         workspace,
         backend,

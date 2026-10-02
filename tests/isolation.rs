@@ -412,17 +412,16 @@ async fn system_launcher_applies_isolation_only_to_confined_local_workers() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn owner_files_stay_visible_while_mcp_identities_reach_the_local_launcher() {
+async fn owner_files_stay_visible_while_mcp_servers_are_disabled_in_the_local_launcher() {
     use fridica::workers::{
         jsonl::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     };
-    let mut f = Fixture::new();
+    let f = Fixture::new();
     let separate = tempfile::tempdir_in("/var/tmp").unwrap();
     // Owner credentials outside Fridica's own files (git/gh/ssh) stay readable.
     let private = separate.path().join("control.key");
     std::fs::write(&private, "control-secret").unwrap();
-    f.config.isolation.mcp_aliases.push("opaque".into());
     std::fs::create_dir_all(f.home.join(".codex")).unwrap();
     let settings = "[mcp_servers.opaque]\ncommand='wrapper'\nenv={KEY='mcp-secret'}\n";
     std::fs::write(f.home.join(".codex/config.toml"), settings).unwrap();

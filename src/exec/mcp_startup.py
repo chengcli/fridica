@@ -1,4 +1,5 @@
-"""Disable known Fridica MCP identities before unrestricted Codex startup.
+"""Disable every MCP server in the target's Codex settings before unrestricted
+Codex startup.
 
 This is not a filesystem sandbox. Owner settings and backend authentication stay
 in place. No backend, MCP executable, shell or discovery command runs while

@@ -57,28 +57,12 @@ enum Command {
         #[arg(long, requires = "check_ready", value_parser = clap::value_parser!(u64).range(1..=120))]
         timeout: Option<u64>,
     },
-    /// Validate configuration and resolved placement policies without starting adapters.
-    CheckConfig {
-        #[arg(long)]
-        config: Option<PathBuf>,
-    },
     /// Check configuration, tokens, backend sign-in and protocols without model requests.
     Doctor {
         #[arg(long)]
         config: Option<PathBuf>,
         #[arg(long)]
         json: bool,
-        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=120))]
-        timeout: u64,
-    },
-    /// Test worker isolation on one explicit local/SSH target without a backend.
-    DoctorIsolation {
-        #[arg(long)]
-        config: Option<PathBuf>,
-        #[arg(long)]
-        machine: String,
-        #[arg(long)]
-        workspace: String,
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=120))]
         timeout: u64,
     },
@@ -180,7 +164,7 @@ async fn run(cli: Cli) -> Result<()> {
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Next: use this executable with the same --config path for configure --detect, check-config and start --check-ready; complete workspaces and inventories first. `start` runs the daemon; add --observe-only to record without replying.");
+            println!("Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
         }
         Command::Configure(options) => {
             if let Err(error) = options.run(&fridica::config::LoadContext::current()?).await {
@@ -240,23 +224,6 @@ async fn run(cli: Cli) -> Result<()> {
             let result = command.run().await.map_err(fridica::cli::control_error)?;
             println!("{}", serde_json::to_string_pretty(&result)?)
         }
-        Command::CheckConfig { config } => {
-            let config = fridica::config::load(
-                &config_path(config)?,
-                &fridica::config::LoadContext::current()?,
-            )
-            .map_err(fridica::cli::input_error)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "fingerprint": config.fingerprint,
-                    "machines": config.machines.names(),
-                    "default_machine": config.parent.default_machine,
-                    "attention": config.attention,
-                    "isolation": config.isolation.summary(&config.machines),
-                }))?
-            );
-        }
         Command::Doctor {
             config,
             json,
@@ -284,28 +251,6 @@ async fn run(cli: Cli) -> Result<()> {
             );
             if !report.passed() {
                 anyhow::bail!("doctor checks did not pass");
-            }
-        }
-        Command::DoctorIsolation {
-            config,
-            machine,
-            workspace,
-            timeout,
-        } => {
-            let context = fridica::config::LoadContext::current()?;
-            let config = fridica::config::load(&config_path(config)?, &context)?;
-            let report = fridica::doctor::isolation(
-                &config,
-                &context,
-                std::env::vars_os().collect(),
-                &machine,
-                &workspace,
-                std::time::Duration::from_secs(timeout),
-            )
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            if !report.passed() {
-                anyhow::bail!("worker isolation preflight did not pass");
             }
         }
         Command::Migrate {

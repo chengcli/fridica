@@ -123,7 +123,6 @@ impl Harness {
                     // exits shortly after closing its output.
                     eof_wait: Duration::from_secs(1),
                     close_grace: Duration::from_millis(100),
-                    ..Default::default()
                 },
                 wire.clone(),
             )
@@ -447,7 +446,6 @@ impl Harness {
                 Options {
                     eof_wait: Duration::from_millis(200),
                     close_grace: Duration::from_millis(100),
-                    ..Default::default()
                 },
                 self.wire.clone(),
             )
@@ -768,45 +766,6 @@ for line in sys.stdin:
         1
     );
     h.worker.close().await.unwrap();
-}
-#[tokio::test]
-async fn configured_fridica_mcp_aliases_are_disabled_in_startup_arguments() {
-    let h = Harness::new("codex", BTreeMap::new(), 30.);
-    let root = h.directory.path();
-    let worker = Arc::new(
-        JsonlWorker::new(
-            h.spec.clone(),
-            Arc::new(FakeLaunch {
-                home: root.into(),
-                root: root.into(),
-                env: BTreeMap::new(),
-            }),
-            Arc::new(SequenceIds::default()),
-            Options {
-                disabled_mcp_servers: vec!["fridica".into(), "my-fridica".into()],
-                ..Default::default()
-            },
-            h.wire.clone(),
-        )
-        .unwrap(),
-    );
-    run(
-        worker.clone(),
-        "go".into(),
-        "".into(),
-        Arc::new(DenyApprovals),
-    )
-    .await
-    .unwrap();
-    let rows = h.logs("initialize");
-    let argv = rows[0]["argv"].as_array().unwrap();
-    for setting in [
-        "mcp_servers.\"fridica\".enabled=false",
-        "mcp_servers.\"my-fridica\".enabled=false",
-    ] {
-        assert!(argv.contains(&json!(setting)));
-    }
-    worker.close().await.unwrap();
 }
 
 #[tokio::test]

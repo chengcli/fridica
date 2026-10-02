@@ -267,19 +267,25 @@ fn offline_cli_defaults_to_the_home_configuration_path() {
     let default = root.join("home/.config/fridica/config.toml");
     std::fs::create_dir_all(default.parent().unwrap()).unwrap();
     std::fs::write(&default, basic(root)).unwrap();
+    // Doctor's probes fail without backends (so it exits 1), but its report
+    // still carries the loaded configuration.
     let check = |explicit: bool| {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"));
-        command.arg("check-config").env("HOME", root.join("home"));
+        command
+            .args(["doctor", "--json", "--timeout", "1"])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", root.join("home"));
         if explicit {
             command.arg("--config").arg(&default);
         }
         let output = command.output().unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+            report["configuration"]["fingerprint"].is_string(),
+            "{report}"
         );
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()["fingerprint"].clone()
+        report["configuration"]["fingerprint"].clone()
     };
     assert_eq!(check(false), check(true));
 }
@@ -294,20 +300,19 @@ fn offline_cli_checks_configuration_without_creating_state_or_reading_tokens() {
     let path = root.join("etc/config.toml");
     std::fs::write(&path, basic(root)).unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-        .args(["check-config", "--config"])
+        .args(["doctor", "--json", "--timeout", "1", "--config"])
         .arg(&path)
-        .env_remove("SLACK_APP_TOKEN")
-        .env_remove("SLACK_USER_TOKEN")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", root.join("home"))
         .output()
         .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["machines"], serde_json::json!(["local"]));
-    assert_eq!(result["attention"]["max_replies_per_hour"], 20);
+    let configuration = &result["configuration"];
+    assert_eq!(configuration["machines"], serde_json::json!(["local"]));
+    assert_eq!(configuration["default_machine"], "local");
+    assert_eq!(configuration["attention"]["max_replies_per_hour"], 20);
+    // Without tokens the token checks fail, but nothing was created or read.
     assert!(!root.join("db").exists());
     assert!(!root.join("control.sock").exists());
 }
@@ -358,151 +363,97 @@ fn remote_machine() -> &'static str {
 }
 
 #[test]
-fn isolation_inventory_resolves_only_local_paths_and_preserves_source_and_legacy_defaults() {
+fn removed_isolation_settings_are_rejected_by_name_and_an_empty_table_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
-    // Resolved paths are canonical (macOS temp dirs live under /private/var).
     let root = &dir.path().canonicalize().unwrap();
     setup(root);
     let path = root.join("etc/config.toml");
-    let source = format!("{}{}\n# Owner-provisioned, no tokens stored here.\n[isolation]\nmcp_aliases=['opaque-wrapper']\nmcp_urls=['http://localhost:8123/fridica']\n[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true\n",basic(root),remote_machine());
-    std::fs::write(&path, &source).unwrap();
-    let parsed = config::load(&path, &context(root)).unwrap();
-    assert_eq!(parsed.isolation.mcp_aliases, ["opaque-wrapper"]);
-    assert!(parsed.isolation.remote["remote"].mcp_inventory_complete);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
-    assert!(!root.join("db").exists());
-    // The removed private_files setting is rejected, never silently ignored.
-    for fragment in [
-        "[isolation]\nprivate_files=['keys/control.key']",
-        "[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true\nprivate_files=['~/secret/key']",
+    let base = format!("{}{}", basic(root), remote_machine());
+    // Each former setting is refused by name; its value never reaches the error.
+    for (fragment, key) in [
+        (
+            "[isolation]\nmcp_inventory_complete=true",
+            "mcp_inventory_complete",
+        ),
+        (
+            "[isolation]\nsettings_files=['~/private-secret.toml']",
+            "settings_files",
+        ),
+        ("[isolation]\nmcp_aliases=['private-secret']", "mcp_aliases"),
+        (
+            "[isolation]\nmcp_urls=['http://private-secret/']",
+            "mcp_urls",
+        ),
+        (
+            "[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true",
+            "remote",
+        ),
+        (
+            "[isolation]\nprivate_files=['/private-secret']",
+            "private_files",
+        ),
     ] {
-        let error = loader::parse(&format!("{}{}\n{fragment}\n", basic(root), remote_machine()), &path, &context(root)).unwrap_err();
-        assert!(format!("{error:#}").contains("private_files was removed"), "{error:#}");
+        let error =
+            loader::parse(&format!("{base}\n{fragment}\n"), &path, &context(root)).unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains(&format!("isolation {key} was removed")),
+            "{error}"
+        );
+        assert!(!error.contains("private-secret"), "{error}");
     }
-    let legacy = loader::parse(&basic(root), &path, &context(root)).unwrap();
-    assert!(legacy.isolation.is_empty());
-    assert!(serde_json::to_value(&legacy)
+    assert!(loader::parse(
+        &format!("{base}\n[isolation]\nunknown=true\n"),
+        &path,
+        &context(root)
+    )
+    .is_err());
+    // An empty table, which an older configuration may leave behind, is fine
+    // and changes nothing.
+    let parsed = loader::parse(&format!("{base}\n[isolation]\n"), &path, &context(root)).unwrap();
+    assert!(parsed.isolation.is_empty());
+    assert!(serde_json::to_value(&parsed)
         .unwrap()
         .get("isolation")
         .is_none());
-    assert_ne!(parsed.fingerprint, legacy.fingerprint);
-    let mut moved = parsed.clone();
-    moved
-        .machines
-        .machines
-        .iter_mut()
-        .find(|m| m.name == "remote")
-        .unwrap()
-        .host = "other-host".into();
-    assert!(fridica::exec::isolation::Isolation::new(&moved, &[]).is_err());
+    assert!(!root.join("db").exists());
 }
 
 #[test]
-fn isolation_configuration_rejects_wrong_hosts_unsafe_paths_and_embedded_credentials() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    setup(root);
-    let base = format!("{}{}", basic(root), remote_machine());
-    loader::parse(&base, &root.join("etc/config.toml"), &context(root)).unwrap();
-    for fragment in [
-        "[isolation]\nunknown=true",
-        "[isolation]\nmcp_urls=['http://user:private-secret@host/']",
-        "[isolation]\nmcp_urls=['https://host/?key=private-secret']",
-        "[isolation]\nmcp_urls=['http://']",
-        "[isolation]\nmcp_urls=['http:host']",
-        "[isolation]\nprivate_files=['/private-secret']",
-        "[isolation.remote.remote]\nhost='changed-host'\nmcp_inventory_complete=true",
-        "[isolation.remote.remote]\nhost='owner@target'",
-        "[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/../private-secret.toml']",
-        "[isolation.remote.remote]\nhost='owner@target'\nmcp_inventory_complete=true\nunknown=true",
-        "[isolation.remote.missing]\nhost='owner@target'\nmcp_inventory_complete=true",
-        "[isolation.remote.local]\nhost='owner@target'\nmcp_inventory_complete=true",
-    ] {
-        let error = loader::parse(&format!("{base}\n{fragment}\n"), &root.join("etc/config.toml"), &context(root)).unwrap_err();
-        assert!(!format!("{error:#}").contains("private-secret"));
-    }
-}
-
-#[test]
-fn offline_cli_reports_remote_mcp_review_without_probe_or_private_values() {
+fn doctor_names_a_removed_isolation_setting_without_its_value() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     setup(root);
     let path = root.join("etc/config.toml");
-    let base = format!("{}{}", basic(root), remote_machine());
-    for configured in [false, true] {
-        let inventory = if configured {
-            "\n[isolation]\nmcp_aliases=['private-alias']\n[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/private/hidden-capability.json']\nmcp_inventory_complete=true\n"
-        } else {
-            ""
-        };
-        std::fs::write(&path, format!("{base}{inventory}")).unwrap();
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-            .args(["check-config", "--config"])
-            .arg(&path)
-            .env_clear()
-            .env("HOME", root.join("home"))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let text = String::from_utf8(output.stdout).unwrap();
-        let report: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(
-            report["isolation"]["remote"][0]["mcp_inventory_complete"],
-            configured
-        );
-        assert_eq!(
-            report["isolation"]["remote"][0]["settings_file_count"],
-            usize::from(configured)
-        );
-        assert_eq!(report["isolation"]["runtime_checks"], "not_run");
-        assert!(
-            !text.contains("private-alias")
-                && !text.contains("hidden-capability")
-                && !text.contains("owner@target")
-        );
-        assert!(!root.join("db").exists());
-        assert!(!root.join("home/.codex").exists());
-    }
-}
-
-#[test]
-fn mcp_source_inventory_resolves_local_files_and_requires_safe_target_paths() {
-    let dir = tempfile::tempdir().unwrap();
-    // Resolved paths are canonical (macOS temp dirs live under /private/var).
-    let root = &dir.path().canonicalize().unwrap();
-    setup(root);
-    let source = format!("{}{}\n[isolation]\nsettings_files=['sources/extra.toml']\nmcp_inventory_complete=true\n[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/sources/managed.json']\nmcp_inventory_complete=true\n", basic(root), remote_machine());
-    let config = loader::parse(&source, &root.join("etc/config.toml"), &context(root)).unwrap();
-    assert_eq!(
-        config.isolation.settings_files,
-        vec![root.join("etc/sources/extra.toml")]
+    std::fs::write(
+        &path,
+        format!(
+            "{}{}\n[isolation]\nmcp_aliases=['private-secret']\n",
+            basic(root),
+            remote_machine()
+        ),
+    )
+    .unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+        .args(["doctor", "--json", "--timeout", "1", "--config"])
+        .arg(&path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", root.join("home"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert!(report.get("configuration").is_none(), "{text}");
+    let detail = report["checks"][1]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("isolation mcp_aliases was removed"),
+        "{detail}"
     );
-    assert_eq!(
-        config.isolation.remote["remote"].settings_files,
-        vec!["~/sources/managed.json"]
-    );
-    let summary = config.isolation.summary(&config.machines).to_string();
-    assert!(!summary.contains("managed.json"));
-    assert!(!summary.contains("extra.toml"));
-    assert!(!root.join("etc/sources").exists());
-    for fragment in [
-        "[isolation]\nsettings_files=['opaque.yaml']",
-        "[isolation]\nmcp_inventory_complete='yes'",
-        "[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['relative/private.toml']",
-        "[isolation.remote.remote]\nhost='owner@target'\nsettings_files=['~/../private.toml']",
-    ] {
-        assert!(loader::parse(
-            &format!("{}{}\n{fragment}", basic(root), remote_machine()),
-            &root.join("etc/config.toml"),
-            &context(root)
-        )
-        .is_err());
-    }
+    assert!(!text.contains("private-secret") && !text.contains("owner@target"));
+    assert!(!root.join("db").exists());
+    assert!(!root.join("home/.codex").exists());
 }
 
 #[test]
