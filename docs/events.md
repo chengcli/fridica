@@ -56,12 +56,24 @@ and then fields of its kind:
   `report`, …).
 
 **`turn`**, a parent decision committed for a thread
-: `outcome`: one of `blocked`, `waiting`, `delegated`, `replied`,
-  `handed_off_without_post` (nothing posted, but a summary or next step was
-  recorded) or `no_reply`, chosen in that order of precedence; `trigger_ts`
-  (the message that caused the turn, when one did); `status` (the reply's
-  status); `delegations` (count); `summary`, `next_step`, `blocker` (each at
-  most 300 characters).
+: `outcome`: a sorted array of independent atoms, each saying one thing the
+  turn did:
+
+  | atom | meaning |
+  |---|---|
+  | `replied` | a message was posted |
+  | `delegated` | one or more jobs were started |
+  | `waiting` | the thread now waits for the requester |
+  | `blocked` | the thread is now blocked on something outside it |
+  | `finished` | the decision declared the discussion finished |
+
+  The array may be empty: the turn changed nothing visible. Composition says
+  the rest: `["blocked"]` or `["waiting"]` without `replied` is a thread
+  settled without a post; `["delegated","replied"]` posted and started work;
+  `["finished","replied"]` posted a closing message. Test membership, never
+  equality or position: atoms may be added within `v` 1. Also `trigger_ts`
+  (the message that caused the turn, when one did), `delegations` (count),
+  `summary`, `next_step`, `blocker` (each at most 300 characters).
 
 **`thread_control`**, a thread's control state changed
 : `action`: `paused`, `resumed`, `closed`, `archived`, `restored`, `cleaned`
@@ -88,7 +100,7 @@ Example:
 ```json
 {"v":1,"cursor":41821,"time":1790880844.7,"kind":"turn","workspace":"TJ6E2EJ2K",
  "channel":{"id":"C0C3XG2UXBL","name":"ai-human-plume"},"thread":"1790880807.547759",
- "outcome":"delegated","trigger_ts":"1790880807.547759","status":"complete",
+ "outcome":["delegated","replied"],"trigger_ts":"1790880807.547759",
  "delegations":1,"summary":"","next_step":"","blocker":""}
 ```
 

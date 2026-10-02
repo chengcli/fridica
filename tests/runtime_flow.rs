@@ -1226,28 +1226,34 @@ async fn the_event_feed_shows_each_event_once_in_cursor_order_and_resumes_withou
     assert_eq!(page.status, 200, "{:?}", page.body);
     assert_eq!(page.body["v"], 1);
     let events = page.body["events"].as_array().unwrap();
-    let kinds: Vec<(&str, &str)> = events
+    // What each event says it was: a turn's outcome set, or the action or
+    // outcome string of the other kinds.
+    let kinds: Vec<(&str, Value)> = events
         .iter()
         .map(|e| {
             (
                 e["kind"].as_str().unwrap(),
-                e["outcome"].as_str().or(e["action"].as_str()).unwrap_or(""),
+                match &e["outcome"] {
+                    Value::Null => e["action"].clone(),
+                    outcome => outcome.clone(),
+                },
             )
         })
         .collect();
     assert_eq!(
         kinds,
         [
-            ("message", ""),
-            ("turn", "delegated"),
-            ("job", "started"),
-            ("job", "finished"),
-            ("turn", "replied"),
-            ("outbox", "rejected"),
-            ("thread_control", "paused"),
+            ("message", Value::Null),
+            ("turn", json!(["delegated", "replied"])),
+            ("job", json!("started")),
+            ("job", json!("finished")),
+            ("turn", json!(["replied"])),
+            ("outbox", json!("rejected")),
+            ("thread_control", json!("paused")),
         ],
         "{events:#?}"
     );
+    assert!(events[1].get("status").is_none());
     // Cursors rise, every object is versioned and placed, and nothing private
     // from the ledger (prompts, raw Slack bodies) comes along.
     let cursors: Vec<i64> = events

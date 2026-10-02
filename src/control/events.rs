@@ -104,27 +104,28 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
             let sent = reply["send"] != false && !text(&reply["text"]).trim().is_empty();
             let delegated = d["delegations"].as_array().is_some_and(|v| !v.is_empty());
             let status = text(&reply["status"]);
-            let outcome = if sent && status == "blocked" {
-                "blocked"
-            } else if sent && status == "waiting" {
-                "waiting"
-            } else if delegated {
-                "delegated"
-            } else if sent {
-                "replied"
-            } else if !reply.is_null()
-                && (!text(&d["summary"]).is_empty() || !text(&d["note"]["next_step"]).is_empty())
-            {
-                "handed_off_without_post"
-            } else {
-                "no_reply"
-            };
+            // Independent atoms of what the turn did, sorted; empty when the
+            // turn changed nothing visible. Clients test membership; atoms may
+            // be added within a version.
+            let mut outcome = vec![];
+            if sent {
+                outcome.push("replied");
+            }
+            if delegated {
+                outcome.push("delegated");
+            }
+            if !reply.is_null() && matches!(status, "waiting" | "blocked") {
+                outcome.push(status);
+            }
+            if reply["discussion"] == "finished" {
+                outcome.push("finished");
+            }
+            outcome.sort_unstable();
             (
                 session(names, text(&p["request"]["session"]["id"])),
                 json!({
                     "kind":"turn","outcome":outcome,
                     "trigger_ts":p["request"]["trigger"]["message"]["ts"],
-                    "status":reply["status"],
                     "delegations":d["delegations"].as_array().map_or(0, Vec::len),
                     "summary":clip(&d["summary"], 300),
                     "next_step":clip(&d["note"]["next_step"], 300),
@@ -360,20 +361,34 @@ mod tests {
         );
         let commit = json!({"decision":{"delegations":[{"brief":"Run focused checks","machine":"local"}],"note":{"kind":"result","next_step":"","blocker":""},"reply":{"send":true,"status":"complete","text":"Running checks."},"summary":""},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{"kind":"message","message":{"ts":"100.1"}}}});
         let e = project(5, 12., "actor_commit", &commit, &l).unwrap();
-        assert_eq!(
-            (e["kind"].as_str(), e["outcome"].as_str()),
-            (Some("turn"), Some("delegated"))
-        );
+        assert_eq!(e["kind"], "turn");
+        assert_eq!(e["outcome"], json!(["delegated", "replied"]));
         assert_eq!(e["trigger_ts"], "100.1");
         let blocked = json!({"decision":{"delegations":[],"note":{"blocker":"needs a link"},"reply":{"send":true,"status":"blocked","text":"I need a link."},"summary":""},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{}}});
         assert_eq!(
             project(6, 13., "actor_commit", &blocked, &l).unwrap()["outcome"],
-            "blocked"
+            json!(["blocked", "replied"])
         );
-        let silent = json!({"decision":{"delegations":[],"note":{"next_step":"owner review"},"reply":{"send":false,"status":"complete","text":""},"summary":"handed to the owner"},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{}}});
+        let waiting = json!({"decision":{"delegations":[],"note":{},"reply":{"send":true,"status":"waiting","text":"Which file?"},"summary":""},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{}}});
+        let e = project(7, 14., "actor_commit", &waiting, &l).unwrap();
+        assert_eq!(e["outcome"], json!(["replied", "waiting"]));
+        assert!(e.get("status").is_none());
+        // A send=false stand-in only settles the status: no reply was posted.
+        let settled = json!({"decision":{"delegations":[],"note":{"next_step":"owner review"},"reply":{"send":false,"status":"blocked","text":""},"summary":"handed to the owner"},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{}}});
         assert_eq!(
-            project(7, 14., "actor_commit", &silent, &l).unwrap()["outcome"],
-            "handed_off_without_post"
+            project(17, 24., "actor_commit", &settled, &l).unwrap()["outcome"],
+            json!(["blocked"])
+        );
+        // Nothing visible changed: the set is empty, not a made-up name.
+        let nothing = json!({"decision":{"delegations":[],"note":{},"reply":null,"summary":""},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{}}});
+        assert_eq!(
+            project(18, 25., "actor_commit", &nothing, &l).unwrap()["outcome"],
+            json!([])
+        );
+        let closing = json!({"decision":{"delegations":[],"note":{},"reply":{"send":true,"discussion":"finished","status":"complete","text":"All done."},"summary":""},"request":{"session":{"id":"TTEAM:CROOM:100.1"},"trigger":{}}});
+        assert_eq!(
+            project(19, 26., "actor_commit", &closing, &l).unwrap()["outcome"],
+            json!(["finished", "replied"])
         );
         let control = json!({"authority":{"kind":"owner"},"control":{"pause":{"reason":"Owner requests a review"}},"session":"TTEAM:CROOM:100.1"});
         let e = project(8, 15., "thread_control", &control, &l).unwrap();
