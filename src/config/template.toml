@@ -32,6 +32,7 @@ max_workers_per_thread = 4
 max_jobs = 4                      # worker jobs running at once across all machines
 job_timeout = 14400
 worker_idle = 1800                # seconds an idle worker process is kept for follow-ups
+worker_context_chars = 12000      # thread context a forked worker starts with
 
 [attention]
 max_echo_replies_per_hour = 10     # peer-triggered replies

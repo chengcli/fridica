@@ -666,6 +666,32 @@ struct Task {
 /// the worker concluded under them, even when new instructions are sent. So
 /// resume only a session begun with the current instructions; otherwise drop
 /// it in the same transaction that records the new fingerprint.
+/// The thread context a forked job opens with: the whole snapshot for a new
+/// backend session, only what changed since the worker's previous job when
+/// the session is resumed. A fresh job gets nothing.
+async fn forked_context(t: &Task, resume: &str) -> Result<String, WorkerFailure> {
+    use crate::core::fork;
+    let Some(current) = t.job.snapshot.as_ref() else {
+        return Ok(String::new());
+    };
+    let previous = if resume.is_empty() {
+        None
+    } else {
+        crate::store::work::previous_snapshot(&t.store, t.record.id.clone(), t.job.id.clone())
+            .await
+            .map_err(|_| WorkerFailure {
+                kind: Failure::Execution,
+                code: "worker_intent_storage_failed".into(),
+                backend_session_id: String::new(),
+            })?
+    };
+    Ok(match previous {
+        Some((job, earlier)) => {
+            fork::render_delta(&job, &fork::delta(&earlier, current), &earlier.at.watermark)
+        }
+        None => fork::render(current),
+    })
+}
 async fn fresh_unless_same_instructions(t: &Task, resume: String) -> Result<String, WorkerFailure> {
     use rusqlite::OptionalExtension;
     use sha2::{Digest, Sha256};
@@ -718,6 +744,7 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
         let prepared = t.io.prepare(t.spec.clone(), t.job.clone()).await?;
         let resume = fresh_unless_same_instructions(&t, resume).await?;
         let mut brief = frame(&t.job, &t.record);
+        brief.push_str(&forked_context(&t, &resume).await?);
         brief.push_str(&prepared);
         let request = RunRequest {
             job_id: t.job.id.clone(),

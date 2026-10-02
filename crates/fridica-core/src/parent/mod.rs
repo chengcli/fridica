@@ -77,7 +77,7 @@ pub enum Discussion {
     Finished,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ThreadContext {
     pub machine: String,
@@ -198,4 +198,7 @@ pub struct Delegation {
     /// Files attached in this thread (`session.files[].id`) that Fridica
     /// places in the worker's workspace before the job starts.
     pub files: Vec<String>,
+    /// How much of the thread the worker inherits: a fork of this turn's
+    /// context (default), or only the brief.
+    pub context: crate::fork::ContextMode,
 }

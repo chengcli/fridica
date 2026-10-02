@@ -63,7 +63,8 @@ serves every thread at once.
    per-thread limits. Problems get one repair call.
 4. **Apply.** One transaction writes everything the action caused:
    - outbox posts (the reply, then the details upload);
-   - new worker rows and job rows (a turn's jobs share a `join_group`);
+   - new worker rows and job rows (a turn's jobs share a `join_group`; a forked
+     job carries the thread snapshot it was delegated with, `core::fork`);
    - the advanced session (`policy.advance()`: turns, wait streak, stall counter,
      summary, decisions, sticky context, pauses);
    - task notes;

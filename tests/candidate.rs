@@ -72,7 +72,7 @@ fn exported_assets_are_complete_and_never_overwrite() {
             .unwrap()
         );
     }
-    for i in 1..=6 {
+    for i in 1..=fridica::store::schema::VERSION {
         assert!(path.join(format!("migrations/{i:03}.sql")).exists());
     }
 }

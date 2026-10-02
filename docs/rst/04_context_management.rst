@@ -54,8 +54,9 @@ What the parent sees
   Any attachment, text or binary, can be given to a worker through a delegation's ``files``:
   Fridica downloads it into the worker's workspace before the job starts.
 * **Session**: status, turns, rolling summary, decisions and sticky context.
-* **Workers**: each worker of the thread with machine, workspace, backend, role, status, a short
-  summary and its last result *without* the report field.
+* **Workers**: each worker of the thread with machine, workspace, backend, role, status and a short
+  summary; ``session.work.results`` lists the thread's latest finished jobs (summary and error
+  excerpts, *without* the report field).
 * **Trigger**: why the call happens. For finished jobs, ``trigger.results`` holds each job's full
   WorkerResult **including the report**, plus the brief (first 1,000 characters) and any error (first
   500 characters), so the parent can write the reply from the worker's own words.
@@ -67,6 +68,24 @@ The triage call is smaller: the owner's profile, repositories, summary, the last
 and the trigger.
 
 .. include:: generated/t11_budgets.rst
+
+Worker context
+--------------
+
+The parent is stateless, so its memory of a thread is the data above. A delegation with
+``context: fork`` (the default) snapshots that data when the turn is applied and renders it at the
+top of the worker's first prompt, after the worker's frame and before its brief: the thread status,
+the request and the parent's reply, summary, decisions and task note, the recent conversation,
+earlier workers' results, attached files and the GitHub context. The snapshot is bounded by
+``limits.worker_context_chars`` (12,000 by default), each section has its own cap, and every cut is
+named in the rendered header. It is marked as untrusted data: the worker's instructions come from its
+brief and the contract, never from the thread text.
+
+A follow-up to a worker whose backend session is resumed does not get the whole thread again. Fridica
+compares the new job's snapshot with the one the worker's previous job ran with and renders only the
+difference: a changed status or summary, new decisions, new results, and the messages after the
+previous snapshot's watermark. A worker whose backend session is restarted gets the full snapshot.
+``context: fresh`` gives the worker its brief alone.
 
 Note that ``context_chars`` (default 24,000) bounds the thread history and attached text, not the
 prompt as a whole (channel context and linked messages have their own caps, listed above): the contract, the machine registry, worker summaries and results come on top. The
