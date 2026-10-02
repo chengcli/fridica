@@ -52,11 +52,6 @@ syn = { version = "2", features = ["full", "visit"] }
 unsafe_code = "forbid"
 
 # fridica-core lives here and changes with Fridica; release.py stamps only the
-# root package, so this table stays after [package].
 [workspace]
 members = ["crates/fridica-core"]
 
-# Temporary until fridica-agent 0.2.0 is published on crates.io (#97); the
-# owner removes this table after publishing.
-[patch.crates-io]
-fridica-agent = { path = "/Users/chengcli/Development/scix/repos/fridica-agent" }
