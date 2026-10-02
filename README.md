@@ -539,6 +539,11 @@ It never prints message text, briefs or credentials. Set `FRIDICA_LOG=off` to si
 - a warning when `~/.codex/config.toml` defines MCP servers, because `codex app-server`
   cannot ignore the user config.
 
+Machines are probed at the same time, each over one shared SSH connection, and every
+result is printed the moment it is known, so a slow or unreachable host costs only its
+own probes' time and never looks like a hang. With `--json` the lines go to stderr and
+the report stays whole on stdout.
+
 Slack authorization and channel membership are verified by `start`.
 
 ## In Slack

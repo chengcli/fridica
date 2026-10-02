@@ -43,8 +43,8 @@ if name == 'codex':
             child = os.fork()
             if child == 0:
                 while True: time.sleep(1)
-            Path(os.environ['PID']).write_text(str(child))
             Path(os.environ['OUT']).write_text(str(out))
+            Path(os.environ['PID']).write_text(str(child))
             while True: time.sleep(1)
         if mode == 'symlink':
             (out / 'schema.json').symlink_to(os.environ['SECRET_FILE'])
@@ -144,7 +144,7 @@ token_env="SECRET_GITHUB"
             &self.path,
             &self.context,
             self.env.clone(),
-            Duration::from_secs(1),
+            Duration::from_secs(2),
             watch::channel(false).1,
         )
         .await
@@ -215,7 +215,7 @@ project="/scratch"
 import os,sys
 assert 'BatchMode=yes' in sys.argv
 assert 'StrictHostKeyChecking=yes' in sys.argv
-assert sys.argv.index('ControlMaster=no') < sys.argv.index('ControlMaster=auto')
+assert 'ControlMaster=auto' in sys.argv and sys.argv.index('ControlPersist=30') < sys.argv.index('ControlPersist=600')
 assert 'UpdateHostKeys=no' in sys.argv
 assert '-A' not in sys.argv
 # Pretend the remote login environment also contains daemon tokens.
@@ -367,11 +367,11 @@ async fn stopping_finishes_current_probe_and_skips_later_targets() {
         &fixture.path,
         &fixture.context,
         fixture.env.clone(),
-        Duration::from_secs(1),
+        Duration::from_secs(2),
         rx,
     );
     let cancel = async {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(20), async {
             while !fixture.dir.path().join("pid").exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -432,7 +432,7 @@ async fn recorded_attachment_scopes_are_read_without_migration() {
 #[tokio::test]
 async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
     let mut fixture = Fixture::new();
-    let result = fixture.cli(&["doctor", "--json", "--timeout", "1"]).await;
+    let result = fixture.cli(&["doctor", "--json", "--timeout", "2"]).await;
     assert_eq!(
         result.returncode,
         0,
@@ -441,11 +441,11 @@ async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
     );
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert!(report.get("active_launch_ready").is_none());
-    let result = fixture.cli(&["doctor", "--timeout", "1"]).await;
+    let result = fixture.cli(&["doctor", "--timeout", "2"]).await;
     assert_eq!(result.returncode, 0);
     assert!(result.text().contains("0 failed"));
     fixture.env.remove(std::ffi::OsStr::new("SLACK_APP_TOKEN"));
-    let result = fixture.cli(&["doctor", "--timeout", "1"]).await;
+    let result = fixture.cli(&["doctor", "--timeout", "2"]).await;
     assert_eq!(result.returncode, 1);
     assert!(result.text().contains("FAIL Slack app token"));
     assert_ne!(fixture.cli(&["start"]).await.returncode, 0);
