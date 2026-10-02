@@ -612,6 +612,7 @@ impl Worker for JsonlWorker {
                 .run(Turn {
                     prompt: request.brief,
                     resume: request.resume,
+                    fork_from: request.fork_from,
                     context,
                     approver: Arc::new(JobApprover {
                         approvals,

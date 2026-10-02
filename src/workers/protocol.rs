@@ -33,6 +33,10 @@ pub struct RunRequest {
     pub attempt: u32,
     pub brief: String,
     pub resume: String,
+    /// The backend session to fork into this worker's new session; empty for
+    /// none. Never set together with `resume`.
+    #[serde(default)]
+    pub fork_from: String,
 }
 pub trait ApprovalHandler: Send + Sync {
     /// Called before supervisor configuration changes become visible.

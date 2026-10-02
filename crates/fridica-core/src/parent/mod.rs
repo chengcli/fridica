@@ -199,6 +199,10 @@ pub struct Delegation {
     /// places in the worker's workspace before the job starts.
     pub files: Vec<String>,
     /// How much of the thread the worker inherits: a fork of this turn's
-    /// context (default), or only the brief.
+    /// context (default), only the brief, or a copy of another worker's
+    /// backend session (`fork_worker`, with `fork_worker_id`).
     pub context: crate::fork::ContextMode,
+    /// With `context: fork_worker`: the live worker of this thread whose
+    /// backend session the new worker is forked from.
+    pub fork_worker_id: String,
 }

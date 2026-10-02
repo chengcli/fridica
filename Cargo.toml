@@ -17,7 +17,7 @@ path = "src/bin/fridica.rs"
 
 [dependencies]
 fridica-core = { path = "crates/fridica-core", version = "0.1.0" }
-fridica-agent = "0.1"
+fridica-agent = "0.2"
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -55,3 +55,8 @@ unsafe_code = "forbid"
 # root package, so this table stays after [package].
 [workspace]
 members = ["crates/fridica-core"]
+
+# Temporary until fridica-agent 0.2.0 is published on crates.io (#97); the
+# owner removes this table after publishing.
+[patch.crates-io]
+fridica-agent = { path = "/Users/chengcli/Development/scix/repos/fridica-agent" }

@@ -6,10 +6,11 @@
 //!
 //! The parent is stateless (every turn is a fresh model call with the whole
 //! prompt), so there is no backend session to fork; `Fork` is realised by
-//! reconstruction: the rendered bundle opens the job's first prompt. A later
-//! native fork (a backend branching a live session) would add a parent
-//! session to [`ForkPoint`] and a fork source to the run request behind the
-//! same [`ContextMode`]; the decision schema, store and delta rule stay.
+//! reconstruction: the rendered bundle opens the job's first prompt.
+//! `ForkWorker` is the native fork: the backend branches a live worker's own
+//! session into the new worker's (`Job.fork_from_worker`, the run request's
+//! `fork_from`), and the bundle is kept only as the fallback when that
+//! session is gone; the decision schema, store and delta rule are shared.
 use crate::parent::{context::bounded, Decision, ParentRequest, ThreadContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -23,12 +24,17 @@ pub enum ContextMode {
     Fork,
     /// Only the brief: cleanly specified work, or a thread that must stay private.
     Fresh,
+    /// A copy of another worker's backend session (`Delegation.fork_worker_id`):
+    /// the new worker starts knowing what that worker knows; the source goes on
+    /// unchanged. Falls back to the thread snapshot when the session is gone.
+    ForkWorker,
 }
 impl ContextMode {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Fork => "fork",
             Self::Fresh => "fresh",
+            Self::ForkWorker => "fork_worker",
         }
     }
 }

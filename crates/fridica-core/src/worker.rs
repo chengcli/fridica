@@ -114,9 +114,13 @@ pub struct Job {
     /// How the worker's context starts: forked from the delegating turn, or fresh.
     #[serde(default)]
     pub context: crate::fork::ContextMode,
-    /// The thread's context at the fork point; `Some` only for a fork.
+    /// The thread's context at the fork point; `Some` for a fork of either kind.
     #[serde(default)]
     pub snapshot: Option<crate::fork::ContextBundle>,
+    /// For `fork_worker`: the worker whose backend session this job forks;
+    /// its session is read at start and never changed.
+    #[serde(default)]
+    pub fork_from_worker: String,
     #[serde(default = "queued")]
     pub status: String,
     #[serde(default)]

@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
-const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'files',json(files_json),'context',context,'snapshot',json(snapshot_json),'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
+const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'files',json(files_json),'context',context,'snapshot',json(snapshot_json),'fork_from_worker',fork_from_worker,'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
 const WORKER:&str="SELECT json_object('id',id,'session_id',session_id,'machine',machine,'workspace',workspace,'backend',backend,'role',role,'ephemeral',json(CASE WHEN ephemeral THEN 'true' ELSE 'false' END),'backend_session_id',backend_session_id,'status',status,'slot',slot,'updated',updated) FROM workers";
 fn job(c: &Connection, id: &str) -> Result<Job> {
     let raw: String = c.query_row(&format!("{JOB} WHERE id=?"), [id], |r| r.get(0))?;
@@ -45,8 +45,8 @@ pub(crate) fn enqueue_tx(c: &Connection, j: &Job, now: f64) -> Result<()> {
         bail!("worker unavailable in this thread");
     }
     let snapshot = j.snapshot.as_ref().map(serde_json::to_string).transpose()?;
-    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,files_json,context,snapshot_json,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,serde_json::to_string(&j.files)?,j.context.as_str(),snapshot,j.work_item_id,j.target_sha,j.target_tree,now])?;
+    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,files_json,context,snapshot_json,fork_from_worker,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,serde_json::to_string(&j.files)?,j.context.as_str(),snapshot,j.fork_from_worker,j.work_item_id,j.target_sha,j.target_tree,now])?;
     Ok(())
 }
 pub async fn enqueue(store: &Store, j: Job, now: f64) -> Result<()> {

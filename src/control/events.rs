@@ -191,6 +191,7 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
                     "kind":"job","action":"started","job_id":job,"attempt":p["request"]["attempt"],
                     "worker_id":spec["worker_id"],"machine":spec["machine"]["name"],
                     "workspace":spec["workspace"]["name"],"backend":spec["backend"],
+                    "fork_from_worker":text(&p["fork_from_worker"]),"fork_fallback":p["fork_fallback"],
                 }),
             )
         }
@@ -454,6 +455,23 @@ mod tests {
                 e["thread"].as_str()
             ),
             (Some("job"), Some("started"), Some("local"), Some("100.1"))
+        );
+        // Payloads from before worker forks carry no source; a fork names it,
+        // and a fork that fell back to the snapshot says why.
+        assert_eq!(
+            (e["fork_from_worker"].clone(), e["fork_fallback"].clone()),
+            (json!(""), Value::Null)
+        );
+        let mut forked = call.clone();
+        forked["fork_from_worker"] = json!("worker-0000000000000002");
+        forked["fork_fallback"] = json!("source_session_missing");
+        let e = project(11, 18., "worker_call", &forked, &l).unwrap();
+        assert_eq!(
+            (e["fork_from_worker"].clone(), e["fork_fallback"].clone()),
+            (
+                json!("worker-0000000000000002"),
+                json!("source_session_missing")
+            )
         );
         let done = json!({"attempt":1,"job_id":"job-0000000000000005","completion":{"interrupted":false,"outcome":{"Ok":{"result":{"status":"done"}}}}});
         assert_eq!(
