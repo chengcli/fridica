@@ -46,6 +46,8 @@ pub struct Limits {
     pub auto_resume: bool,
     pub reply_chars: usize,
     pub report_fast_path: bool,
+    /// Thread context a forked worker is given on its first job, in characters.
+    pub worker_context_chars: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -60,6 +62,7 @@ impl Default for Limits {
             auto_resume: false,
             reply_chars: 7000,
             report_fast_path: true,
+            worker_context_chars: 12000,
         }
     }
 }

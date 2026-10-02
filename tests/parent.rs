@@ -1496,6 +1496,7 @@ fn decision_schema_allows_only_known_workers_and_granted_fetches() {
         delegation["tags"]["items"]["enum"],
         json!(["", "cuda", "gpu"])
     );
+    assert_eq!(delegation["context"]["enum"], json!(["fork", "fresh"]));
     let control = &schema["properties"]["worker_control"]["items"]["properties"];
     assert_eq!(control["worker_id"]["enum"], json!(["", "w1", "w2"]));
     // Nothing granted and no workers: only the empty value remains.

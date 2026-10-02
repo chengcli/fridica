@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
-const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'files',json(files_json),'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
+const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'files',json(files_json),'context',context,'snapshot',json(snapshot_json),'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
 const WORKER:&str="SELECT json_object('id',id,'session_id',session_id,'machine',machine,'workspace',workspace,'backend',backend,'role',role,'ephemeral',json(CASE WHEN ephemeral THEN 'true' ELSE 'false' END),'backend_session_id',backend_session_id,'status',status,'slot',slot,'updated',updated) FROM workers";
 fn job(c: &Connection, id: &str) -> Result<Job> {
     let raw: String = c.query_row(&format!("{JOB} WHERE id=?"), [id], |r| r.get(0))?;
@@ -44,8 +44,9 @@ pub(crate) fn enqueue_tx(c: &Connection, j: &Job, now: f64) -> Result<()> {
     if w.session_id != j.session_id || w.status == "stopped" {
         bail!("worker unavailable in this thread");
     }
-    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,files_json,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,serde_json::to_string(&j.files)?,j.work_item_id,j.target_sha,j.target_tree,now])?;
+    let snapshot = j.snapshot.as_ref().map(serde_json::to_string).transpose()?;
+    c.execute("INSERT INTO jobs(id,worker_id,session_id,brief,join_group,inbox_id,deliverable,fetch_repo,fetch_ref,files_json,context,snapshot_json,work_item_id,target_sha,target_tree,queued_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        params![j.id,j.worker_id,j.session_id,j.brief,j.join_group,j.inbox_id,j.deliverable,j.fetch_repo,j.fetch_ref,serde_json::to_string(&j.files)?,j.context.as_str(),snapshot,j.work_item_id,j.target_sha,j.target_tree,now])?;
     Ok(())
 }
 pub async fn enqueue(store: &Store, j: Job, now: f64) -> Result<()> {
@@ -63,12 +64,50 @@ pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Va
         .collect::<std::result::Result<_, _>>()?;
     let busy: BTreeMap<String,i64> = c.prepare("SELECT w.machine,count(*) FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.status IN ('queued','running') GROUP BY w.machine")?
         .query_map([], |r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-    let mut context = json!({"workers":workers,"busy":busy,"jobs":super::worker_controls::jobs_tx(c,session)?,"controls":super::worker_controls::recent_tx(c,session)?});
+    let mut context = json!({"workers":workers,"busy":busy,"jobs":super::worker_controls::jobs_tx(c,session)?,"controls":super::worker_controls::recent_tx(c,session)?,
+        "results":results_tx(c,session)?});
     let elsewhere = elsewhere_tx(c, session)?;
     if !elsewhere.is_empty() {
         context["elsewhere"] = json!(elsewhere);
     }
     Ok(context)
+}
+/// This thread's finished jobs, oldest first: what earlier workers found, for
+/// the parent and for the context a forked worker inherits.
+fn results_tx(c: &Connection, session: &str) -> Result<Vec<serde_json::Value>> {
+    let rows: Vec<String> = c.prepare("SELECT json_object('job_id',id,'worker_id',worker_id,'status',status,
+            'summary',COALESCE(substr(json_extract(result_json,'$.summary'),1,600),''),'error',substr(error,1,200))
+        FROM jobs WHERE session_id=? AND status IN ('done','failed','interrupted') ORDER BY finished_at DESC,rowid DESC LIMIT 10")?
+        .query_map([session], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    rows.iter()
+        .rev()
+        .map(|r| Ok(serde_json::from_str(r)?))
+        .collect()
+}
+/// The snapshot a worker's previous job ran with, and that job's id, so a
+/// resumed session is told only what changed since. Jobs that never ran are
+/// skipped.
+pub async fn previous_snapshot(
+    store: &Store,
+    worker_id: String,
+    job_id: String,
+) -> Result<Option<(String, crate::core::fork::ContextBundle)>> {
+    store
+        .call(move |c| {
+            let row: Option<(String, String)> = c
+                .query_row(
+                    "SELECT id,snapshot_json FROM jobs WHERE worker_id=? AND id!=? AND attempt>0 AND snapshot_json IS NOT NULL ORDER BY started_at DESC,rowid DESC LIMIT 1",
+                    params![worker_id, job_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            Ok(match row {
+                Some((id, raw)) => Some((id, serde_json::from_str(&raw)?)),
+                None => None,
+            })
+        })
+        .await
 }
 /// Files attached in this thread by others, newest first, that a delegation
 /// may hand to a worker. Fridica's own uploads are left out.

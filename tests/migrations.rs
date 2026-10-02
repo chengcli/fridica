@@ -197,12 +197,12 @@ fn migration_preflight_rejects_invalid_policy_and_mismatched_database_without_ba
         .contains("differs"));
 }
 
-/// A v6 database that came from v5 and has been used since: the conversion
-/// marker and its baseline are there, and the mutation guards have counted
-/// every write after it (#86).
-fn used_v6(path: &Path) -> Connection {
+/// A database at `version` (6 or later) that came from v5 and has been used
+/// since: the conversion marker and its baseline are there, and the mutation
+/// guards have counted every write after it (#86).
+fn used_at(path: &Path, version: usize) -> Connection {
     let c = Connection::open(path).unwrap();
-    for (n, sql) in schema::MIGRATIONS[..6].iter().enumerate() {
+    for (n, sql) in schema::MIGRATIONS[..version].iter().enumerate() {
         c.execute_batch(sql).unwrap();
         c.execute(
             "INSERT OR REPLACE INTO meta VALUES('schema_version',?)",
@@ -230,13 +230,20 @@ fn used_v6(path: &Path) -> Connection {
 }
 #[tokio::test]
 async fn a_used_v6_database_upgrades_and_rolls_back_cleanly() {
+    used_database_upgrades_and_rolls_back(6).await;
+}
+#[tokio::test]
+async fn a_used_v7_database_upgrades_and_rolls_back_cleanly() {
+    used_database_upgrades_and_rolls_back(7).await;
+}
+async fn used_database_upgrades_and_rolls_back(version: usize) {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.sqlite3");
     let cfg = dir.path().join("config.toml");
     config_file(&cfg);
-    drop(used_v6(&db));
+    drop(used_at(&db, version));
     let plan = migration::dry_run(&db, &cfg).unwrap();
-    assert_eq!((plan.from, plan.to), (6, schema::VERSION));
+    assert_eq!((plan.from, plan.to), (version, schema::VERSION));
     migration::migrate(&db, &cfg, 10.).unwrap();
     migration::migrate(&db, &cfg, 11.).unwrap();
     let journal: serde_json::Value = serde_json::from_slice(
@@ -255,6 +262,7 @@ async fn a_used_v6_database_upgrades_and_rolls_back_cleanly() {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert!(columns.iter().any(|c| c == "files_json"));
+        assert!(columns.iter().any(|c| c == "snapshot_json"));
         // The v5 -> v6 baseline is history, not this upgrade's.
         let baseline: String = c
             .query_row(
@@ -271,7 +279,10 @@ async fn a_used_v6_database_upgrades_and_rolls_back_cleanly() {
     store.close().await.unwrap();
     assert!(store.call(|_| Ok(())).await.is_err());
     migration::rollback(&db, &cfg).unwrap();
-    assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 6);
+    assert_eq!(
+        schema::version(&Connection::open(&db).unwrap()).unwrap(),
+        version
+    );
 }
 #[test]
 fn rollback_after_a_used_v6_upgrade_refuses_once_the_daemon_wrote() {
@@ -279,7 +290,7 @@ fn rollback_after_a_used_v6_upgrade_refuses_once_the_daemon_wrote() {
     let db = dir.path().join("state.sqlite3");
     let cfg = dir.path().join("config.toml");
     config_file(&cfg);
-    drop(used_v6(&db));
+    drop(used_at(&db, 6));
     migration::migrate(&db, &cfg, 10.).unwrap();
     Connection::open(&db)
         .unwrap()

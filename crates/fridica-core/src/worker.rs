@@ -111,6 +111,12 @@ pub struct Job {
     /// Slack file IDs placed in the workspace before the job starts.
     #[serde(default)]
     pub files: Vec<String>,
+    /// How the worker's context starts: forked from the delegating turn, or fresh.
+    #[serde(default)]
+    pub context: crate::fork::ContextMode,
+    /// The thread's context at the fork point; `Some` only for a fork.
+    #[serde(default)]
+    pub snapshot: Option<crate::fork::ContextBundle>,
     #[serde(default = "queued")]
     pub status: String,
     #[serde(default)]

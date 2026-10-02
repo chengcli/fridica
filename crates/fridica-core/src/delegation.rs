@@ -91,6 +91,16 @@ pub fn prepare(
         .count();
     let session = request.session["id"].as_str().context("missing session")?;
     let sticky = &request.session["context"];
+    // One snapshot of this turn for every forked job; only when IDs are
+    // allocated, since a repair round may still change the decision.
+    let snapshot = ids
+        .filter(|_| {
+            decision
+                .delegations
+                .iter()
+                .any(|d| d.context == crate::fork::ContextMode::Fork)
+        })
+        .map(|_| crate::fork::snapshot(request, decision, scope.limits.worker_context_chars));
     for d in &decision.delegations {
         if d.brief.trim().is_empty() || d.brief.chars().count() > 40000 {
             bail!("delegation needs a brief of at most 40000 characters");
@@ -198,9 +208,13 @@ pub fn prepare(
                     work.context["workspace"] = json!(worker.workspace);
                 }
             }
+            let forked = (d.context == crate::fork::ContextMode::Fork)
+                .then(|| snapshot.clone())
+                .flatten();
             work.jobs.push(serde_json::from_value(json!({"id":ids.next("job"),"worker_id":worker.id,
                 "session_id":session,"brief":d.brief.trim(),"join_group":request.inbox_id.to_string(),
-                "inbox_id":request.inbox_id,"deliverable":deliverable,"fetch_repo":fetch_repo,"fetch_ref":d.fetch_ref,"files":files}))?);
+                "inbox_id":request.inbox_id,"deliverable":deliverable,"fetch_repo":fetch_repo,"fetch_ref":d.fetch_ref,"files":files,
+                "context":d.context,"snapshot":forked}))?);
         }
     }
     Ok(work)

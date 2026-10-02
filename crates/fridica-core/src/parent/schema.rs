@@ -97,7 +97,7 @@ pub fn decision(choices: &Choices) -> Value {
         json!({"send":{"type":"boolean"},"discussion":{"type":"string","enum":["ongoing","finished"]},"text":string(),"details":string(),"status":{"type":"string","enum":["complete","waiting","blocked"]},"answers":strings()}),
     );
     let delegation = object(
-        json!({"brief":string(),"worker_id":choice(&choices.delegable),"machine":string(),"workspace":string(),"backend":string(),"tags":{"type":"array","items":choice(&choices.tags)},"role":{"type":"string","enum":["general","implementer","reviewer","tester"]},"ephemeral":{"type":"boolean"},"deliverable":{"type":"string","enum":["report","markdown","figures_pdf"]},"fetch_repo":choice(&choices.fetch_repos),"fetch_ref":string(),"files":{"type":"array","items":choice(&choices.files)}}),
+        json!({"brief":string(),"worker_id":choice(&choices.delegable),"machine":string(),"workspace":string(),"backend":string(),"tags":{"type":"array","items":choice(&choices.tags)},"role":{"type":"string","enum":["general","implementer","reviewer","tester"]},"ephemeral":{"type":"boolean"},"deliverable":{"type":"string","enum":["report","markdown","figures_pdf"]},"fetch_repo":choice(&choices.fetch_repos),"fetch_ref":string(),"files":{"type":"array","items":choice(&choices.files)},"context":{"type":"string","enum":["fork","fresh"]}}),
     );
     let declined = object(
         json!({"state":{"type":"string","enum":["declined"]},"id":string(),"reason":string()}),

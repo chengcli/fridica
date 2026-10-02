@@ -187,6 +187,13 @@ only place it writes, and the shared workspace around it, including the other sl
 `data_in` and anything a person copied there, is readable in full. A worker searches
 that shared workspace before reporting a file missing.
 
+By default a delegated worker is **forked** from its thread: its first prompt carries a
+snapshot of the thread as of the turn that delegated it (the request, the parent's summary
+and decisions, the recent conversation, earlier workers' results, attached files), bounded
+by `limits.worker_context_chars` and marked as untrusted data. A follow-up to a worker that
+resumes its backend session gets only what changed since its previous job. The parent can
+instead delegate with `context: fresh`, in which case the worker sees only its brief.
+
 Workers never hold the Slack token, and it is only ever sent to `files.slack.com`.
 Cleaning a thread erases its attachments along with its text.
 
@@ -294,6 +301,7 @@ max_workers_per_thread = 4
 max_jobs = 4                         # jobs running at once, across all machines
 job_timeout = 14400
 worker_idle = 1800                   # keep an idle worker process this long for follow-ups
+worker_context_chars = 12000         # thread context a forked worker starts with
 auto_resume = false                  # rerun jobs a restart interrupted, continuing their sessions
 
 [policy]                             # defaults for every machine; machines and workspaces override

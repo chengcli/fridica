@@ -37,7 +37,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "7"
+            "value": "8"
           },
           {
             "key": "durable_generation",
@@ -200,7 +200,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "7"
+            "value": "8"
           },
           {
             "key": "durable_generation",
@@ -363,7 +363,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "7"
+            "value": "8"
           },
           {
             "key": "durable_generation",

@@ -80,6 +80,7 @@
               "busy": {},
               "controls": [],
               "jobs": [],
+              "results": [],
               "workers": []
             },
             "workspace": "TTEAM"
@@ -155,7 +156,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "7"
+            "value": "8"
           },
           {
             "key": "durable_generation",
@@ -343,7 +344,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "7"
+            "value": "8"
           },
           {
             "key": "durable_generation",
@@ -495,6 +496,7 @@
                   "busy": {},
                   "controls": [],
                   "jobs": [],
+                  "results": [],
                   "workers": []
                 },
                 "workspace": "TTEAM"
@@ -651,6 +653,7 @@
                   "busy": {},
                   "controls": [],
                   "jobs": [],
+                  "results": [],
                   "workers": []
                 },
                 "workspace": "TTEAM"
@@ -804,6 +807,7 @@
                     "busy": {},
                     "controls": [],
                     "jobs": [],
+                    "results": [],
                     "workers": []
                   },
                   "workspace": "TTEAM"
@@ -950,7 +954,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "7"
+            "value": "8"
           },
           {
             "key": "durable_generation",
@@ -1102,6 +1106,7 @@
                   "busy": {},
                   "controls": [],
                   "jobs": [],
+                  "results": [],
                   "workers": []
                 },
                 "workspace": "TTEAM"
@@ -1258,6 +1263,7 @@
                   "busy": {},
                   "controls": [],
                   "jobs": [],
+                  "results": [],
                   "workers": []
                 },
                 "workspace": "TTEAM"
@@ -1411,6 +1417,7 @@
                     "busy": {},
                     "controls": [],
                     "jobs": [],
+                    "results": [],
                     "workers": []
                   },
                   "workspace": "TTEAM"
