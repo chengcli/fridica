@@ -158,9 +158,22 @@ pub(crate) fn replace(path: &Path, before: &str, source: &str) -> Result<()> {
             bail!("configuration edit lock must be private and owned by this user");
         }
     }
-    guard
-        .try_lock_exclusive()
-        .context("another Fridica configuration edit is in progress")?;
+    // A child process forked by another thread holds every open descriptor,
+    // and with it this lock, until it execs; that window is microseconds, so a
+    // few brief retries tell it apart from a real concurrent edit.
+    let mut attempts = 0;
+    loop {
+        match guard.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(_) if attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(error).context("another Fridica configuration edit is in progress");
+            }
+        }
+    }
     let parent = path.parent().context("configuration has no directory")?;
     let mut file = tempfile::Builder::new()
         .prefix(".fridica-config-")
