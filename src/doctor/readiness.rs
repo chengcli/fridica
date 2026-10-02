@@ -16,22 +16,23 @@ use std::{
 };
 use tokio::sync::watch;
 
+/// Refusals are independent facets, every one of them reported, so a single
+/// run shows all there is to fix; an empty list means ready.
 #[derive(Debug, Serialize)]
 pub struct Target {
     pub machine: String,
     pub workspace: String,
     pub backend: String,
-    pub check: Check,
-    pub isolation: Option<Check>,
+    pub refusals: Vec<Check>,
 }
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub build_version: &'static str,
     pub config_fingerprint: String,
-    pub host: Check,
-    pub owner_inputs: Check,
+    /// Host paths and the owner's contract and repository files.
+    pub host: Vec<Check>,
     pub parent_backend: String,
-    pub parent: Check,
+    pub parent: Vec<Check>,
     pub targets: Vec<Target>,
     pub cancelled: bool,
     pub startup_checks_passed: bool,
@@ -54,10 +55,9 @@ pub async fn check(
     let mut report = Report {
         build_version: env!("CARGO_PKG_VERSION"),
         config_fingerprint: config.fingerprint.clone(),
-        host: Check::Passed,
-        owner_inputs: Check::Passed,
+        host: vec![],
         parent_backend: config.parent.backend.clone(),
-        parent: Check::ProbeFailed,
+        parent: vec![Check::ProbeFailed],
         targets: vec![],
         cancelled: *stop.borrow(),
         startup_checks_passed: false,
@@ -68,14 +68,14 @@ pub async fn check(
     if config.state.control_socket.parent().is_none_or(|parent| {
         crate::control::server::validate_parent_directory(parent, true).is_err()
     }) {
-        report.host = Check::HostPathsRefused;
+        report.host.push(Check::HostPathsRefused);
     }
     if crate::config::contract::load(config.owner.contract.as_deref()).is_err()
         || crate::config::repos::load(config.parent.repos.as_deref()).is_err()
     {
-        report.owner_inputs = Check::OwnerInputsRefused;
+        report.host.push(Check::OwnerInputsRefused);
     }
-    if report.host != Check::Passed || report.owner_inputs != Check::Passed {
+    if !report.host.is_empty() {
         return Ok(report);
     }
     let machine = Machine {
@@ -106,9 +106,13 @@ pub async fn check(
                     report.cancelled = true;
                     break;
                 }
-                let isolation = if supported && workspace.policy.gpu_confine == Some(true) {
-                    Some(
-                        isolation_backend(
+                // Every facet is judged, so one failure does not hide another.
+                let mut refusals = vec![];
+                if !supported {
+                    refusals.push(Check::UnsupportedTransport);
+                } else {
+                    if workspace.policy.gpu_confine == Some(true) {
+                        let confinement = isolation_backend(
                             config,
                             context,
                             environment.clone(),
@@ -118,48 +122,47 @@ pub async fn check(
                             Some(backend),
                         )
                         .await?
-                        .check,
-                    )
-                } else {
-                    None
-                };
-                if *stop.borrow() {
-                    report.cancelled = true;
-                    break;
+                        .check;
+                        if confinement != Check::Passed {
+                            refusals.push(confinement);
+                        }
+                    }
+                    if *stop.borrow() {
+                        report.cancelled = true;
+                        break;
+                    }
+                    refusals.extend(
+                        probe(
+                            &boundary,
+                            config,
+                            context,
+                            environment.clone(),
+                            machine,
+                            &workspace.path,
+                            backend,
+                            false,
+                            timeout,
+                        )
+                        .await,
+                    );
+                    refusals.sort();
+                    refusals.dedup();
                 }
-                let check = if !supported {
-                    Check::UnsupportedTransport
-                } else if isolation.is_some_and(|c| c != Check::Passed) {
-                    isolation.unwrap()
-                } else {
-                    probe(
-                        &boundary,
-                        config,
-                        context,
-                        environment.clone(),
-                        machine,
-                        &workspace.path,
-                        backend,
-                        false,
-                        timeout,
-                    )
-                    .await
-                };
                 report.targets.push(Target {
                     machine: machine.name.clone(),
                     workspace: workspace.name.clone(),
                     backend: backend.clone(),
-                    check,
-                    isolation,
+                    refusals,
                 });
             }
         }
     }
     report.cancelled |= *stop.borrow();
     report.startup_checks_passed = !report.cancelled
-        && report.parent == Check::Passed
+        && report.host.is_empty()
+        && report.parent.is_empty()
         && !report.targets.is_empty()
-        && report.targets.iter().all(|t| t.check == Check::Passed);
+        && report.targets.iter().all(|t| t.refusals.is_empty());
     Ok(report)
 }
 
@@ -174,7 +177,7 @@ async fn probe(
     backend: &str,
     parent: bool,
     timeout: Duration,
-) -> Check {
+) -> Vec<Check> {
     let excluded = vec![
         config.slack.app_token_env.clone(),
         config.slack.user_token_env.clone(),
@@ -187,7 +190,7 @@ async fn probe(
         parent,
     ) {
         Ok(args) => args,
-        Err(_) => return Check::LaunchConfigurationRefused,
+        Err(_) => return vec![Check::LaunchConfigurationRefused],
     };
     let control;
     let launch = if machine.transport == "local" {
@@ -211,7 +214,7 @@ async fn probe(
             .tempdir()
         {
             Ok(control) => control,
-            Err(_) => return Check::LaunchConfigurationRefused,
+            Err(_) => return vec![Check::LaunchConfigurationRefused],
         };
         let mut launch = SshTransport {
             machine: machine.clone(),
@@ -232,6 +235,6 @@ async fn probe(
     };
     match launch {
         Ok(launch) => helpers::run_readiness(launch, timeout).await,
-        Err(_) => Check::LaunchConfigurationRefused,
+        Err(_) => vec![Check::LaunchConfigurationRefused],
     }
 }

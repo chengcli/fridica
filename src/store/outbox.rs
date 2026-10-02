@@ -202,7 +202,7 @@ fn safe_code(code: &str) -> String {
         || code.len() > 100
         || !code
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
     {
         "adapter_error".into()
     } else {

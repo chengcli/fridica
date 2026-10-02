@@ -73,13 +73,18 @@ impl<D: Delivery> Dispatcher<D> {
                     continue;
                 };
                 attempted += 1;
-                let refused = match check(&post, &rules) {
-                    Some(rule) => Some(rule),
-                    None => self.signoffs(&post, heads, &rules).await?,
-                };
-                let result = if let Some(rule) = refused {
+                // Every broken rule is recorded, each as `egress_<rule>`, so
+                // the owner sees all of them in one pass.
+                let mut refused = check(&post, &rules);
+                refused.extend(self.signoffs(&post, heads, &rules).await?);
+                refused.dedup();
+                let result = if !refused.is_empty() {
                     DeliveryOutcome::Rejected {
-                        code: format!("egress_{}", rule.replace(':', "_")),
+                        code: refused
+                            .iter()
+                            .map(|rule| format!("egress_{}", rule.replace(':', "_")))
+                            .collect::<Vec<_>>()
+                            .join("+"),
                     }
                 } else {
                     tokio::time::timeout(self.timeout, self.delivery.send(post.clone()))
@@ -109,7 +114,7 @@ impl<D: Delivery> Dispatcher<D> {
     }
 }
 impl<D: Delivery> Dispatcher<D> {
-    /// The rule a post's sign-off lines break, if any. A sign-off clears a
+    /// The rules a post's sign-off lines break. A sign-off clears a
     /// pull request for merge, so the PR's title, body and commit messages,
     /// read back from GitHub, must also pass the egress rules: text a worker
     /// pushed reaches upstream history once the PR is squashed.
@@ -118,15 +123,15 @@ impl<D: Delivery> Dispatcher<D> {
         post: &ClaimedPost,
         heads: Option<&dyn crate::github::client::Api>,
         rules: &DenyList,
-    ) -> Result<Option<String>> {
+    ) -> Result<Vec<String>> {
         let Some(lines) = signoff_lines(&post.post.text) else {
-            return Ok(Some("signoff_malformed".into()));
+            return Ok(vec!["signoff_malformed".into()]);
         };
         if lines.is_empty() {
-            return Ok(None);
+            return Ok(vec![]);
         }
         let Some(heads) = heads else {
-            return Ok(Some("signoff_unverified".into()));
+            return Ok(vec!["signoff_unverified".into()]);
         };
         let session = post.post.session_id.clone();
         let repo: String = self
@@ -141,8 +146,9 @@ impl<D: Delivery> Dispatcher<D> {
             })
             .await?;
         if !crate::github::client::repository(&repo) {
-            return Ok(Some("signoff_repo_unknown".into()));
+            return Ok(vec!["signoff_repo_unknown".into()]);
         }
+        let mut broken: Vec<String> = vec![];
         use crate::github::client::{Failure, Operation, Request};
         let read = |operation| {
             heads.get(Request {
@@ -150,46 +156,60 @@ impl<D: Delivery> Dispatcher<D> {
                 operation,
             })
         };
+        // Each line is judged on its own; one PR's problem does not hide another's.
         for (number, sha) in lines {
             let pull = match read(Operation::Pull { number }).await {
                 Ok(pull) => pull,
                 Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
-                Err(_) => return Ok(Some("signoff_unverified".into())),
+                Err(_) => {
+                    broken.push("signoff_unverified".into());
+                    continue;
+                }
             };
             let head = pull["head"]["sha"]
                 .as_str()
                 .unwrap_or("")
                 .to_ascii_lowercase();
             if head.len() < 40 || !head.starts_with(&sha) {
-                return Ok(Some("signoff_stale_head".into()));
+                broken.push("signoff_stale_head".into());
+                continue;
             }
             let base = pull["base"]["sha"].as_str().unwrap_or("").to_string();
             if !crate::github::client::sha(&base) {
-                return Ok(Some("signoff_unverified".into()));
+                broken.push("signoff_unverified".into());
+                continue;
             }
             let compare = match read(Operation::Compare { base, head }).await {
                 Ok(compare) => compare,
                 Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
-                Err(_) => return Ok(Some("signoff_unverified".into())),
+                Err(_) => {
+                    broken.push("signoff_unverified".into());
+                    continue;
+                }
             };
             // GitHub lists at most 250 commits; a longer PR cannot be read back.
             let Some(commits) = compare["commits"]
                 .as_array()
                 .filter(|commits| compare["total_commits"].as_u64() == Some(commits.len() as u64))
             else {
-                return Ok(Some("signoff_unverified".into()));
+                broken.push("signoff_unverified".into());
+                continue;
             };
             let texts = [&pull["title"], &pull["body"]]
                 .into_iter()
                 .chain(commits.iter().map(|c| &c["commit"]["message"]))
                 .filter_map(serde_json::Value::as_str);
             for text in texts {
-                if let Some(rule) = egress::scan(text, rules) {
-                    return Ok(Some(format!("signoff_pr_{rule}")));
-                }
+                broken.extend(
+                    egress::scan(text, rules)
+                        .into_iter()
+                        .map(|rule| format!("signoff_pr_{rule}")),
+                );
             }
         }
-        Ok(None)
+        broken.sort();
+        broken.dedup();
+        Ok(broken)
     }
 }
 /// `SIGN-OFF #<PR> <sha> ...` lines (provision04): each PR number and sha, or
@@ -210,11 +230,15 @@ fn signoff_lines(text: &str) -> Option<Vec<(u64, String)>> {
 }
 /// The text a post would publish: its message, its file name and, for an
 /// upload of text, its contents.
-fn check(post: &ClaimedPost, rules: &DenyList) -> Option<String> {
+fn check(post: &ClaimedPost, rules: &DenyList) -> Vec<String> {
     let p = &post.post;
     let upload = p.blob.as_deref().and_then(|b| std::str::from_utf8(b).ok());
-    [Some(p.text.as_str()), Some(p.filename.as_str()), upload]
+    let mut broken: Vec<String> = [Some(p.text.as_str()), Some(p.filename.as_str()), upload]
         .into_iter()
         .flatten()
-        .find_map(|text| egress::scan(text, rules))
+        .flat_map(|text| egress::scan(text, rules))
+        .collect();
+    broken.sort();
+    broken.dedup();
+    broken
 }

@@ -305,7 +305,7 @@ fn safe_path(path: &Path) -> bool {
             .all(|p| matches!(p, Component::RootDir | Component::Normal(_)))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Check {
     Passed,
@@ -396,15 +396,26 @@ pub fn shared_ssh_probe(launch: &mut Launch) {
 }
 
 /// Same bounded process ownership as namespace probes, with fixed diagnostics.
-pub async fn run_readiness(launch: Launch, timeout: Duration) -> Check {
+/// Every refusal the helper reports, sorted; empty when the target is ready.
+pub async fn run_readiness(launch: Launch, timeout: Duration) -> Vec<Check> {
     let Ok(result) = process::run_with_open_stdin(launch, timeout, 4096).await else {
-        return Check::ProbeFailed;
+        return vec![Check::ProbeFailed];
     };
-    match (result.returncode, result.stdout.as_slice()) {
-        (0, b"fridica-readiness:ready\n") => Check::Passed,
-        (97, b"fridica-readiness:backend-missing\n") => Check::BackendMissing,
-        (97, b"fridica-readiness:workspace-refused\n") => Check::WorkspaceRefused,
-        (97, b"fridica-readiness:settings-refused\n") => Check::SettingsRefused,
-        _ => Check::RuntimeOrTransportFailed,
-    }
+    let lines = String::from_utf8_lossy(&result.stdout);
+    let mut refusals: Vec<Check> = match result.returncode {
+        0 if lines == "fridica-readiness:ready\n" => vec![],
+        97 if !lines.is_empty() => lines
+            .lines()
+            .map(|line| match line {
+                "fridica-readiness:backend-missing" => Check::BackendMissing,
+                "fridica-readiness:workspace-refused" => Check::WorkspaceRefused,
+                "fridica-readiness:settings-refused" => Check::SettingsRefused,
+                _ => Check::RuntimeOrTransportFailed,
+            })
+            .collect(),
+        _ => vec![Check::RuntimeOrTransportFailed],
+    };
+    refusals.sort();
+    refusals.dedup();
+    refusals
 }

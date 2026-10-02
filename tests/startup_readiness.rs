@@ -177,12 +177,17 @@ async fn missing_executables_and_workspaces_are_fixed_blockers() {
     let f = Fixture::new();
     assert!(f.check().await.startup_checks_passed);
     std::fs::remove_file(f.root.join("bin/codex")).unwrap();
-    assert_eq!(f.check().await.targets[0].check, Check::BackendMissing);
+    assert_eq!(f.check().await.targets[0].refusals, [Check::BackendMissing]);
     std::fs::remove_dir(f.root.join("project")).unwrap();
     let report = f.check().await;
-    assert_eq!(report.targets[1].check, Check::WorkspaceRefused);
+    // Every refusal of a target is reported, not the first one met.
+    assert_eq!(
+        report.targets[0].refusals,
+        [Check::BackendMissing, Check::WorkspaceRefused]
+    );
+    assert_eq!(report.targets[1].refusals, [Check::WorkspaceRefused]);
     std::fs::remove_file(f.root.join("bin/claude")).unwrap();
-    assert_eq!(f.check().await.parent, Check::BackendMissing);
+    assert_eq!(f.check().await.parent, [Check::BackendMissing]);
     f.pristine();
 }
 
@@ -243,7 +248,7 @@ async fn remote_readiness_probes_the_target_without_running_backends() {
     // The target's own settings are read in place: nothing is created there.
     assert!(!remote.join(".codex").exists());
     std::fs::remove_file(&ssh).unwrap();
-    assert_ne!(f.check().await.targets[0].check, Check::Passed);
+    assert!(!f.check().await.targets[0].refusals.is_empty());
     f.pristine();
 }
 
@@ -256,10 +261,7 @@ async fn confined_readiness_checks_binary_visibility_inside_the_namespace_withou
         .gpu_confine = Some(true);
     let report = f.check().await;
     assert!(report.startup_checks_passed, "{report:?}");
-    assert!(report
-        .targets
-        .iter()
-        .all(|t| t.isolation == Some(Check::Passed)));
+    assert!(report.targets.iter().all(|t| t.refusals.is_empty()));
     // Present on the host, but masked inside the worker's private-file boundary.
     std::fs::rename(f.root.join("bin/codex"), f.root.join("private/codex")).unwrap();
     f.env.insert(
@@ -273,7 +275,7 @@ async fn confined_readiness_checks_binary_visibility_inside_the_namespace_withou
     );
     let report = f.check().await;
     assert!(!report.startup_checks_passed);
-    assert_eq!(report.targets[0].check, Check::BackendMissing);
+    assert_eq!(report.targets[0].refusals, [Check::BackendMissing]);
     f.pristine();
 }
 
@@ -341,7 +343,7 @@ async fn host_directory_permissions_and_owner_inputs_block_before_target_io() {
     )
     .unwrap();
     let report = f.check().await;
-    assert_eq!(report.host, Check::HostPathsRefused);
+    assert_eq!(report.host, [Check::HostPathsRefused]);
     assert!(report.targets.is_empty());
     std::fs::set_permissions(
         f.root.join("private"),
@@ -350,7 +352,7 @@ async fn host_directory_permissions_and_owner_inputs_block_before_target_io() {
     .unwrap();
     f.config.owner.contract = Some(f.root.join("missing-private-contract.md"));
     let report = f.check().await;
-    assert_eq!(report.owner_inputs, Check::OwnerInputsRefused);
+    assert_eq!(report.host, [Check::OwnerInputsRefused]);
     assert!(report.targets.is_empty());
     assert!(!serde_json::to_string(&report)
         .unwrap()

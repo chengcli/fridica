@@ -297,6 +297,11 @@ async fn the_egress_gate_holds_back_private_terms_and_ai_trailers_without_naming
             "100.3",
             "Done.\nCo-Authored-By: Claude <noreply@anthropic.com>",
         ),
+        (
+            "both",
+            "100.5",
+            "Thanks to Jane Q. Private.\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        ),
     ] {
         let mut p = post(key, thread, "");
         p.text = text.into();
@@ -325,6 +330,11 @@ async fn the_egress_gate_holds_back_private_terms_and_ai_trailers_without_naming
         [
             ("failed".into(), "egress_deny_list_2".into()),
             ("failed".into(), "egress_ai_trailer".into()),
+            // Every broken rule, so one fix round is enough.
+            (
+                "failed".into(),
+                "egress_ai_trailer+egress_deny_list_2".into()
+            ),
             ("failed".into(), "egress_deny_list_2".into()),
         ]
     );

@@ -48,9 +48,12 @@ left for actual startup to provision. Temporary SSH housekeeping is removed.
 
 The JSON report binds results to the build version and configuration fingerprint,
 identifies machine/workspace/backend names and fixed failure codes, and omits
-private paths and settings. `startup_checks_passed` requires every target and the
-host/parent checks to pass. Readiness codes include `host_paths_refused`, `owner_inputs_refused`,
-`backend_missing` and `workspace_refused`. Failure or cancellation exits nonzero.
+private paths and settings. Refusals are independent facets, and every one of them
+is reported: `host`, `parent` and each target's `refusals` are lists, empty when
+ready, so one run shows all there is to fix. `startup_checks_passed` requires every
+list to be empty. Codes include `host_paths_refused`, `owner_inputs_refused`,
+`backend_missing`, `workspace_refused` and `settings_refused`. Failure or
+cancellation exits nonzero.
 SIGINT/SIGTERM finish cleanup of the current bounded probe before skipping later
 probes; the timeout is per probe, and cleanup may take additional time.
 
@@ -71,10 +74,9 @@ does not reuse or leave a persistent SSH master or enroll/update host keys. The
 target must have a supported system Python (3.11+) and Linux bubblewrap with
 usable user/PID namespaces and descriptor/data bind options.
 
-Each target's `isolation` result in the readiness report is one fixed code:
+A confined target's `refusals` may also carry the confinement probe's code:
 
-| `isolation` | Meaning |
+| code | Meaning |
 | --- | --- |
-| `passed` | Settings checks and namespace probe succeeded. |
 | `inventory_refused` | Missing/unsafe paths, hard links, or overlapping mount sources. |
 | `settings_refused` | Unsafe/malformed settings or an unsupported backend home. |
