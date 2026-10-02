@@ -3,18 +3,19 @@
 use crate::{
     config::{self, registry::Machine, Config, LoadContext},
     exec::{
-        isolation::read_only_ssh_probe,
+        isolation::shared_ssh_probe,
         local::LocalTransport,
         process,
         ssh::{LaunchOptions, SshTransport},
     },
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::{
-    collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt, path::Path, time::Duration,
+    collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt, path::Path, sync::Arc,
+    time::Duration,
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -24,7 +25,7 @@ pub enum Status {
     Warn,
     Skip,
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Check {
     pub status: Status,
     pub name: String,
@@ -32,12 +33,18 @@ pub struct Check {
 }
 /// What the loaded configuration resolves to, for the deployment record.
 /// Names and counts only: no paths, hosts or token values.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Configuration {
     pub fingerprint: String,
     pub machines: Vec<String>,
     pub default_machine: String,
     pub attention: crate::core::config::Attention,
+}
+/// What a watcher of a running doctor sees, in the order it happens.
+#[derive(Clone, Debug)]
+pub enum Progress {
+    Configuration(Configuration),
+    Check(Check),
 }
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
@@ -45,17 +52,29 @@ pub struct Report {
     pub cancelled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub configuration: Option<Configuration>,
+    /// Each check is also sent here the moment it is known.
+    #[serde(skip)]
+    progress: Option<mpsc::UnboundedSender<Progress>>,
 }
 impl Report {
     pub fn passed(&self) -> bool {
         !self.cancelled && !self.checks.iter().any(|c| c.status == Status::Fail)
     }
+    /// Stop streaming: a watcher's receiver then ends once every machine's
+    /// report is gone. Called by the runner at the end, and safe to repeat.
+    pub fn detach(&mut self) {
+        self.progress = None;
+    }
     fn add(&mut self, status: Status, name: impl Into<String>, detail: impl Into<String>) {
-        self.checks.push(Check {
+        let check = Check {
             status,
             name: name.into(),
             detail: detail.into(),
-        });
+        };
+        if let Some(progress) = &self.progress {
+            let _ = progress.send(Progress::Check(check.clone()));
+        }
+        self.checks.push(check);
     }
     fn test(&mut self, name: impl Into<String>, ok: bool, failure: &'static str) {
         self.add(
@@ -67,37 +86,48 @@ impl Report {
     pub fn text(&self) -> String {
         let mut lines = vec![];
         if let Some(c) = &self.configuration {
-            lines.push(format!("Configuration fingerprint: {}", c.fingerprint));
-            lines.push(format!(
-                "Machines: {} (default: {})",
-                c.machines.join(", "),
-                c.default_machine
-            ));
+            lines.push(c.text());
         }
-        lines.extend(self.checks.iter().map(|c| {
-            format!(
-                "{} {}{}{}",
-                match c.status {
-                    Status::Pass => "PASS",
-                    Status::Fail => "FAIL",
-                    Status::Warn => "WARN",
-                    Status::Skip => "SKIP",
-                },
-                c.name,
-                if c.detail.is_empty() { "" } else { ": " },
-                c.detail
-            )
-        }));
+        lines.extend(self.checks.iter().map(Check::text));
+        lines.push(self.summary());
+        lines.join("\n")
+    }
+    /// The closing lines: counts, and what doctor does not check.
+    pub fn summary(&self) -> String {
         let count = |status| self.checks.iter().filter(|c| c.status == status).count();
-        lines.push(format!(
-            "Checks: {} passed, {} failed, {} warnings, {} skipped.",
+        format!(
+            "Checks: {} passed, {} failed, {} warnings, {} skipped.\nSlack authorization and channel membership are verified on start; no model request was made.",
             count(Status::Pass),
             count(Status::Fail),
             count(Status::Warn),
             count(Status::Skip)
-        ));
-        lines.push("Slack authorization and channel membership are verified on start; no model request was made.".into());
-        lines.join("\n")
+        )
+    }
+}
+impl Configuration {
+    pub fn text(&self) -> String {
+        format!(
+            "Configuration fingerprint: {}\nMachines: {} (default: {})",
+            self.fingerprint,
+            self.machines.join(", "),
+            self.default_machine
+        )
+    }
+}
+impl Check {
+    pub fn text(&self) -> String {
+        format!(
+            "{} {}{}{}",
+            match self.status {
+                Status::Pass => "PASS",
+                Status::Fail => "FAIL",
+                Status::Warn => "WARN",
+                Status::Skip => "SKIP",
+            },
+            self.name,
+            if self.detail.is_empty() { "" } else { ": " },
+            self.detail
+        )
     }
 }
 
@@ -110,10 +140,24 @@ pub async fn run(
     timeout: Duration,
     stop: watch::Receiver<bool>,
 ) -> Result<Report> {
+    run_with(path, context, environment, timeout, stop, None).await
+}
+/// Like `run`, streaming each result to `progress` as soon as it is known.
+pub async fn run_with(
+    path: &Path,
+    context: &LoadContext,
+    environment: BTreeMap<OsString, OsString>,
+    timeout: Duration,
+    stop: watch::Receiver<bool>,
+    progress: Option<mpsc::UnboundedSender<Progress>>,
+) -> Result<Report> {
     if !(Duration::from_secs(1)..=Duration::from_secs(120)).contains(&timeout) {
         bail!("doctor timeout must be between 1 and 120 seconds");
     }
-    let mut report = Report::default();
+    let mut report = Report {
+        progress,
+        ..Report::default()
+    };
     report.test(
         "Operating system",
         cfg!(any(target_os = "linux", target_os = "macos")),
@@ -138,16 +182,21 @@ pub async fn run(
                 "Everything else",
                 "fix the configuration first",
             );
+            report.detach();
             return Ok(report);
         }
     };
     report.add(Status::Pass, "Configuration", "");
-    report.configuration = Some(Configuration {
+    let configuration = Configuration {
         fingerprint: config.fingerprint.clone(),
         machines: config.machines.names(),
         default_machine: config.parent.default_machine.clone(),
         attention: config.attention.clone(),
-    });
+    };
+    if let Some(progress) = &report.progress {
+        let _ = progress.send(Progress::Configuration(configuration.clone()));
+    }
+    report.configuration = Some(configuration);
     report.test(
         "Agent contract",
         config::contract::load(config.owner.contract.as_deref()).is_ok(),
@@ -177,13 +226,21 @@ pub async fn run(
         Some(scopes) if scopes.split(',').any(|s| s.trim()=="files:read") => report.add(Status::Pass,"Slack files:read","recorded at the last daemon start; not a live authorization check"),
         Some(_) => report.add(Status::Warn,"Slack files:read","not previously granted; add files:read and reinstall the Slack app for attachment text"),
     }
-    let probe = Probe {
-        config: &config,
-        context,
+    // Under /tmp: a Unix socket path must stay short, and the per-user
+    // temporary directory on macOS is already most of the limit.
+    let control = tempfile::Builder::new()
+        .prefix("fridica-doctor-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/tmp")?;
+    let probe = Arc::new(Probe {
+        config: Arc::new(config),
+        context: context.clone(),
         environment,
         timeout,
         stop,
-    };
+        control: control.path().to_owned(),
+    });
+    let config = probe.config.clone();
     let mut parent = config.machines.machines[0].clone();
     parent.transport = "local".into();
     parent.resources = Default::default();
@@ -196,10 +253,50 @@ pub async fn run(
         &mut report,
     )
     .await;
-    for machine in &config.machines.machines {
-        if *probe.stop.borrow() {
-            break;
+    // Machines are independent, so they are probed at the same time: a slow or
+    // unreachable host then costs its own probes' time, not everyone's.
+    if !*probe.stop.borrow() {
+        let tasks: Vec<_> = config
+            .machines
+            .machines
+            .iter()
+            .map(|m| tokio::spawn(machine(probe.clone(), m.clone(), report.progress.clone())))
+            .collect();
+        // Results keep the configuration's order whatever finishes first.
+        for task in tasks {
+            let part = task.await.context("machine probes stopped unexpectedly")?;
+            report.checks.extend(part.checks);
         }
+    }
+    report.detach();
+    report.cancelled = *probe.stop.borrow();
+    if report.cancelled {
+        report.add(
+            Status::Fail,
+            "Diagnostics cancelled",
+            "remaining probes were not run",
+        );
+    }
+    report.add(
+        Status::Skip,
+        "Worker isolation",
+        "run start --check-ready for target isolation checks",
+    );
+    Ok(report)
+}
+
+/// Every check for one machine, in a report of its own.
+async fn machine(
+    probe: Arc<Probe>,
+    machine: Machine,
+    progress: Option<mpsc::UnboundedSender<Progress>>,
+) -> Report {
+    let (probe, machine) = (&*probe, &machine);
+    let mut report = Report {
+        progress,
+        ..Report::default()
+    };
+    {
         let name = format!("Machine {}", machine.name);
         if machine.transport == "slurm" {
             report.add(
@@ -207,7 +304,7 @@ pub async fn run(
                 name,
                 "Slurm is registered but unsupported; jobs there fail",
             );
-            continue;
+            return report;
         }
         let system = probe.run(machine, "system", "", false, false, "").await;
         report.test(
@@ -216,7 +313,7 @@ pub async fn run(
             "unsupported system or failed transport; SSH must connect without a prompt",
         );
         if !matches!(system.as_str(), "linux" | "darwin") {
-            continue;
+            return report;
         }
         for workspace in &machine.workspaces {
             if *probe.stop.borrow() {
@@ -243,7 +340,7 @@ pub async fn run(
             .iter()
             .any(|w| w.policy.approvals == "auto");
         for name in &machine.backends {
-            backend(&probe, machine, name, false, auto, &mut report).await;
+            backend(probe, machine, name, false, auto, &mut report).await;
         }
         if system == "linux" && !*probe.stop.borrow() {
             let backend = if machine.backends.iter().any(|b| b == "claude") {
@@ -261,24 +358,11 @@ pub async fn run(
             );
         }
     }
-    report.cancelled = *probe.stop.borrow();
-    if report.cancelled {
-        report.add(
-            Status::Fail,
-            "Diagnostics cancelled",
-            "remaining probes were not run",
-        );
-    }
-    report.add(
-        Status::Skip,
-        "Worker isolation",
-        "run start --check-ready for target isolation checks",
-    );
-    Ok(report)
+    report
 }
 
 async fn backend(
-    probe: &Probe<'_>,
+    probe: &Probe,
     machine: &Machine,
     backend: &str,
     parent: bool,
@@ -318,14 +402,17 @@ async fn backend(
     }
 }
 
-struct Probe<'a> {
-    config: &'a Config,
-    context: &'a LoadContext,
+struct Probe {
+    config: Arc<Config>,
+    context: LoadContext,
     environment: BTreeMap<OsString, OsString>,
     timeout: Duration,
     stop: watch::Receiver<bool>,
+    /// One private SSH control directory for the whole run, so a machine's
+    /// probes share a connection instead of each paying a full handshake.
+    control: std::path::PathBuf,
 }
-impl Probe<'_> {
+impl Probe {
     #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
@@ -360,7 +447,6 @@ impl Probe<'_> {
             "action":action,"backend":backend,"parent":parent,"auto":auto,"workspace":workspace,
             "home":(machine.transport=="local").then_some(&self.context.home),"excluded":excluded,"timeout":self.timeout.as_secs_f64()
         }).to_string()];
-        let control;
         let launch = if machine.transport == "local" {
             LocalTransport {
                 machine: machine.clone(),
@@ -376,14 +462,10 @@ impl Probe<'_> {
                 false,
             )?
         } else {
-            control = tempfile::Builder::new()
-                .prefix("fridica-doctor-")
-                .permissions(std::fs::Permissions::from_mode(0o700))
-                .tempdir()?;
             let mut launch = SshTransport {
                 machine: machine.clone(),
                 excluded_env: excluded,
-                control_directory: control.path().to_owned(),
+                control_directory: self.control.clone(),
             }
             .launch(
                 args,
@@ -392,7 +474,7 @@ impl Probe<'_> {
                 &BTreeMap::new(),
                 LaunchOptions::default(),
             )?;
-            read_only_ssh_probe(&mut launch);
+            shared_ssh_probe(&mut launch);
             launch
         };
         let result =

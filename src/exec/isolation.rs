@@ -376,6 +376,25 @@ pub fn read_only_ssh_probe(launch: &mut Launch) {
     );
 }
 
+/// A doctor probe: strict host keys, and connections shared through the
+/// doctor's own private control directory (the transport already asks for
+/// `ControlMaster=auto` there), closed 30 s after the last probe. Options
+/// spliced first win over the transport's defaults.
+pub fn shared_ssh_probe(launch: &mut Launch) {
+    launch.argv.splice(
+        1..1,
+        [
+            "-o",
+            "ControlPersist=30",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "UpdateHostKeys=no",
+        ]
+        .map(str::to_owned),
+    );
+}
+
 /// Same bounded process ownership as namespace probes, with fixed diagnostics.
 pub async fn run_readiness(launch: Launch, timeout: Duration) -> Check {
     let Ok(result) = process::run_with_open_stdin(launch, timeout, 4096).await else {
