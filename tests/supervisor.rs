@@ -407,6 +407,38 @@ async fn result_artifacts_and_notification_commit_once_and_late_results_are_fenc
     );
     h.supervisor.close().await.unwrap();
 }
+/// A job stopped by the backend's usage limit is not retried at once into
+/// the same limit (#107): it fails on its first attempt.
+#[tokio::test]
+async fn a_rate_limited_job_is_not_retried_at_once() {
+    let h = Harness::new().await;
+    h.add("a", "gpu", 0, false, 1).await;
+    h.factory
+        .script("a")
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(WorkerFailure {
+            kind: Failure::Execution,
+            code: "backend_rate_limited".into(),
+            backend_session_id: "resume-me".into(),
+        }));
+    h.supervisor.schedule().await.unwrap();
+    h.factory.latest("a").release.add_permits(1);
+    h.wait_status("a-0", "failed").await;
+    assert_eq!(
+        work::get_job(&h.store, "a-0".into()).await.unwrap().attempt,
+        1
+    );
+    let error: String = h
+        .store
+        .call(|c| Ok(c.query_row("SELECT error FROM jobs WHERE id='a-0'", [], |r| r.get(0))?))
+        .await
+        .unwrap();
+    assert_eq!(error, "backend_rate_limited");
+    assert!(h.supervisor.schedule().await.unwrap().is_empty());
+    h.supervisor.close().await.unwrap();
+}
 #[tokio::test]
 async fn execution_failure_retries_once_with_the_same_session_but_refusal_does_not() {
     let h = Harness::new().await;

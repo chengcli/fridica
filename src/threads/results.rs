@@ -17,8 +17,11 @@ pub(super) fn load(c: &Connection, session: &str, reference: &str) -> Result<Val
     let Some(group) = group else {
         return Ok(json!({"results":[],"pending":false}));
     };
-    let rows: Vec<String> = c.prepare("SELECT json_object('id',j.id,'worker_id',j.worker_id,'machine',w.machine,'workspace',w.workspace,'role',w.role,
-        'brief',j.brief,'job_status',j.status,'error',j.error,'result',json(j.result_json),'inbox_id',j.inbox_id,'reported',j.reported,'attempt',j.attempt)
+    // A job stopped by a usage limit carries the limit's reset time (#107).
+    let rows: Vec<String> = c.prepare("SELECT json_patch(json_object('id',j.id,'worker_id',j.worker_id,'machine',w.machine,'workspace',w.workspace,'role',w.role,
+        'brief',j.brief,'job_status',j.status,'error',j.error,'result',json(j.result_json),'inbox_id',j.inbox_id,'reported',j.reported,'attempt',j.attempt),
+        COALESCE((SELECT json_object('rate_limit_resets_at',json_extract(h.details_json,'$.resets_at')) FROM health_events h
+            WHERE j.error='backend_rate_limited' AND h.kind='backend_rate_limited' AND json_extract(h.details_json,'$.job_id')=j.id ORDER BY h.id DESC LIMIT 1),'{}'))
         FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.session_id=? AND ((?!='' AND j.join_group=?) OR (?='' AND j.id=?)) ORDER BY j.queued_at,j.rowid")?
         .query_map([session,&group,&group,&group,reference], |r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
     let rows: Vec<Value> = rows
@@ -100,6 +103,15 @@ pub(super) fn direct(
     else {
         return Ok(None);
     };
+    // A sign-off is the parent's own verdict (provision04): a report that
+    // carries one goes to the parent instead of being posted as is.
+    if report.lines().any(|line| {
+        line.trim_start()
+            .to_ascii_uppercase()
+            .starts_with("SIGN-OFF")
+    }) {
+        return Ok(None);
+    }
     let event = request.trigger["origin"]["event_id"].as_str();
     let answers: Vec<_> = request
         .obligations

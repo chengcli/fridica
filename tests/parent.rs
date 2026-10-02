@@ -1573,3 +1573,22 @@ fn codex_startup_diagnostics_are_tolerated_only_before_a_completed_turn() {
         );
     }
 }
+
+/// Claude reports its usage limit only in the result envelope of a non-zero
+/// exit (#107); that, and only that, is `parent_rate_limited`.
+#[test]
+fn a_usage_limit_envelope_is_recognized() {
+    use fridica::parent::cli::rate_limited;
+    let limited = br#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your session limit"}"#;
+    assert!(rate_limited("claude", limited));
+    assert!(!rate_limited("codex", limited));
+    assert!(!rate_limited(
+        "claude",
+        br#"{"type":"result","is_error":true,"result":"other failure"}"#
+    ));
+    assert!(!rate_limited(
+        "claude",
+        br#"{"type":"result","is_error":false,"api_error_status":429}"#
+    ));
+    assert!(!rate_limited("claude", b"not json"));
+}

@@ -696,6 +696,13 @@ versioned `migrations/`) is the only code that runs DDL.
     `auto_resume` reruns them once, continuing their sessions.
   - Pending approvals expire.
   - Posts that may have been sent become `ambiguous`.
+- **Backend usage limits are temporary:**
+  - A job stopped by the backend's usage limit fails as `backend_rate_limited` on its
+    first attempt instead of being retried into the same limit. Its result tells the
+    parent when the limit resets.
+  - A parent call refused by the limit (`parent_rate_limited`) leaves its inbox item
+    pending and retries it 10 minutes later. The thread is not blocked and needs no
+    owner review.
 - A second daemon on the same database is refused. The database is bound to one
   Slack identity.
 

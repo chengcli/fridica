@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """A minimal claude -p stream-json process with the SDK control protocol."""
-import json, os, pathlib, sys
+import json
+import os
+import pathlib
+import sys
 arguments = sys.argv[1:]
 log = pathlib.Path(os.environ["WORKER_LOG"])
 assert arguments[:6] == ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"], arguments
@@ -43,6 +46,11 @@ for line in lines:
             if request.get("type") == "control_request" and request["request"]["subtype"] == "interrupt":
                 emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "interrupted", "session_id": session})
                 break
+    elif "LIMIT" in text:
+        # The usage-limit sequence Claude Code sends (#107).
+        emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1790973000, "rateLimitType": "five_hour"}, "session_id": session})
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "You've hit your session limit"}]}, "error": "rate_limit", "session_id": session})
+        emit({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 429, "result": "You've hit your session limit", "session_id": session})
     elif "FAIL" in text:
         emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "PRIVATE FAILURE", "session_id": session})
     else:

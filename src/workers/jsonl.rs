@@ -14,12 +14,19 @@ use crate::{
         process::{self, Launch, Process},
         ssh::{LaunchOptions, SshTransport},
     },
-    store::Store,
+    store::{work::RATE_LIMITED, Store},
 };
 use fridica_agent::{Agent, Backend, BoxFuture, Child, LaunchError, OutputFormat, Turn};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, ffi::OsString, io, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    io,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::sync::Semaphore;
 
 pub trait Launcher: Send + Sync {
@@ -274,15 +281,52 @@ impl WireRecorder for DiscardWire {
         Box::pin(async { Ok(()) })
     }
 }
-/// A Fridica recorder as the driver's recorder.
-struct Recording(Arc<dyn WireRecorder>);
+/// A backend usage limit seen on the wire, with its reset time (Unix seconds)
+/// when the backend says. Claude reports one as a `rate_limit_event` whose
+/// status is `rejected`, an assistant message with `error: "rate_limit"`, and
+/// a result with `api_error_status: 429`; warnings below the limit are not.
+pub fn rate_limit(event: &Value) -> Option<Option<f64>> {
+    if event["direction"] != "received" {
+        return None;
+    }
+    // Limit messages are small; skip parsing large outputs.
+    let bytes = event["bytes"].as_array().filter(|b| b.len() <= 16 * 1024)?;
+    let bytes: Vec<u8> = bytes
+        .iter()
+        .map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+        .collect::<Option<_>>()?;
+    let message: Value = serde_json::from_slice(&bytes).ok()?;
+    match message["type"].as_str()? {
+        "rate_limit_event" if message["rate_limit_info"]["status"] == "rejected" => {
+            Some(message["rate_limit_info"]["resetsAt"].as_f64())
+        }
+        "assistant" if message["error"] == "rate_limit" => Some(None),
+        "result" if message["is_error"] == true && message["api_error_status"] == 429 => Some(None),
+        _ => None,
+    }
+}
+/// A Fridica recorder as the driver's recorder. It also notes a usage limit
+/// in the current turn, so the turn's failure can name it.
+struct Recording {
+    recorder: Arc<dyn WireRecorder>,
+    limited: Arc<Mutex<Option<Option<f64>>>>,
+}
 impl fridica_agent::Recorder for Recording {
     fn record(
         &self,
         context: Value,
         event: Value,
     ) -> BoxFuture<'_, Result<(), fridica_agent::Error>> {
-        Box::pin(async move { self.0.record(context, event).await.map_err(agent_error) })
+        if let Some(reset) = rate_limit(&event) {
+            let mut limited = self.limited.lock().unwrap();
+            *limited = Some(reset.or(limited.flatten()));
+        }
+        Box::pin(async move {
+            self.recorder
+                .record(context, event)
+                .await
+                .map_err(agent_error)
+        })
     }
 }
 // The driver's failure and approval types mirror fridica-core's field for
@@ -341,6 +385,12 @@ impl WireRecorder for StoreWireRecorder {
                 tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('backend_wire',?,?,?)",rusqlite::params![now,payload,event["incomplete"]!=true])?;
                 if event["direction"]=="notice" && event["notice"]["code"]=="claude_permission_mode_fallback" {
                     tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('claude_permission_mode_fallback',?,?)",rusqlite::params![payload,now])?;
+                }
+                // The reset time of a usage limit, for the job's result (#107).
+                if let Some(Some(resets_at))=rate_limit(&event) {
+                    let mut details=context.clone();
+                    details["resets_at"]=json!(resets_at);
+                    tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES(?,?,?)",rusqlite::params![RATE_LIMITED,details.to_string(),now])?;
                 }
                 tx.commit()?;Ok(())
             }).await.map_err(|_|failure(Failure::Execution,"backend_wire_storage_failed",""))
@@ -545,6 +595,7 @@ fn worker_result() -> OutputFormat {
 pub struct JsonlWorker {
     agent: Agent,
     backend: String,
+    limited: Arc<Mutex<Option<Option<f64>>>>,
 }
 impl JsonlWorker {
     pub fn new(
@@ -574,6 +625,7 @@ impl JsonlWorker {
                 "",
             ));
         };
+        let limited = Arc::new(Mutex::new(None));
         let agent = Agent::new(
             driver_spec(&spec, backend),
             driver_options(&options),
@@ -582,12 +634,16 @@ impl JsonlWorker {
                 launcher,
             }),
             Arc::new(SessionUuids(ids)),
-            Arc::new(Recording(recorder)),
+            Arc::new(Recording {
+                recorder,
+                limited: limited.clone(),
+            }),
         )
         .map_err(worker_failure)?;
         Ok(Self {
             agent,
             backend: spec.backend,
+            limited,
         })
     }
 }
@@ -607,6 +663,7 @@ impl Worker for JsonlWorker {
     ) -> AdapterFuture<'_, Result<Outcome, WorkerFailure>> {
         Box::pin(async move {
             let context = json!({"worker_id":worker.id,"job_id":job.id,"attempt":request.attempt,"backend":self.backend});
+            *self.limited.lock().unwrap() = None;
             let reply = self
                 .agent
                 .run(Turn {
@@ -622,7 +679,16 @@ impl Worker for JsonlWorker {
                     output: Some(worker_result()),
                 })
                 .await
-                .map_err(worker_failure)?;
+                .map_err(|e| {
+                    let mut failure = worker_failure(e);
+                    // A failed turn that hit the usage limit says so, so the
+                    // job is not retried into the same limit.
+                    if failure.kind == Failure::Execution && self.limited.lock().unwrap().is_some()
+                    {
+                        failure.code = RATE_LIMITED.into();
+                    }
+                    failure
+                })?;
             Ok(Outcome {
                 result: result::parse(&reply.text).unwrap_or_else(|| result::fallback(&reply.text)),
                 backend_session_id: reply.backend_session_id,

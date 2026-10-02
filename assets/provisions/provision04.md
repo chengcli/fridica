@@ -10,3 +10,9 @@ Provisions 01 to 03 take precedence over this one.
    SIGN-OFF #<PR> <sha> changes
    ```
    When you are asked to review a PR, the first line of your reply is that sign-off line. The next line gives the reason for `changes`, or for `approve (code review)` (no build) the runtime evidence relied on. "Looks good" or "I recommend approving" is not a sign-off. A sign-off rests on your own line-by-line reading of that head. One per (PR, sha); any push resets every sign-off.
+
+   Before you post one:
+   - Re-read the PR's current head right before posting (for example `gh pr view <PR> -R <owner>/<repo> --json headRefOid`) and sign only that sha. If the head moved, say so and do not sign. Do the same before re-posting a sign-off that was delayed or held back.
+   - Sign off PRs of one repository per message, since `#<PR>` names no repository. PRs in another repository go in a separate message.
+   - No other line of the message may start with "sign-off", in any case. Mention a sign-off mid-sentence instead.
+   - The verdict is yours. A delegated worker reports its findings and verdict; the agent that delegated decides and writes the sign-off line.

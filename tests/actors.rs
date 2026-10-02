@@ -38,12 +38,24 @@ impl Parent for Script {
     fn decide(&self, r: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>> {
         Box::pin(async move {
             self.requests.lock().unwrap().push(r);
+            // A scripted `{"failure": code}` is the parent call failing.
             self.responses
                 .lock()
                 .unwrap()
                 .pop_front()
                 .ok_or(ParentFailure {
                     code: "no_script".into(),
+                })
+                .and_then(|v| {
+                    match v
+                        .as_object()
+                        .filter(|o| o.len() == 1)
+                        .and_then(|o| o.get("failure"))
+                        .and_then(Value::as_str)
+                    {
+                        Some(code) => Err(ParentFailure { code: code.into() }),
+                        None => Ok(v),
+                    }
                 })
         })
     }
@@ -848,6 +860,45 @@ async fn debrief_observe_pause_and_invalid_response_produce_no_post_or_retry() {
             }
         );
     }
+}
+
+/// A debrief refused by the parent's usage limit is retried after the wait
+/// instead of being dropped (#107).
+#[tokio::test]
+async fn a_rate_limited_debrief_is_retried_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    intake(&s, 1).await;
+    let p = Arc::new(Script::new(vec![
+        json!({"reply":{"text":"Finished.","status":"complete","discussion":"finished"}}),
+        json!({"failure":"parent_rate_limited"}),
+        json!({"debrief":"We settled it."}),
+    ]));
+    let a = actor(&s, p.clone());
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    a.step(SESSION.into()).await.unwrap();
+    assert_eq!(
+        scalar(&s, "SELECT state FROM thread_inbox WHERE kind='debrief'").await,
+        "pending"
+    );
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Idle);
+    let clock = Arc::new(ReplayClock::new(
+        20. + fridica::threads::actor::RATE_LIMIT_RETRY,
+    ));
+    let a = Actor {
+        clock,
+        ..actor(&s, p.clone())
+    };
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    assert_eq!(p.requests.lock().unwrap().len(), 3);
+    assert_eq!(
+        scalar(
+            &s,
+            "SELECT CAST(count(*) AS TEXT) FROM outbox WHERE kind='debrief_root'"
+        )
+        .await,
+        "1"
+    );
 }
 
 #[tokio::test]

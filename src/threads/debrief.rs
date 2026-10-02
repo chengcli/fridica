@@ -74,6 +74,11 @@ pub(super) async fn handle<P: Parent>(
     }
     request.call = "debrief".into();
     let (raw, call) = actor.call(&request).await?;
+    // A usage limit is temporary (#107): the debrief waits and is retried.
+    if call["failure"]["code"] == crate::parent::cli::RATE_LIMITED {
+        let retry = actor.clock.now() + actor::RATE_LIMIT_RETRY;
+        return actor::settle(&actor.store, id, &request, String::new(), Some(retry)).await;
+    }
     let text = raw
         .and_then(|v| serde_json::from_value::<Debrief>(v).ok())
         .map(|d| d.debrief.trim().to_owned())

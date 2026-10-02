@@ -132,7 +132,9 @@ impl CliParent {
         let completed = cli::execute(argv, directory.path(), environment, prompt, timeout).await;
         let (result, output, complete) = match completed {
             Ok(output) => {
-                let result = if output.returncode != 0 {
+                let result = if cli::rate_limited(backend, &output.stdout) {
+                    Err(failure(cli::RATE_LIMITED))
+                } else if output.returncode != 0 {
                     Err(failure(&format!("parent_exit_{}", output.returncode)))
                 } else {
                     cli::parse(backend, &output.stdout)

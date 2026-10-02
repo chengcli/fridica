@@ -2,7 +2,7 @@ use fridica::{
     config::{contract, loader, provisions, repos, LoadContext},
     core::worker::WorkerRecord,
     workers::{
-        instructions::{OwnerInstructions, UNTRUSTED},
+        instructions::{OwnerInstructions, NO_SIGN_OFF, UNTRUSTED},
         jsonl::Instructions,
     },
 };
@@ -85,6 +85,7 @@ fn owner_overrides_inherit_only_optional_sections_and_reload_without_restart() {
     .unwrap();
     let prompt = OwnerInstructions.build(&config, &worker).unwrap();
     assert!(prompt.contains("private rule"));
+    assert!(prompt.contains(NO_SIGN_OFF));
     assert!(!prompt.contains("Delegate work"));
     assert!(!prompt.contains("/work/") && !prompt.contains("/tmp/test-home"));
     let data: Value =

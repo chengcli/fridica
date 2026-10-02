@@ -45,6 +45,7 @@ impl Parent for ParentScript {
             if let Some(gate) = gate {
                 gate.acquire().await.unwrap().forget();
             }
+            // A scripted `{"failure": code}` is the parent call failing.
             let outcome = self
                 .responses
                 .lock()
@@ -52,6 +53,17 @@ impl Parent for ParentScript {
                 .pop_front()
                 .ok_or(ParentFailure {
                     code: "script_exhausted".into(),
+                })
+                .and_then(|v| {
+                    match v
+                        .as_object()
+                        .filter(|o| o.len() == 1)
+                        .and_then(|o| o.get("failure"))
+                        .and_then(Value::as_str)
+                    {
+                        Some(code) => Err(ParentFailure { code: code.into() }),
+                        None => Ok(v),
+                    }
                 });
             if let Some(tape) = tape {
                 serde_json::from_value(tape.finish(call.unwrap(), json!(outcome)).await).unwrap()
@@ -731,6 +743,116 @@ async fn long_direct_report_closes_only_after_the_full_report_upload() {
         8000
     );
     assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+    h.runtime.close().await.unwrap();
+}
+
+/// A usage limit is temporary (#107). A rate-limited job is not retried at
+/// once and its result carries the reset time; a rate-limited parent call
+/// leaves the item pending for a later retry, without blocking the thread or
+/// asking for owner review, and the retry then reports normally.
+#[tokio::test]
+async fn usage_limits_wait_and_retry_instead_of_blocking_the_thread() {
+    let h = Harness::new(
+        vec![
+            delegate(),
+            json!({"failure":"parent_rate_limited"}),
+            json!({"reply":{"text":"The check hit the usage limit; I'll rerun it after the reset.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.worker
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(WorkerFailure {
+            kind: Failure::Execution,
+            code: "backend_rate_limited".into(),
+            backend_session_id: "b".into(),
+        }));
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    let job = h.scalar("SELECT id FROM jobs").await;
+    h.store
+        .call(move |c| {
+            c.execute(
+                "INSERT INTO health_events(kind,details_json,created) VALUES('backend_rate_limited',?,20)",
+                [json!({"job_id":job,"resets_at":5000.0}).to_string()],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT CAST(attempt AS TEXT)||' '||status||' '||error FROM jobs")
+            .await,
+        "1 failed backend_rate_limited"
+    );
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.scalar("SELECT state||' '||CAST(not_before>=600 AS TEXT) FROM thread_inbox WHERE kind='worker_result'").await,
+        "pending 1"
+    );
+    assert_eq!(
+        h.scalar("SELECT error FROM parent_turns ORDER BY id DESC LIMIT 1")
+            .await,
+        "parent_rate_limited"
+    );
+    assert_ne!(h.scalar("SELECT status FROM threads").await, "blocked");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE kind='report'")
+            .await,
+        "0"
+    );
+
+    h.clock.set(20. + 600.);
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[2].trigger["results"][0]["rate_limit_resets_at"],
+        5000.0
+    );
+    assert_eq!(calls[2].session["parent_review_required"], false);
+    assert_eq!(
+        h.scalar("SELECT text FROM outbox WHERE kind='report'")
+            .await,
+        "The check hit the usage limit; I'll rerun it after the reset."
+    );
+    h.runtime.close().await.unwrap();
+}
+
+/// A worker's sign-off line is not the parent's verdict (provision04): such a
+/// report goes to the parent, whose own reply is posted instead.
+#[tokio::test]
+async fn a_report_carrying_a_sign_off_goes_to_the_parent_instead_of_the_fast_path() {
+    let parent_reply = "SIGN-OFF #7 abc1234 approve\nChecks passed on abc1234.";
+    let h = Harness::new(
+        vec![
+            delegate(),
+            json!({"reply":{"text":parent_reply,"status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.worker.outcomes.lock().unwrap().push_back(Ok(Outcome {
+        result: serde_json::from_value(json!({"status":"done","summary":"done",
+            "report":"Sign-off for #7 below.\nSIGN-OFF #7 abc1234 approve"}))
+        .unwrap(),
+        backend_session_id: "b".into(),
+    }));
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.scalar("SELECT text FROM outbox WHERE kind='report'")
+            .await,
+        parent_reply
+    );
     h.runtime.close().await.unwrap();
 }
 

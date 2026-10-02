@@ -32,19 +32,10 @@ impl<D: Delivery> Dispatcher<D> {
     /// it may be edited at any time). A post that breaks a rule is not sent:
     /// it fails with `egress_<rule>`, which names the rule, never the term.
     /// An unreadable list holds every post back rather than sending unchecked.
+    ///
+    /// Sign-off lines are not checked here: provision04 makes the agent
+    /// re-read the PR head before it signs (#109).
     pub async fn drain_checked(&self, limit: usize, deny: Option<&Path>) -> Result<usize> {
-        self.drain_with(limit, deny, None).await
-    }
-    /// Like `drain_checked`, also verifying `SIGN-OFF #<PR> <sha>` lines
-    /// against a fresh read of the PR's head through `heads`. A sign-off that
-    /// cannot be verified (no GitHub reader, no repository for the thread, or
-    /// a failed read) is not sent, like one that names a stale head.
-    pub async fn drain_with(
-        &self,
-        limit: usize,
-        deny: Option<&Path>,
-        heads: Option<&dyn crate::github::client::Api>,
-    ) -> Result<usize> {
         if self.observe_only {
             return Ok(0);
         }
@@ -75,9 +66,7 @@ impl<D: Delivery> Dispatcher<D> {
                 attempted += 1;
                 // Every broken rule is recorded, each as `egress_<rule>`, so
                 // the owner sees all of them in one pass.
-                let mut refused = check(&post, &rules);
-                refused.extend(self.signoffs(&post, heads, &rules).await?);
-                refused.dedup();
+                let refused = check(&post, &rules);
                 let result = if !refused.is_empty() {
                     DeliveryOutcome::Rejected {
                         code: refused
@@ -112,121 +101,6 @@ impl<D: Delivery> Dispatcher<D> {
         }
         Ok(sent)
     }
-}
-impl<D: Delivery> Dispatcher<D> {
-    /// The rules a post's sign-off lines break. A sign-off clears a
-    /// pull request for merge, so the PR's title, body and commit messages,
-    /// read back from GitHub, must also pass the egress rules: text a worker
-    /// pushed reaches upstream history once the PR is squashed.
-    async fn signoffs(
-        &self,
-        post: &ClaimedPost,
-        heads: Option<&dyn crate::github::client::Api>,
-        rules: &DenyList,
-    ) -> Result<Vec<String>> {
-        let Some(lines) = signoff_lines(&post.post.text) else {
-            return Ok(vec!["signoff_malformed".into()]);
-        };
-        if lines.is_empty() {
-            return Ok(vec![]);
-        }
-        let Some(heads) = heads else {
-            return Ok(vec!["signoff_unverified".into()]);
-        };
-        let session = post.post.session_id.clone();
-        let repo: String = self
-            .store
-            .call(move |c| {
-                Ok(c.query_row(
-                    "SELECT COALESCE(json_extract(context_json,'$.repo'),'') FROM threads WHERE id=?",
-                    [session],
-                    |r| r.get(0),
-                )
-                .unwrap_or_default())
-            })
-            .await?;
-        if !crate::github::client::repository(&repo) {
-            return Ok(vec!["signoff_repo_unknown".into()]);
-        }
-        let mut broken: Vec<String> = vec![];
-        use crate::github::client::{Failure, Operation, Request};
-        let read = |operation| {
-            heads.get(Request {
-                repo: repo.clone(),
-                operation,
-            })
-        };
-        // Each line is judged on its own; one PR's problem does not hide another's.
-        for (number, sha) in lines {
-            let pull = match read(Operation::Pull { number }).await {
-                Ok(pull) => pull,
-                Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
-                Err(_) => {
-                    broken.push("signoff_unverified".into());
-                    continue;
-                }
-            };
-            let head = pull["head"]["sha"]
-                .as_str()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if head.len() < 40 || !head.starts_with(&sha) {
-                broken.push("signoff_stale_head".into());
-                continue;
-            }
-            let base = pull["base"]["sha"].as_str().unwrap_or("").to_string();
-            if !crate::github::client::sha(&base) {
-                broken.push("signoff_unverified".into());
-                continue;
-            }
-            let compare = match read(Operation::Compare { base, head }).await {
-                Ok(compare) => compare,
-                Err(Failure::Recording) => anyhow::bail!("sign-off check recording failed"),
-                Err(_) => {
-                    broken.push("signoff_unverified".into());
-                    continue;
-                }
-            };
-            // GitHub lists at most 250 commits; a longer PR cannot be read back.
-            let Some(commits) = compare["commits"]
-                .as_array()
-                .filter(|commits| compare["total_commits"].as_u64() == Some(commits.len() as u64))
-            else {
-                broken.push("signoff_unverified".into());
-                continue;
-            };
-            let texts = [&pull["title"], &pull["body"]]
-                .into_iter()
-                .chain(commits.iter().map(|c| &c["commit"]["message"]))
-                .filter_map(serde_json::Value::as_str);
-            for text in texts {
-                broken.extend(
-                    egress::scan(text, rules)
-                        .into_iter()
-                        .map(|rule| format!("signoff_pr_{rule}")),
-                );
-            }
-        }
-        broken.sort();
-        broken.dedup();
-        Ok(broken)
-    }
-}
-/// `SIGN-OFF #<PR> <sha> ...` lines (provision04): each PR number and sha, or
-/// `None` when a line starts like a sign-off but is not in that form.
-fn signoff_lines(text: &str) -> Option<Vec<(u64, String)>> {
-    static LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"^SIGN-OFF #([1-9][0-9]{0,9}) ([0-9a-f]{7,40}) (approve|approve \(code review\)|changes)$")
-            .unwrap()
-    });
-    text.lines()
-        .map(str::trim)
-        .filter(|line| line.to_ascii_uppercase().starts_with("SIGN-OFF"))
-        .map(|line| {
-            let c = LINE.captures(line)?;
-            Some((c[1].parse().ok()?, c[2].to_string()))
-        })
-        .collect()
 }
 /// The text a post would publish: its message, its file name and, for an
 /// upload of text, its contents.

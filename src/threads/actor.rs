@@ -254,6 +254,9 @@ impl<P: Parent> Actor<P> {
                 request.call = "triage".into();
                 let (raw, call) = self.call(&request).await?;
                 calls.push(call);
+                if rate_limited(&calls) {
+                    return self.retry_later(id, session, request, calls).await;
+                }
                 let choice = raw
                     .as_ref()
                     .and_then(|r| r.as_object())
@@ -335,6 +338,9 @@ impl<P: Parent> Actor<P> {
             let (raw, call) = self.call(&request).await?;
             let now = self.clock.now();
             calls.push(call);
+            if rate_limited(&calls) {
+                return self.retry_later(id, session, request, calls).await;
+            }
             let Some(raw) = raw else {
                 calls.last_mut().unwrap()["settlement_error"] = json!("parent_unavailable");
                 result = Some(super::failure::blocked(false));
@@ -396,6 +402,42 @@ impl<P: Parent> Actor<P> {
         )
         .await
     }
+    /// The parent hit its backend's usage limit (#107). That is temporary:
+    /// the item stays pending and is retried after `RATE_LIMIT_RETRY`, the
+    /// thread is neither blocked nor marked for owner review, and nothing is
+    /// posted. The call is kept in `parent_turns` with its error.
+    async fn retry_later(
+        &self,
+        id: i64,
+        session: String,
+        request: ParentRequest,
+        calls: Vec<Value>,
+    ) -> Result<Step> {
+        let now = self.clock.now();
+        self.store.call(move|c|{
+            let tx=c.transaction()?;
+            let current:bool=tx.query_row("SELECT version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![request.session["version"].as_i64(),id,session],|r|r.get(0))?;
+            // The whole turn is redone later, so only the refused call and any
+            // triage are kept: an earlier decide that failed validation must not
+            // read as a later, successful one (it would clear owner review).
+            for call in calls.iter().filter(|c| c["failure"]["code"]==crate::parent::cli::RATE_LIMITED || c["request"]["call"]=="triage") {
+                let mut context=call["request"].clone();
+                if let Some(code)=call["failure"]["code"].as_str() {context["failure"]=json!(code);}
+                let error=if call["failure"]["code"]==crate::parent::cli::RATE_LIMITED {crate::parent::cli::RATE_LIMITED} else {""};
+                tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,'{}',?,?,?,?)",
+                    params![session,id,call["request"]["call"].as_str(),call["response"].to_string(),context.to_string(),error,call["created"].as_f64()])?;
+            }
+            if current {
+                tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![now+RATE_LIMIT_RETRY,id])?;
+                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.rate_limited',?,?)",params![now,session,json!({"inbox_id":id,"retry_at":now+RATE_LIMIT_RETRY}).to_string()])?;
+            } else {
+                tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
+            }
+            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
+            tx.commit()?;
+            Ok(if current {Step::Deferred} else {Step::Stale})
+        }).await
+    }
     pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
         let started = self.clock.now();
         let encoded = serde_json::to_string(request)?;
@@ -440,6 +482,16 @@ impl<P: Parent> Actor<P> {
     }
 }
 
+/// How long a parent turn waits after its backend's usage limit (#107). A
+/// refused call costs nothing, so a fixed short wait reaches the reset soon
+/// after it without parsing the backend's wording.
+pub const RATE_LIMIT_RETRY: f64 = 600.;
+fn rate_limited(calls: &[Value]) -> bool {
+    calls
+        .last()
+        .is_some_and(|call| call["failure"]["code"] == crate::parent::cli::RATE_LIMITED)
+}
+
 async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> {
     store.call(move|c| {
         let tx=c.transaction()?;
@@ -460,7 +512,7 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
         let obligations:Vec<String>=tx.prepare("SELECT json_object('id',id,'kind',kind,'summary',summary,'due',due,'state',state,'disposition',json(state_json),'source',json(source_json),'deliveries',json((SELECT COALESCE(json_group_array(json_object('id',p.outbox_id,'state',o.state,'error',o.error)), '[]') FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id))) FROM obligations WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery') ORDER BY created,id")?
             .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let mut session_data:Value=serde_json::from_str(&data)?;
-        let review:bool=tx.query_row("SELECT COALESCE((SELECT error IN ('parent_unavailable','parent_invalid_after_repair') FROM parent_turns WHERE session_id=? AND call IN ('decide','repair') ORDER BY id DESC LIMIT 1),0)",[&session],|r|r.get(0))?;
+        let review:bool=tx.query_row("SELECT COALESCE((SELECT error IN ('parent_unavailable','parent_invalid_after_repair') FROM parent_turns WHERE session_id=? AND call IN ('decide','repair') AND error!='parent_rate_limited' ORDER BY id DESC LIMIT 1),0)",[&session],|r|r.get(0))?;
         session_data["parent_review_required"]=json!(review);
         if session_data["turns"] == 0 {
             let recent:Vec<String>=tx.prepare("SELECT json_object('event_id',event_id,'ts',ts,'sender',sender,'text',text,'files',json(files_json),'from_agent',json(meta_json)) FROM messages WHERE workspace=? AND channel=? AND ts=root_ts AND CAST(ts AS REAL)<CAST(? AS REAL) ORDER BY CAST(ts AS REAL) DESC,id DESC LIMIT 10")?
