@@ -99,7 +99,7 @@ project = "~/project"             # an existing directory; each job slot works i
 
 # [egress]                        # checks before anything is posted
 # deny_list = "~/.local/state/fridica/deny.txt"   # mode 0600: one pattern per line, case-insensitive;
-#                                   # a matching post is not sent and `fridica outbox` names the rule.
+#                                   # a matching post is not sent and `fridica outbox` names every rule it breaks.
 #                                   # Posts with AI attribution trailers are never sent.
 #                                   # A SIGN-OFF line is sent only for a PR's live head, and only
 #                                   # when the PR's title, body and commits pass the same checks.
