@@ -16,7 +16,7 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = { path = "crates/fridica-core", version = "0.1.0" }
+fridica-core = "0.1"
 fridica-agent = "0.2"
 fridica-slack = "0.2.3"
 anyhow = "1"
@@ -50,8 +50,4 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-
-# fridica-core lives here and changes with Fridica; release.py stamps only the
-[workspace]
-members = ["crates/fridica-core"]
 
