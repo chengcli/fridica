@@ -22,6 +22,7 @@ use std::{
 pub enum Operation {
     Issue { number: u64 },
     Pull { number: u64 },
+    Branch { name: String },
     Tree { head: String },
     Compare { base: String, head: String },
     Checks { head: String, page: usize },
@@ -83,6 +84,18 @@ pub fn repository(value: &str) -> bool {
 pub fn sha(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|v| v.is_ascii_hexdigit())
 }
+pub fn branch(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && !value.ends_with('.')
+        && !["..", "@{"].iter().any(|part| value.contains(*part))
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
+        && value
+            .bytes()
+            .all(|v| v.is_ascii_alphanumeric() || b"._-/".contains(&v))
+}
 fn encode(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
@@ -123,6 +136,12 @@ impl Request {
         let suffix = match &self.operation {
             Operation::Issue { number: n } => format!("issues/{}", number(*n)?),
             Operation::Pull { number: n } => format!("pulls/{}", number(*n)?),
+            Operation::Branch { name } => {
+                if !branch(name) {
+                    return Err(Failure::Invalid);
+                }
+                format!("git/ref/heads/{}", encode(name))
+            }
             Operation::Tree { head: h } => {
                 head(h)?;
                 format!("git/commits/{h}")

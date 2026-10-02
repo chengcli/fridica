@@ -390,6 +390,18 @@ impl fridica::github::client::Api for Heads {
                         .collect();
                     Ok(json!({"total_commits":commits.len(),"commits":commits}))
                 }
+                Operation::Branch { name } if name == "study/7" => {
+                    Ok(json!({"object":{"sha":self.0[0].1}}))
+                }
+                Operation::Branch { name } if name == "study/private" => {
+                    Ok(json!({"object":{"sha":self.0[1].1}}))
+                }
+                Operation::Tree { head } if head == self.0[0].1 => {
+                    Ok(json!({"message":"Study plan"}))
+                }
+                Operation::Tree { head } if head == self.0[1].1 => {
+                    Ok(json!({"message":"Jane Q. Private"}))
+                }
                 _ => Err(Failure::Invalid),
             }
         })
@@ -411,6 +423,11 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
             ("100.5", r#"{"repo":"owner/project"}"#),
             ("100.6", "{}"),
             ("100.7", r#"{"repo":"owner/project"}"#),
+            ("100.8", r#"{"repo":"local-alias"}"#),
+            ("100.9", r#"{"repo":"local-alias"}"#),
+            ("100.10", r#"{"repo":"local-alias"}"#),
+            ("100.11", "{}"),
+            ("100.12", "{}"),
         ] {
             c.execute(
                 "INSERT INTO threads(id,workspace,channel,root_ts,created,updated,context_json)
@@ -450,6 +467,31 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
             "100.7",
             format!("Sign-off #7 {head} approve, nice work"),
         ),
+        (
+            "explicit-repo",
+            "100.8",
+            format!("SIGN-OFF owner/project #7 {head} approve"),
+        ),
+        (
+            "branch",
+            "100.9",
+            format!("SIGN-OFF owner/project@study/7 #7 {head} approve"),
+        ),
+        (
+            "branch-target",
+            "100.10",
+            format!("TARGET owner/project@study/7 #7\nSIGN-OFF #7 {head} approve"),
+        ),
+        (
+            "target-only",
+            "100.11",
+            "TARGET example text, no sign-off".to_string(),
+        ),
+        (
+            "branch-stale",
+            "100.12",
+            "SIGN-OFF owner/project@study/7 #7 fedcba9876 approve".to_string(),
+        ),
     ] {
         let mut p = post(key, thread, "");
         p.text = text;
@@ -458,8 +500,19 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
     let fake = Arc::new(Fake::default());
     let d = dispatcher(&s, fake.clone(), Arc::new(ReplayClock::new(10.)));
     let heads = Heads(vec![(7, head, "Fix the solver", vec!["Fix the solver"])]);
-    assert_eq!(d.drain_with(10, None, Some(&heads)).await.unwrap(), 3);
-    assert_eq!(*fake.calls.lock().unwrap(), ["plain", "live", "full"]);
+    assert_eq!(d.drain_with(20, None, Some(&heads)).await.unwrap(), 7);
+    assert_eq!(
+        *fake.calls.lock().unwrap(),
+        [
+            "plain",
+            "live",
+            "full",
+            "explicit-repo",
+            "branch",
+            "branch-target",
+            "target-only"
+        ]
+    );
     let errors: Vec<String> = s
         .call(|c| {
             Ok(
@@ -476,7 +529,8 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
             "egress_signoff_stale_head",
             "egress_signoff_unverified",
             "egress_signoff_repo_unknown",
-            "egress_signoff_malformed"
+            "egress_signoff_malformed",
+            "egress_signoff_stale_head"
         ]
     );
     // Without a GitHub reader, a sign-off is never sent unverified.
@@ -484,7 +538,7 @@ async fn sign_off_lines_must_name_the_live_pr_head() {
     p.text = format!("SIGN-OFF #7 {head} approve");
     outbox::enqueue(&s, p, 11.).await.unwrap();
     assert_eq!(d.drain(10).await.unwrap(), 0);
-    assert_eq!(fake.calls.lock().unwrap().len(), 3);
+    assert_eq!(fake.calls.lock().unwrap().len(), 7);
 }
 
 #[tokio::test]
@@ -532,6 +586,19 @@ async fn a_sign_off_clears_only_a_pr_whose_text_passes_the_egress_gate() {
         p.text = format!("SIGN-OFF #{n} {sha} approve");
         outbox::enqueue(&s, p, 1.).await.unwrap();
     }
+    s.call(|c| {
+        c.execute(
+            "INSERT INTO threads(id,workspace,channel,root_ts,created,updated,context_json)
+             VALUES('TTEAM:CROOM:100.4','TTEAM','CROOM','100.4',1,1,'{}')",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let mut branch = post("branch", "100.4", "");
+    branch.text = format!("SIGN-OFF owner/project@study/private #4 {named} approve");
+    outbox::enqueue(&s, branch, 1.).await.unwrap();
     let fake = Arc::new(Fake::default());
     let d = dispatcher(&s, fake.clone(), Arc::new(ReplayClock::new(10.)));
     assert_eq!(
@@ -553,7 +620,8 @@ async fn a_sign_off_clears_only_a_pr_whose_text_passes_the_egress_gate() {
         errors,
         [
             "egress_signoff_pr_deny_list_1",
-            "egress_signoff_pr_ai_trailer"
+            "egress_signoff_pr_ai_trailer",
+            "egress_signoff_branch_deny_list_1"
         ]
     );
 }
