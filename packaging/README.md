@@ -129,10 +129,12 @@ and rehearse a snapshot on copies before touching the stopped production pair:
 ```
 
 Migration journals and backups support interrupted migration recovery. Repeat
-`migrate` to complete an interrupted operation. `--rollback` refuses after durable
-v6 mutations; do not bypass this guard or downgrade automatically. On the actual
-upgrade, omit rollback after checking the dry run. Never run both daemons against
-one DB.
+`migrate` to complete an interrupted operation, or run `--rollback` to restore the
+backup instead: it works after a completed upgrade and after a failed one (a
+`prepared` journal), but refuses once anything other than the migration itself has
+written to the database; do not bypass this guard or downgrade automatically. On the
+actual upgrade, omit rollback after checking the dry run. Never run both daemons
+against one DB.
 
 For explicit restoration after live mutations, first snapshot the stopped current
 pair, then restore the selected earlier snapshot into a **new** recovery directory.
