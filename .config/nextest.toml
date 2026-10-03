@@ -16,12 +16,13 @@ fail-fast = false
 # on a retry is still reported as flaky.
 retries = 1
 
-# An exhaustive test replays a large frozen GitHub corpus; it takes 3-5
-# minutes alone on a busy machine. Give it up to 20 minutes rather than 5.
+# Two exhaustive tests replay a large frozen GitHub corpus and every recorded
+# runtime tape; they take 3-6 minutes on a busy machine. Give them up to 20
+# minutes rather than 5.
 [[profile.default.overrides]]
-filter = 'test(frozen_github_state_projections_and_request_multisets_match)'
+filter = 'test(frozen_github_state_projections_and_request_multisets_match) | test(complete_ordered_runtime_tapes_replay_every_durable_column_without_exclusions)'
 slow-timeout = { period = "120s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
-filter = 'test(frozen_github_state_projections_and_request_multisets_match)'
+filter = 'test(frozen_github_state_projections_and_request_multisets_match) | test(complete_ordered_runtime_tapes_replay_every_durable_column_without_exclusions)'
 slow-timeout = { period = "120s", terminate-after = 10 }
