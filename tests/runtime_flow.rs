@@ -766,29 +766,20 @@ async fn usage_limits_wait_and_retry_instead_of_blocking_the_thread() {
         .lock()
         .unwrap()
         .push_back(Err(WorkerFailure {
-            kind: Failure::Execution,
-            code: "backend_rate_limited".into(),
+            kind: Failure::RateLimited {
+                retry_at: Some(5000),
+            },
+            code: "claude_rate_limited".into(),
             backend_session_id: "b".into(),
         }));
     h.intake(false).await;
     h.runtime.pass().await.unwrap();
-    let job = h.scalar("SELECT id FROM jobs").await;
-    h.store
-        .call(move |c| {
-            c.execute(
-                "INSERT INTO health_events(kind,details_json,created) VALUES('backend_rate_limited',?,20)",
-                [json!({"job_id":job,"resets_at":5000.0}).to_string()],
-            )?;
-            Ok(())
-        })
-        .await
-        .unwrap();
     h.finish(1, 1).await;
     h.runtime.pass().await.unwrap();
     assert_eq!(
         h.scalar("SELECT CAST(attempt AS TEXT)||' '||status||' '||error FROM jobs")
             .await,
-        "1 failed backend_rate_limited"
+        "1 failed claude_rate_limited"
     );
     assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
     assert_eq!(
@@ -4449,7 +4440,7 @@ async fn a_running_jobs_progress_notes_reach_the_thread_before_its_report() {
             vec![delegate()],
             false,
             file.clone(),
-            &format!("[progress]\ninterval={interval}\nchars=200"),
+            &format!("[limits]\nprogress_interval={interval}\nprogress_chars=200"),
             None,
         )
         .await;
@@ -4614,6 +4605,156 @@ async fn a_new_thread_sees_the_threads_it_links_to() {
     assert_eq!(
         linked[0]["decisions"],
         json!(["#269 needs a clean ctest before sign-off"])
+    );
+    h.runtime.close().await.unwrap();
+}
+
+/// Hand-offs (#108): a check-up thread hands a post to the linked thread it
+/// belongs in. That thread's own turn writes it, with the check-up's state
+/// attached; once delivered it settles the check-up's mention.
+#[tokio::test]
+async fn a_hand_off_posts_in_the_linked_thread_and_settles_the_asking_thread() {
+    let h = Harness::new(
+        vec![json!({"reply":{"text":"Reviewing snapy #269.","status":"complete"}})],
+        false,
+    )
+    .await;
+    let message = |event: &str, ts: &str, text: &str| Message {
+        files: vec![],
+        event_id: event.into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: ts.into(),
+        thread_ts: None,
+        sender: "UALICE".into(),
+        text: text.into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![],
+    };
+    let review = "1790927185.684379";
+    h.runtime
+        .intake(message(
+            "e1",
+            review,
+            "<@UOWNER> please review chengcli/snapy#269",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    h.runtime
+        .intake(message(
+            "e2",
+            "1790944278.167119",
+            "<@UOWNER> Hourly summary: your snapy #269 SIGN-OFF in thread 1790927185.684379, now.",
+        ))
+        .await
+        .unwrap();
+    let ask = h
+        .scalar("SELECT id FROM obligations WHERE session_id='TTEAM:CROOM:1790944278.167119'")
+        .await;
+    h.parent.responses.lock().unwrap().extend([
+        json!({"reply":{"text":"The #269 sign-off goes in its review thread.","status":"complete"},
+            "handoffs":[{"thread":review,"kind":"post","note":"Post the #269 sign-off here.","answers":[ask]}]}),
+        json!({"reply":{"text":"SIGN-OFF #269 abc1234 approve\nChecks passed on abc1234.","status":"complete"}}),
+    ]);
+    for _ in 0..3 {
+        h.runtime.pass().await.unwrap();
+    }
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3);
+    let trigger = &calls[2].trigger;
+    assert_eq!(trigger["kind"], "handoff");
+    assert_eq!(trigger["payload"]["from"], "1790944278.167119");
+    assert_eq!(trigger["payload"]["kind"], "post");
+    assert!(trigger["payload"]["context"]
+        .as_str()
+        .unwrap()
+        .contains("Hourly summary"));
+    assert_eq!(
+        h.scalar(&format!(
+            "SELECT text FROM outbox WHERE session_id='TTEAM:CROOM:{review}' ORDER BY id DESC LIMIT 1"
+        ))
+        .await,
+        "SIGN-OFF #269 abc1234 approve\nChecks passed on abc1234."
+    );
+    assert_eq!(
+        h.scalar(&format!("SELECT state FROM obligations WHERE id='{ask}'"))
+            .await,
+        "answered"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+/// A paused thread cannot act on a hand-off, so the parent may not hand one
+/// there: the action is invalid, and nothing is queued for that thread.
+#[tokio::test]
+async fn no_hand_off_goes_to_a_paused_thread() {
+    let h = Harness::new(
+        vec![json!({"reply":{"text":"Reviewing snapy #269.","status":"complete"}})],
+        false,
+    )
+    .await;
+    let message = |event: &str, ts: &str, text: &str| Message {
+        files: vec![],
+        event_id: event.into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: ts.into(),
+        thread_ts: None,
+        sender: "UALICE".into(),
+        text: text.into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![],
+    };
+    let review = "1790927185.684379";
+    h.runtime
+        .intake(message(
+            "e1",
+            review,
+            "<@UOWNER> please review chengcli/snapy#269",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    h.store
+        .call(|c| {
+            c.execute(
+                "UPDATE threads SET control='paused' WHERE root_ts='1790927185.684379'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let handoff = json!({"reply":{"text":"Handed over.","status":"complete"},
+        "handoffs":[{"thread":review,"kind":"context","note":"FYI","answers":[]}]});
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .extend([handoff.clone(), handoff]);
+    h.runtime
+        .intake(message(
+            "e2",
+            "1790944278.167119",
+            "<@UOWNER> status of snapy #269?",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls[1].session["linked_threads"][0]["control"], "paused");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='handoff'")
+            .await,
+        "0"
+    );
+    assert_eq!(
+        h.scalar("SELECT error FROM parent_turns ORDER BY id DESC LIMIT 1")
+            .await,
+        "parent_invalid_after_repair"
     );
     h.runtime.close().await.unwrap();
 }

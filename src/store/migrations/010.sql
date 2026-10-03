@@ -21,3 +21,5 @@ CREATE TABLE thread_links (
     PRIMARY KEY(session_id, target)
 );
 CREATE INDEX thread_links_target ON thread_links(target);
+-- When a job stopped by the backend's usage limit may run again (#107).
+ALTER TABLE jobs ADD COLUMN retry_at REAL;

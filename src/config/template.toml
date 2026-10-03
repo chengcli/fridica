@@ -33,10 +33,8 @@ max_jobs = 4                      # worker jobs running at once across all machi
 job_timeout = 14400
 worker_idle = 1800                # seconds an idle worker process is kept for follow-ups
 worker_context_chars = 12000      # thread context a forked worker starts with
-
-# [progress]                      # notes a worker appends to its progress file, posted while its job runs
-# interval = 120                  # seconds between reads; 0 turns progress notes off
-# chars = 1500                    # longest note posted
+progress_interval = 120           # seconds between reads of a running job's progress notes; 0 turns them off
+progress_chars = 1500             # longest progress note posted
 
 [attention]
 max_echo_replies_per_hour = 10     # peer-triggered replies

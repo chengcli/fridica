@@ -883,7 +883,7 @@ async fn a_rate_limited_debrief_is_retried_later() {
     );
     assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Idle);
     let clock = Arc::new(ReplayClock::new(
-        20. + fridica::threads::actor::RATE_LIMIT_RETRY,
+        20. + fridica::core::failure::RATE_LIMIT_RETRY,
     ));
     let a = Actor {
         clock,

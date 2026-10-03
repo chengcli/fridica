@@ -5,7 +5,9 @@ use crate::{
     attention::{self, Answer, Capacity},
     config::{Attention, Config},
     core::{
-        parent::{Decision, Disposition, NoteKind, Parent, ParentRequest, ReplyStatus},
+        parent::{
+            Decision, Disposition, HandoffKind, NoteKind, Parent, ParentRequest, ReplyStatus,
+        },
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
@@ -154,6 +156,7 @@ impl<P: Parent> Actor<P> {
                 | "obligation_due"
                 | "worker_result"
                 | "worker_interrupted"
+                | "handoff"
         ) {
             let outcome = settle(
                 &self.store,
@@ -210,6 +213,13 @@ impl<P: Parent> Actor<P> {
                 .unwrap_or("human")
         } else if kind == "owner_instruction" {
             "owner"
+        } else if kind == "handoff" {
+            // The class of the turn that handed off, so reply limits still hold.
+            match request.trigger["payload"]["class"].as_str() {
+                Some("owner") => "owner",
+                Some("human") => "human",
+                _ => "peer",
+            }
         } else if kind == "obligation_due" {
             if request.trigger["source_peer"] == true {
                 "peer"
@@ -406,7 +416,7 @@ impl<P: Parent> Actor<P> {
         .await
     }
     /// The parent hit its backend's usage limit (#107). That is temporary:
-    /// the item stays pending and is retried after `RATE_LIMIT_RETRY`, the
+    /// the item stays pending and is retried after `failure::RATE_LIMIT_RETRY`, the
     /// thread is neither blocked nor marked for owner review, and nothing is
     /// posted. The call is kept in `parent_turns` with its error.
     async fn retry_later(
@@ -423,16 +433,16 @@ impl<P: Parent> Actor<P> {
             // The whole turn is redone later, so only the refused call and any
             // triage are kept: an earlier decide that failed validation must not
             // read as a later, successful one (it would clear owner review).
-            for call in calls.iter().filter(|c| c["failure"]["code"]==crate::parent::cli::RATE_LIMITED || c["request"]["call"]=="triage") {
+            for call in calls.iter().filter(|c| c["failure"]["code"]==super::failure::RATE_LIMITED || c["request"]["call"]=="triage") {
                 let mut context=call["request"].clone();
                 if let Some(code)=call["failure"]["code"].as_str() {context["failure"]=json!(code);}
-                let error=if call["failure"]["code"]==crate::parent::cli::RATE_LIMITED {crate::parent::cli::RATE_LIMITED} else {""};
+                let error=if call["failure"]["code"]==super::failure::RATE_LIMITED {super::failure::RATE_LIMITED} else {""};
                 tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,'{}',?,?,?,?)",
                     params![session,id,call["request"]["call"].as_str(),call["response"].to_string(),context.to_string(),error,call["created"].as_f64()])?;
             }
             if current {
-                tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![now+RATE_LIMIT_RETRY,id])?;
-                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.rate_limited',?,?)",params![now,session,json!({"inbox_id":id,"retry_at":now+RATE_LIMIT_RETRY}).to_string()])?;
+                tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![now+super::failure::RATE_LIMIT_RETRY,id])?;
+                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.rate_limited',?,?)",params![now,session,json!({"inbox_id":id,"retry_at":now+super::failure::RATE_LIMIT_RETRY}).to_string()])?;
             } else {
                 tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
             }
@@ -485,14 +495,21 @@ impl<P: Parent> Actor<P> {
     }
 }
 
-/// How long a parent turn waits after its backend's usage limit (#107). A
-/// refused call costs nothing, so a fixed short wait reaches the reset soon
-/// after it without parsing the backend's wording.
-pub const RATE_LIMIT_RETRY: f64 = 600.;
+/// Characters of the source thread's state a hand-off carries.
+const HANDOFF_CONTEXT: usize = 6000;
+/// A turn started by a hand-off of this many hops hands off no further.
+const MAX_HANDOFF_HOPS: u64 = 2;
+fn handoff_hop(request: &ParentRequest) -> u64 {
+    if request.trigger["kind"] == "handoff" {
+        request.trigger["payload"]["hop"].as_u64().unwrap_or(1)
+    } else {
+        0
+    }
+}
 fn rate_limited(calls: &[Value]) -> bool {
     calls
         .last()
-        .is_some_and(|call| call["failure"]["code"] == crate::parent::cli::RATE_LIMITED)
+        .is_some_and(|call| call["failure"]["code"] == super::failure::RATE_LIMITED)
 }
 
 async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> {
@@ -626,6 +643,46 @@ fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> 
             bail!("invalid extracted ask");
         }
     }
+    // Hand-offs (#108) go only to linked threads, at most once per thread, and
+    // a turn a hand-off started never hands back to where it came from.
+    // A paused thread cannot act on a hand-off, so none goes there.
+    let linked: HashSet<&str> = request.session["linked_threads"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["control"] == "active")
+        .filter_map(|t| t["thread"].as_str())
+        .collect();
+    let came_from = (request.trigger["kind"] == "handoff")
+        .then(|| request.trigger["payload"]["from"].as_str())
+        .flatten();
+    let mut targets = HashSet::new();
+    if decision.handoffs.len() > 3 {
+        bail!("at most 3 hand-offs per turn");
+    }
+    if !decision.handoffs.is_empty() && handoff_hop(request) >= MAX_HANDOFF_HOPS {
+        bail!("a chain of hand-offs stops after {MAX_HANDOFF_HOPS} hops");
+    }
+    for handoff in &decision.handoffs {
+        if !linked.contains(handoff.thread.as_str()) || !targets.insert(handoff.thread.as_str()) {
+            bail!("a hand-off must target a distinct, active linked thread");
+        }
+        if came_from == Some(handoff.thread.as_str()) {
+            bail!("a hand-off cannot go back to the thread it came from");
+        }
+        let note = handoff.note.trim();
+        if note.is_empty() || note.chars().count() > 2000 {
+            bail!("a hand-off needs a note of at most 2000 characters");
+        }
+        if !handoff.answers.is_empty() && handoff.kind != HandoffKind::Post {
+            bail!("only a post hand-off can answer obligations");
+        }
+        for id in &handoff.answers {
+            if !known.contains(id.as_str()) || !addressed.insert(id.as_str()) {
+                bail!("unknown or duplicate hand-off obligation");
+            }
+        }
+    }
     Ok(decision)
 }
 
@@ -741,6 +798,17 @@ async fn commit(
                 let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
                     thread_ts:request.session["root_ts"].as_str().context("missing root timestamp")?.into(),text:reply.text.clone(),obligations:reply.answers.clone(),inbox:id};
                 let post=attention::queue_answer_tx(&tx,&answer,now)?;
+                // A post a hand-off asked for settles the source thread's asks
+                // it names once delivered (#108).
+                // A blocked notice settles nothing, here or there.
+                if request.trigger["kind"]=="handoff" && !matches!(reply.status,ReplyStatus::Blocked) {
+                    let from=request.trigger["payload"]["from_session"].as_str().unwrap_or("");
+                    for obligation in request.trigger["payload"]["answers"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                        if tx.execute("UPDATE obligations SET state='awaiting_delivery',updated=? WHERE id=? AND session_id=? AND state IN ('open','deferred')",params![now,obligation,from])?==1 {
+                            tx.execute("INSERT OR IGNORE INTO obligation_posts VALUES(?,?)",params![obligation,post])?;
+                        }
+                    }
+                }
                 // A report names the worker(s) it reports on, failed ones first.
                 let worker=if is_result {
                     let results=request.trigger["results"].as_array().cloned().unwrap_or_default();
@@ -776,6 +844,26 @@ async fn commit(
             tx.execute("UPDATE threads SET context_json=json_patch(context_json,?) WHERE id=?",params![work.context.to_string(),session])?;
         }
         super::effects::commit(&tx,&decision,&session,id,now)?;
+        // Hand-offs (#108): the target thread's own turn acts on each, with
+        // this thread's state as of this turn attached as a fork bundle.
+        if !decision.handoffs.is_empty() {
+            let class:String=tx.query_row("SELECT COALESCE((SELECT trigger_class FROM reply_reservations WHERE inbox_id=?),'peer')",[id],|r|r.get(0))?;
+            let (workspace,channel)=(request.session["workspace"].as_str().unwrap_or(""),request.session["channel"].as_str().unwrap_or(""));
+            for (index,handoff) in decision.handoffs.iter().enumerate() {
+                let target=format!("{workspace}:{channel}:{}",handoff.thread);
+                // This thread's state for the target, without the target's own.
+                let mut source=request.clone();
+                if let Some(linked)=source.session["linked_threads"].as_array_mut() {linked.retain(|t|t["thread"]!=handoff.thread.as_str());}
+                let bundle=crate::core::fork::render(&crate::core::fork::snapshot(&source,&decision,HANDOFF_CONTEXT));
+                let payload=json!({"from":request.session["root_ts"],"from_session":session,"kind":handoff.kind,"note":handoff.note.trim(),
+                    "answers":handoff.answers,"class":class,"hop":handoff_hop(&request)+1,"context":bundle});
+                let queued=tx.execute("INSERT OR IGNORE INTO thread_inbox(session_id,kind,ref,payload_json,created,dedup_key)
+                    SELECT ?,'handoff',?,?,?,? WHERE EXISTS(SELECT 1 FROM threads WHERE id=? AND control='active')",
+                    params![target,session,payload.to_string(),now,format!("handoff:{id}:{index}"),target])?;
+                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'parent','thread.handoff',?,?)",
+                    params![now,target,json!({"from":session,"inbox_id":id,"kind":handoff.kind,"queued":queued==1}).to_string()])?;
+            }
+        }
         for disposition in &decision.dispositions {
             let (state,due)=match disposition {Disposition::Declined{..}=>("declined",None),Disposition::Deferred{until,..}=>("deferred",Some(*until))};
             if tx.execute("UPDATE obligations SET state=?,state_json=?,due=COALESCE(?,due),updated=? WHERE id=? AND session_id=? AND state IN ('open','deferred')",

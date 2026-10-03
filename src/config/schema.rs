@@ -72,29 +72,6 @@ impl Egress {
         self == &Self::default()
     }
 }
-/// Interim progress notes posted while a job runs (#105). Fridica's own
-/// section until these join `limits` in the next fridica-core release.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Progress {
-    /// Seconds between reads of a running job's progress file; 0 turns notes off.
-    pub interval: f64,
-    /// Characters per posted note; longer notes are cut with a marker.
-    pub chars: usize,
-}
-impl Default for Progress {
-    fn default() -> Self {
-        Self {
-            interval: 120.,
-            chars: 1500,
-        }
-    }
-}
-impl Progress {
-    pub fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
     pub path: PathBuf,
@@ -117,8 +94,6 @@ pub struct Config {
     pub placement: Placement,
     #[serde(default, skip_serializing_if = "Egress::is_default")]
     pub egress: Egress,
-    #[serde(default, skip_serializing_if = "Progress::is_default")]
-    pub progress: Progress,
     pub path: PathBuf,
     pub fingerprint: String,
 }

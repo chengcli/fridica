@@ -44,10 +44,16 @@ pub(super) fn views(c: &Connection, session: &str) -> Result<Vec<Value>> {
         .collect::<rusqlite::Result<_>>()?;
     let mut views = vec![];
     for (id, items, referenced, references_this) in rows {
-        let (root_ts, status, summary, decisions): (String, String, String, String) = c.query_row(
-            "SELECT root_ts,status,summary,decisions_json FROM threads WHERE id=?",
+        let (root_ts, status, summary, decisions, control): (
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = c.query_row(
+            "SELECT root_ts,status,summary,decisions_json,control FROM threads WHERE id=?",
             [&id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
         let decisions: Vec<String> = serde_json::from_str::<Vec<String>>(&decisions)
             .unwrap_or_default()
@@ -104,7 +110,7 @@ pub(super) fn views(c: &Connection, session: &str) -> Result<Vec<Value>> {
             .unwrap_or_default();
         let items: Vec<&str> = items.split(',').filter(|s| !s.is_empty()).collect();
         views.push(json!({
-            "thread":root_ts,"status":status,"root":cut(&root,300),
+            "thread":root_ts,"status":status,"control":control,"root":cut(&root,300),
             "linked_by":{"shared_items":items,"this_thread_refers_to_it":referenced,"it_refers_to_this_thread":references_this},
             "summary":cut(&summary,600),"notes":cut(&notes.to_string(),600),"decisions":decisions,
             "open_asks":asks,"jobs":jobs,"latest_messages":messages,

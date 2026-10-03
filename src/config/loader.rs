@@ -80,7 +80,6 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             "isolation",
             "placement",
             "egress",
-            "progress",
         ],
         "top level",
     )?;
@@ -262,12 +261,11 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         }
     }
     let isolation: super::isolation::Settings = decode(root.get("isolation"))?;
-    let progress: super::schema::Progress = decode(root.get("progress"))?;
-    if !progress.interval.is_finite() || progress.interval < 0. {
-        bail!("progress.interval must be 0 (off) or a positive number of seconds");
+    if !limits.progress_interval.is_finite() || limits.progress_interval < 0. {
+        bail!("limits.progress_interval must be 0 (off) or a positive number of seconds");
     }
-    if !(200..=6000).contains(&progress.chars) {
-        bail!("progress.chars must be between 200 and 6000");
+    if !(200..=6000).contains(&limits.progress_chars) {
+        bail!("limits.progress_chars must be between 200 and 6000");
     }
     let config = Config {
         owner,
@@ -285,7 +283,6 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         isolation,
         placement,
         egress,
-        progress,
         path,
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };

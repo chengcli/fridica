@@ -807,7 +807,7 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
         }
         brief.push_str(&prepared);
         // Progress notes (#105): each attempt writes its own file.
-        let watching = t.config.progress.interval > 0.;
+        let watching = t.config.limits.progress_interval > 0.;
         let progress_file = super::artifacts::progress_file(&t.job);
         if watching {
             brief.push_str(&format!(
@@ -936,13 +936,13 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
 /// delay a result, an interrupt or a timeout. A failed read or store write
 /// skips one round; progress never fails a job.
 async fn poll_progress(t: &Task, file: String, mut tracker: Tracker) -> std::convert::Infallible {
-    let every = Duration::from_secs_f64(t.config.progress.interval);
+    let every = Duration::from_secs_f64(t.config.limits.progress_interval);
     loop {
         tokio::time::sleep(every).await;
         let Some(contents) = t.io.progress(t.spec.clone(), file.clone()).await else {
             continue;
         };
-        if let Some(note) = tracker.take(&contents, t.config.progress.chars) {
+        if let Some(note) = tracker.take(&contents, t.config.limits.progress_chars) {
             let _ = work::progress(
                 &t.store,
                 t.job.id.clone(),

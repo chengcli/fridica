@@ -411,6 +411,7 @@
               "decisions": [],
               "delegations": [],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -718,6 +719,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -1028,6 +1030,7 @@
               "decisions": [],
               "delegations": [],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -1335,6 +1338,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",

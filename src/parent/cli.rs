@@ -72,9 +72,6 @@ pub fn command(
     }
     Ok(argv)
 }
-/// The failure code of a parent call refused by the backend's usage limit
-/// (#107): temporary, so the turn is retried later rather than blocked.
-pub const RATE_LIMITED: &str = "parent_rate_limited";
 /// Whether Claude's result envelope reports a usage limit (HTTP 429); the
 /// CLI then exits non-zero with the reason only in this envelope.
 pub fn rate_limited(backend: &str, output: &[u8]) -> bool {

@@ -444,7 +444,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -522,9 +522,8 @@ dependencies = [
 
 [[package]]
 name = "fridica-agent"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0d1ee4ae96c112a8314b7171e760dc0d6d0b71006e06e81c1aae7c3fc7d90f3"
+version = "0.3.1"
+source = "git+https://github.com/chengcli/fridica-agent?rev=fc1c6697d61f8853b3c8b8221af1146d351e68c4#fc1c6697d61f8853b3c8b8221af1146d351e68c4"
 dependencies = [
  "serde",
  "serde_json",
@@ -533,9 +532,9 @@ dependencies = [
 
 [[package]]
 name = "fridica-core"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efb655d763c851620b59c47afa9bd9fd9b907b58fbc6ca924b6991556d367f9c"
+checksum = "f55789bb3e88f56327800a2ae3eedc1fd04f2068221dc66b034bc354e44346b7"
 dependencies = [
  "anyhow",
  "regex",
@@ -1318,7 +1317,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1531,7 +1530,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1860,10 +1859,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

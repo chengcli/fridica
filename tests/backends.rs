@@ -431,56 +431,36 @@ async fn backend_exits_and_refusals_have_truthful_codes_without_private_text() {
     assert!(!error.code.contains("PRIVATE"));
     h.worker.close().await.unwrap();
 }
-/// A Claude turn stopped by the usage limit is named as such (#107), and the
-/// recorded wire leaves the limit's reset time for the job's result; a later
-/// ordinary failure on the same worker is not mistaken for one.
+/// A Claude turn stopped by the usage limit is a `RateLimited` failure with
+/// the limit's reset time (#107, from fridica-agent); a later ordinary failure
+/// on the same worker is not mistaken for one.
 #[tokio::test]
-async fn a_usage_limit_is_named_and_its_reset_time_recorded() {
+async fn a_usage_limit_is_a_rate_limited_failure_with_its_reset_time() {
     let h = Harness::new("claude", BTreeMap::new(), 30.);
     let error = h
         .run("LIMIT", "", Arc::new(DenyApprovals))
         .await
         .err()
         .unwrap();
-    assert_eq!(error.kind, Failure::Execution);
-    assert_eq!(error.code, "backend_rate_limited");
+    assert_eq!(
+        (error.kind, error.code.as_str()),
+        (
+            Failure::RateLimited {
+                retry_at: Some(1790973000)
+            },
+            "claude_rate_limited"
+        )
+    );
     let error = h
         .run("FAIL", "", Arc::new(DenyApprovals))
         .await
         .err()
         .unwrap();
-    assert_eq!(error.code, "claude_job_failed");
+    assert_eq!(
+        (error.kind, error.code.as_str()),
+        (Failure::Execution, "claude_job_failed")
+    );
     h.worker.close().await.unwrap();
-
-    let dir = tempfile::tempdir().unwrap();
-    let store = fridica::store::Store::open(dir.path().join("db"))
-        .await
-        .unwrap();
-    let recorder = fridica::workers::jsonl::StoreWireRecorder {
-        store: store.clone(),
-        clock: Arc::new(fridica::core::time::ReplayClock::new(5.)),
-    };
-    let events = h.wire.0.lock().unwrap().clone();
-    for e in events {
-        recorder
-            .record(e["context"].clone(), e["event"].clone())
-            .await
-            .unwrap();
-    }
-    let rows: Vec<String> = store
-        .call(|c| {
-            Ok(c.prepare(
-                "SELECT details_json FROM health_events WHERE kind='backend_rate_limited'",
-            )?
-            .query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<_>>()?)
-        })
-        .await
-        .unwrap();
-    assert_eq!(rows.len(), 1);
-    let details: Value = serde_json::from_str(&rows[0]).unwrap();
-    assert_eq!(details["job_id"], "j1");
-    assert_eq!(details["resets_at"], 1790973000.0);
 }
 
 impl Harness {

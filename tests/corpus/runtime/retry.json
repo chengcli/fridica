@@ -218,6 +218,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -374,6 +375,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -473,6 +475,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -629,6 +632,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -1051,6 +1055,7 @@
             "queued_at": 20.0,
             "reported": 0,
             "result_json": null,
+            "retry_at": null,
             "retry_of": "",
             "session_id": "TTEAM:CROOM:100.1",
             "snapshot_json": {
@@ -1078,6 +1083,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -1242,6 +1248,7 @@
                 }
               ],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "",
@@ -1587,6 +1594,7 @@
                   }
                 ],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -1648,6 +1656,7 @@
                         "ts": "100.1"
                       }
                     ],
+                    "linked": [],
                     "notes": {},
                     "reply": "Running checks.",
                     "results": [],
@@ -2054,6 +2063,7 @@
             "queued_at": 20.0,
             "reported": 0,
             "result_json": null,
+            "retry_at": null,
             "retry_of": "job-0000000000000005",
             "session_id": "TTEAM:CROOM:100.1",
             "snapshot_json": {
@@ -2081,6 +2091,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -2245,6 +2256,7 @@
                 }
               ],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "",
@@ -2590,6 +2602,7 @@
                   }
                 ],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -2651,6 +2664,7 @@
                         "ts": "100.1"
                       }
                     ],
+                    "linked": [],
                     "notes": {},
                     "reply": "Running checks.",
                     "results": [],
@@ -3095,6 +3109,7 @@
               "unresolved": [],
               "validation": []
             },
+            "retry_at": null,
             "retry_of": "job-0000000000000005",
             "session_id": "TTEAM:CROOM:100.1",
             "snapshot_json": {
@@ -3122,6 +3137,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -3351,6 +3367,7 @@
                 }
               ],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "",
@@ -3696,6 +3713,7 @@
                   }
                 ],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -3757,6 +3775,7 @@
                         "ts": "100.1"
                       }
                     ],
+                    "linked": [],
                     "notes": {},
                     "reply": "Running checks.",
                     "results": [],
@@ -4208,6 +4227,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -4636,6 +4656,7 @@
               "unresolved": [],
               "validation": []
             },
+            "retry_at": null,
             "retry_of": "job-0000000000000005",
             "session_id": "TTEAM:CROOM:100.1",
             "snapshot_json": {
@@ -4663,6 +4684,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -4892,6 +4914,7 @@
                 }
               ],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "",
@@ -5237,6 +5260,7 @@
                   }
                 ],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -5298,6 +5322,7 @@
                         "ts": "100.1"
                       }
                     ],
+                    "linked": [],
                     "notes": {},
                     "reply": "Running checks.",
                     "results": [],
@@ -5749,6 +5774,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -6177,6 +6203,7 @@
               "unresolved": [],
               "validation": []
             },
+            "retry_at": null,
             "retry_of": "job-0000000000000005",
             "session_id": "TTEAM:CROOM:100.1",
             "snapshot_json": {
@@ -6204,6 +6231,7 @@
                   "ts": "100.1"
                 }
               ],
+              "linked": [],
               "notes": {},
               "reply": "Running checks.",
               "results": [],
@@ -6433,6 +6461,7 @@
                 }
               ],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "",
@@ -6778,6 +6807,7 @@
                   }
                 ],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",
@@ -6839,6 +6869,7 @@
                         "ts": "100.1"
                       }
                     ],
+                    "linked": [],
                     "notes": {},
                     "reply": "Running checks.",
                     "results": [],
@@ -7290,6 +7321,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "",

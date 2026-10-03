@@ -597,10 +597,10 @@ Alice:   can you fix snowy and rerun?
 - **Progress while a job runs.** For a long job, a worker appends short notes to a
   progress file its brief names (one per job attempt, `progress-<job>-<attempt>.md`
   in its working folder) as stages finish. Fridica reads the file every
-  `[progress] interval` seconds (default 120; 0 turns this off) and posts each new
-  note to the thread, cut to `chars` (default 1500). Notes come before the final
-  report, pass the same egress checks, and need no parent call; the parent sees the
-  latest note of each running job.
+  `limits.progress_interval` seconds (default 120; 0 turns this off) and posts each
+  new note to the thread, cut to `limits.progress_chars` (default 1500). Notes come
+  before the final report, pass the same egress checks, and need no parent call; the
+  parent sees the latest note of each running job.
 - **Threads know their neighbours.** A check-up posted as a new thread ("Hourly
   summary: #269, your sign-off in thread 1790927185.684379") is answered with the
   state of the threads it points at. Fridica links threads of one channel when a
@@ -610,7 +610,14 @@ Alice:   can you fix snowy and rerun?
   with their progress, and latest messages. A shared number links two threads only
   when both mentioned it within 14 days, and never across differently named
   repositories. Links never cross channels, archived, closed and cleaned threads are
-  left out, and on upgrade the last week of messages is linked once.
+  left out, and on upgrade the last week of messages is linked once. A worker
+  delegated from such a thread inherits the linked threads' state too.
+- **Hand-offs.** When something belongs in a linked thread (a sign-off asked for in
+  a check-up, say), the parent hands it there instead of posting it in the wrong
+  place: that thread's own turn writes the post, with the asking thread's state
+  attached, and the asking thread gets a short pointer. A posted hand-off settles
+  the asks it names once delivered. At most three per turn, only to linked threads,
+  never straight back, and a chain stops after two hops.
 - **Debrief.** When the parent marks a discussion finished, a debrief is posted to
   the channel.
 - **Several owners' Fridicas in one thread.** Every post carries metadata:
@@ -714,9 +721,9 @@ versioned `migrations/`) is the only code that runs DDL.
   - Pending approvals expire.
   - Posts that may have been sent become `ambiguous`.
 - **Backend usage limits are temporary:**
-  - A job stopped by the backend's usage limit fails as `backend_rate_limited` on its
-    first attempt instead of being retried into the same limit. Its result tells the
-    parent when the limit resets.
+  - A job stopped by the backend's usage limit fails as `claude_rate_limited` or
+    `codex_rate_limited` on its first attempt instead of being retried into the same
+    limit. Its result tells the parent when the limit resets, when the backend said.
   - A parent call refused by the limit (`parent_rate_limited`) leaves its inbox item
     pending and retries it 10 minutes later. The thread is not blocked and needs no
     owner review.
