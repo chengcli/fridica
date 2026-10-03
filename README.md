@@ -347,6 +347,9 @@ scratch = "/scratch/me0/me"
 
 [state]
 path = "~/.local/state/fridica/state.sqlite3"
+archive_after_days = 7             # quiet, finished threads move to weekly archives; 0 keeps them
+archive_events_after_hours = 24    # completed replay events move sooner; 0 keeps them
+record = "summary"                 # Slack responses as outcome and shape; "full" keeps bodies
 # control_socket = "…"               # default: beside the state database, or a short runtime path
 ```
 
@@ -452,6 +455,12 @@ Only text under `##` headings reaches a model:
 | any other `##` section | given to both the parent and the workers (the packaged `## Repo rules` is an example) |
 
 Missing optional sections fall back to the packaged ones.
+
+The fixed instructions Fridica adds around the contract are packaged too, in
+[`assets/prompts`](assets/prompts): the parent's action rules
+(`parent-action.md`), the triage and debrief answer formats, and the
+untrusted-data line that closes every parent and worker prompt. They are not
+read from `config.toml`'s directory; changing them is a pull request.
 
 ## Repository list
 
@@ -670,6 +679,9 @@ fridica instruct ai-human-plume "Approve cloning compressible_plume for this run
 fridica files list '#ai-human-plume:1790790458.842149'   # a thread's Slack files
 fridica files get F0ABC123 --out ~/Downloads               # save one text file
 fridica events --since 0 [--follow]      # what the daemon sees and decides, one JSON object per line
+fridica archive search "ctest baseline"  # archived threads containing the text (reads the archives)
+fridica archive restore TEAM:CHANNEL:TS  # bring one back; a new message in it does that by itself
+fridica dashboard [--port N]             # the control-room page on 127.0.0.1, with a key per run
 ```
 
 `events` is a versioned feed with a cursor, for your own tools to follow Fridica
@@ -685,9 +697,13 @@ client, so your other tools never handle the Slack token. It writes the exact by
 never overwrites an existing file, prints the path and SHA-256, and posts nothing,
 so it works in observe-only mode too.
 
-The dashboard's page (`assets/dashboard/`) is embedded in the binary
-(`fridica assets --export DIR`); serving it from the v0.4 daemon is not implemented
-yet. The v0.3 Python server that served it was removed with the v0.3 sources.
+`fridica dashboard` serves the control-room page (`assets/dashboard/`, embedded in
+the binary) on `127.0.0.1` for the running daemon and prints its URL. The URL carries
+a fresh key for this run in its fragment; every API call must present it, and only
+requests addressed to that loopback host are answered. Calls go through the
+daemon's owner-only control socket, so the page can do what the CLI can: read
+threads, workers, jobs and posts, send instructions, decide approvals, retry posts
+and edit the parent and limits settings. Stop it with Ctrl-C.
 
 ## State, recovery, and guarantees
 
@@ -720,6 +736,22 @@ versioned `migrations/`) is the only code that runs DDL.
     `auto_resume` reruns them once, continuing their sessions.
   - Pending approvals expire.
   - Posts that may have been sent become `ambiguous`.
+- **Weekly archives keep the live database small.** A thread that finished (nothing
+  queued, running, unanswered or unsent, and not paused) and stayed quiet for
+  `state.archive_after_days` (default 7) moves, with every row it owns, into an archive
+  file for its week beside the database (`state.sqlite3.archive/2026-W40.sqlite3`).
+  Completed replay events move after `state.archive_events_after_hours` (default 24);
+  pending ones never do (nor the newest, nor records a feature looks up by key), so
+  `fridica events --since` reaches back about a day before archived events. A new
+  message in an archived thread brings it back, with its
+  history, before it is handled; `fridica archive search` finds archived threads by
+  their text and `fridica archive restore` brings one back by hand. Rows are written
+  to the archive before they leave the live database, and `fridica migrate` switches
+  the database to incremental vacuum once so the freed space is returned.
+- **The replay ledger keeps summaries of its bulkiest records.** Slack responses are
+  kept as their outcome and shape (counts, first and last timestamps, cursors), not
+  their bodies; new messages are stored as messages anyway. Backend traffic is kept
+  as text. `state.record = "full"` keeps whole Slack bodies for debugging an incident.
 - **Backend usage limits are temporary:**
   - A job stopped by the backend's usage limit fails as `claude_rate_limited` or
     `codex_rate_limited` on its first attempt instead of being retried into the same

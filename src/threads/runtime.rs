@@ -45,6 +45,10 @@ struct Snapshot<P: Parent> {
     config: Arc<Config>,
     manager: Arc<Manager<P>>,
 }
+/// Seconds between archive rounds, and what one round moves at most.
+const ARCHIVE_INTERVAL: f64 = 60.;
+const ARCHIVE_THREADS: usize = 20;
+const ARCHIVE_EVENTS: usize = 1000;
 pub struct Runtime<P: Parent, D: Delivery> {
     store: Store,
     snapshot: RwLock<Snapshot<P>>,
@@ -58,6 +62,8 @@ pub struct Runtime<P: Parent, D: Delivery> {
     /// Owner-side reads of Slack text files (`fridica files get`).
     files: Option<Arc<dyn crate::slack::files::Downloader>>,
     pass: Mutex<()>,
+    /// When the last archive round ran (#114).
+    archived: std::sync::Mutex<f64>,
 }
 impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     /// Lets owner controls read Slack text files through this client.
@@ -152,6 +158,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             machine_load: adapters.machine_load,
             files: None,
             pass: Mutex::new(()),
+            archived: std::sync::Mutex::new(f64::NEG_INFINITY),
         })
     }
     pub fn store(&self) -> Store {
@@ -384,10 +391,57 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         let deny = self.config().egress.deny_list.clone();
         let delivered = self.dispatcher.drain_checked(100, deny.as_deref()).await?;
         let started = self.supervisor.schedule().await?.len();
+        self.archive().await?;
         Ok(Progress {
             turns,
             started,
             delivered,
+        })
+    }
+    /// Move quiet threads and old completed events to their weekly archives
+    /// (#114), at most once a minute and in small rounds, so the live database
+    /// stays small without stalling the database thread.
+    pub async fn archive(&self) -> Result<crate::store::archive::Round> {
+        let now = self.clock.now();
+        {
+            let mut last = self.archived.lock().unwrap();
+            if now - *last < ARCHIVE_INTERVAL {
+                return Ok(Default::default());
+            }
+            *last = now;
+        }
+        let config = self.config();
+        let db = config.state.path.clone();
+        let limits = crate::store::archive::Limits {
+            threads_after: config.state.archive_after_days * 86400.,
+            threads: ARCHIVE_THREADS,
+            events_after: config.state.archive_events_after_hours * 3600.,
+            events: ARCHIVE_EVENTS,
+        };
+        let result = self
+            .store
+            .call(move |c| crate::store::archive::round(c, &db, now, limits))
+            .await;
+        // Archiving is housekeeping: a failure (a full disk, an unwritable or
+        // damaged archive) is noted for the owner, at most hourly, and never
+        // stops the daemon's work.
+        Ok(match result {
+            Ok(round) => round,
+            Err(error) => {
+                let details = serde_json::json!({"error":error.to_string()}).to_string();
+                let _ = self
+                    .store
+                    .call(move |c| {
+                        c.execute(
+                            "INSERT INTO health_events(kind,details_json,created) SELECT 'archive_failed',?,?
+                             WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='archive_failed' AND created>?)",
+                            rusqlite::params![details, now, now - 3600.],
+                        )?;
+                        Ok(())
+                    })
+                    .await;
+                Default::default()
+            }
         })
     }
     pub async fn close(&self) -> Result<()> {

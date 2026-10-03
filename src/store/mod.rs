@@ -1,11 +1,13 @@
 //! One bounded queue and one dedicated SQLite thread; callers never share a connection.
 pub mod approvals;
+pub mod archive;
 pub mod configuration;
 pub mod diagnostics;
 pub mod fetch;
 pub mod links;
 pub mod migration;
 pub mod outbox;
+pub mod record;
 pub mod schema;
 pub mod work;
 pub mod worker_controls;

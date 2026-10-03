@@ -85,6 +85,8 @@ pub(crate) fn intake_tx(
         .parse::<ThreadId>()
         .map_err(anyhow::Error::msg)?;
     let session = msg.session_id();
+    // A message in an archived thread brings the thread back first (#114).
+    crate::store::archive::revive_or_note(c, &session, now)?;
     let mentioned = msg.text.contains(&format!("<@{owner}>"));
     let mut work = true;
     let mut created = now;

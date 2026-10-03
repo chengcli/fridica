@@ -355,6 +355,14 @@ fn migrate_with_checkpoint(
     journal.phase = "complete".into();
     atomic_write(&journal_path, &serde_json::to_vec_pretty(&journal)?)?;
     checkpoint("complete")?;
+    // Archiving (#114) returns freed pages incrementally; an older database
+    // switches over once, here, with the daemon stopped and the backup taken.
+    // VACUUM rewrites the file without changing its rows or their count.
+    let c = Connection::open(&database)?;
+    let mode: i64 = c.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))?;
+    if mode != 2 {
+        c.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; VACUUM;")?;
+    }
     Ok(plan)
 }
 

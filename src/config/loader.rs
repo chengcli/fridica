@@ -191,7 +191,42 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     number(github.cache_seconds, 0., "github.cache_seconds")?;
     let state_data = table(root.get("state"))?;
     if let Some(t) = state_data {
-        keys(t, &["path", "control_socket"], "state")?;
+        keys(
+            t,
+            &[
+                "path",
+                "control_socket",
+                "archive_after_days",
+                "archive_events_after_hours",
+                "record",
+            ],
+            "state",
+        )?;
+    }
+    let archive_after_days = match state_data.and_then(|t| t.get("archive_after_days")) {
+        None => 7.,
+        Some(item) => item
+            .as_float()
+            .or_else(|| item.as_integer().map(|i| i as f64))
+            .filter(|d| d.is_finite() && *d >= 0. && *d <= 3650.)
+            .context("state.archive_after_days must be a number of days from 0 (off) to 3650")?,
+    };
+    let archive_events_after_hours = match state_data
+        .and_then(|t| t.get("archive_events_after_hours"))
+    {
+        None => 24.,
+        Some(item) => item
+            .as_float()
+            .or_else(|| item.as_integer().map(|i| i as f64))
+            .filter(|h| h.is_finite() && *h >= 0. && *h <= 87600.)
+            .context(
+                "state.archive_events_after_hours must be a number of hours from 0 (off) to 87600",
+            )?,
+    };
+    let record =
+        string(state_data.and_then(|t| t.get("record")))?.unwrap_or_else(|| "summary".into());
+    if !matches!(record.as_str(), "summary" | "full") {
+        bail!("state.record must be \"summary\" or \"full\"");
     }
     let state_path = string(state_data.and_then(|t| t.get("path")))?
         .unwrap_or_else(|| "~/.local/state/fridica/state.sqlite3".into());
@@ -277,6 +312,9 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         state: State {
             path: state_path,
             control_socket,
+            archive_after_days,
+            archive_events_after_hours,
+            record,
         },
         github,
         attention,

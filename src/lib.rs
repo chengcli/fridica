@@ -5,6 +5,7 @@ pub mod config;
 pub mod control;
 pub use fridica_core as core;
 pub mod daemon;
+pub mod dashboard;
 pub mod doctor;
 pub mod exec;
 pub mod github;

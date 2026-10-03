@@ -346,6 +346,36 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     Err(_) => Response::error(409, "obligation_close_refused"),
                 }
             }
+            ["archive", "restore"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                let Some(thread) = body
+                    .get("thread")
+                    .and_then(Value::as_str)
+                    .filter(|s| s.matches(':').count() == 2 && s.len() <= 200)
+                    .map(str::to_owned)
+                else {
+                    return Response::error(400, "invalid_thread");
+                };
+                if body.as_object().unwrap().len() != 1 {
+                    return Response::error(400, "unknown_body_field");
+                }
+                let id = thread.clone();
+                match store
+                    .call(move |c| {
+                        let tx = c.transaction()?;
+                        let restored = crate::store::archive::revive_tx(&tx, &id, now)?;
+                        tx.commit()?;
+                        Ok(restored)
+                    })
+                    .await
+                {
+                    Ok(true) => Response::ok(json!({"thread":thread,"restored":true})),
+                    Ok(false) => Response::error(404, "not_archived"),
+                    Err(_) => Response::error(409, "restore_failed"),
+                }
+            }
             ["obligations", "backfill"] => {
                 if authority != Authority::Owner {
                     return Response::error(403, "owner_required");

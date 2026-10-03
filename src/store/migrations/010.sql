@@ -29,3 +29,11 @@ ALTER TABLE jobs ADD COLUMN retry_at REAL;
 -- rows, which kept the database thread near 70% busy. IF NOT EXISTS: owners
 -- may have created it by hand before upgrading.
 CREATE INDEX IF NOT EXISTS replay_events_kind ON replay_events(kind, complete, seq);
+-- Weekly archives (#114): threads moved out of the live database, where to
+-- find them, and whether a message has brought them back since.
+CREATE TABLE archived_threads (
+    session_id TEXT PRIMARY KEY, archive TEXT NOT NULL, last_activity REAL NOT NULL,
+    archived_at REAL NOT NULL, restored_at REAL
+);
+-- Completed replay events are archived by age.
+CREATE INDEX IF NOT EXISTS replay_events_time ON replay_events(complete, time);

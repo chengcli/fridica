@@ -10,6 +10,9 @@ use std::sync::Arc;
 pub struct StoreJournal {
     pub store: Store,
     pub clock: Arc<dyn Clock>,
+    /// Keep complete Slack bodies (`state.record = "full"`); otherwise they
+    /// are summarized (#116).
+    pub full: bool,
 }
 impl StoreJournal {
     fn time(&self) -> Result<f64, Recording> {
@@ -27,6 +30,11 @@ impl fridica_slack::Journal for StoreJournal {
         payload: Value,
         complete: bool,
     ) -> BoxFuture<'_, Result<i64, Recording>> {
+        let payload = if self.full {
+            payload
+        } else {
+            crate::store::record::slack(kind, payload)
+        };
         Box::pin(async move {
             let now = self.time()?;
             self.store
@@ -48,6 +56,11 @@ impl fridica_slack::Journal for StoreJournal {
         payload: Value,
         complete: bool,
     ) -> BoxFuture<'_, Result<(), Recording>> {
+        let payload = if self.full {
+            payload
+        } else {
+            crate::store::record::slack(kind, payload)
+        };
         Box::pin(async move {
             let now = self.time()?;
             self.store

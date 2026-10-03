@@ -621,11 +621,8 @@ async fn frozen_cli_commands_preserve_requests_and_authenticated_identity() {
     for command in corpus["commands"].as_array().unwrap() {
         let name = command.as_str().unwrap();
         let help = bounded_cli(vec![name.into(), "--help".into()]).await;
-        assert_eq!(
-            help.returncode,
-            if name == "dashboard" { 2 } else { 0 },
-            "{name}"
-        );
+        // Every frozen command exists now, `dashboard` included.
+        assert_eq!(help.returncode, 0, "{name}");
     }
     for case in corpus["cases"].as_array().unwrap() {
         let mut args: Vec<String> = case["args"]

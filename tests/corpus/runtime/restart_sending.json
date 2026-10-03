@@ -555,6 +555,7 @@
       "checkpoint": "duplicate_intake",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [],
         "campaign_evidence": [],
@@ -725,6 +726,7 @@
       "checkpoint": "first_pass",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [],
         "campaign_evidence": [],
@@ -1721,6 +1723,7 @@
       "checkpoint": "before_restart",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [],
         "campaign_evidence": [],
@@ -3092,6 +3095,7 @@
       "checkpoint": "after_restart",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [
           {
@@ -4472,6 +4476,7 @@
       "checkpoint": "completion",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [
           {
@@ -5852,6 +5857,7 @@
       "checkpoint": "no_duplicate_effects",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [
           {
@@ -7232,6 +7238,7 @@
       "checkpoint": "closed",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [
           {
