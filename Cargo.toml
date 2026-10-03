@@ -17,8 +17,7 @@ path = "src/bin/fridica.rs"
 
 [dependencies]
 fridica-core = "0.2"
-# 0.3.1 (released from fc1c669) is not on crates.io yet; switch to "0.3.1" once it is.
-fridica-agent = { version = "0.3.1", git = "https://github.com/chengcli/fridica-agent", rev = "fc1c6697d61f8853b3c8b8221af1146d351e68c4" }
+fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
