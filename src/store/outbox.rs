@@ -44,7 +44,7 @@ fn post(row: &Row<'_>) -> rusqlite::Result<ClaimedPost> {
     })
 }
 
-pub(crate) fn enqueue_tx(c: &Connection, item: &Post, now: f64) -> Result<i64> {
+pub fn enqueue_tx(c: &Connection, item: &Post, now: f64) -> Result<i64> {
     if !now.is_finite() || item.idem_key.is_empty() || item.channel.is_empty() {
         bail!("invalid outbox item");
     }
@@ -154,7 +154,7 @@ async fn claim_matching(store: &Store, now: f64, id: Option<i64>) -> Result<Opti
         .await
 }
 
-pub(crate) fn fail_tx(c: &Connection, id: i64, state: &str, error: &str) -> Result<()> {
+pub fn fail_tx(c: &Connection, id: i64, state: &str, error: &str) -> Result<()> {
     c.execute(
         "UPDATE outbox SET state=?,error=? WHERE id=?",
         params![state, error, id],
@@ -176,7 +176,7 @@ pub(crate) fn fail_tx(c: &Connection, id: i64, state: &str, error: &str) -> Resu
 }
 
 /// Common confirmation effects, also used by the attention adapter.
-pub(crate) fn confirm_tx(c: &Connection, id: i64, reference: &str, now: f64) -> Result<()> {
+pub fn confirm_tx(c: &Connection, id: i64, reference: &str, now: f64) -> Result<()> {
     if reference.is_empty() || !now.is_finite() {
         bail!("delivery needs a timestamp");
     }

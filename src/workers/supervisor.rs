@@ -240,11 +240,27 @@ impl Supervisor {
                 .get(&j.worker_id)
                 .context("queued job has no worker")?;
             let Some(m) = config.machines.get(&w.machine) else {
-                work::claim(&self.store, j.id.clone(), 1, config.clone(), now).await?;
+                work::claim(
+                    &self.store,
+                    j.id.clone(),
+                    1,
+                    config.machines.clone(),
+                    config.limits.clone(),
+                    now,
+                )
+                .await?;
                 continue;
             };
             if w.status == "stopped" {
-                work::claim(&self.store, j.id.clone(), 1, config.clone(), now).await?;
+                work::claim(
+                    &self.store,
+                    j.id.clone(),
+                    1,
+                    config.machines.clone(),
+                    config.limits.clone(),
+                    now,
+                )
+                .await?;
                 continue;
             }
             if busy.contains(&w.id) || *per_machine.get(&m.name).unwrap_or(&0) >= m.max_jobs {
@@ -320,8 +336,15 @@ impl Supervisor {
                     }
                 }
             }
-            let Some((job, record)) =
-                work::claim(&self.store, j.id.clone(), slot, config.clone(), now).await?
+            let Some((job, record)) = work::claim(
+                &self.store,
+                j.id.clone(),
+                slot,
+                config.machines.clone(),
+                config.limits.clone(),
+                now,
+            )
+            .await?
             else {
                 continue;
             };

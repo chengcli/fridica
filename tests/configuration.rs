@@ -531,7 +531,8 @@ fn editor_preserves_comments_validates_and_refuses_external_edits() {
 #[tokio::test]
 async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflicts() {
     use config::editor::Prepared;
-    use fridica::store::{configuration as journal, Store};
+    use fridica::store::configuration::pending;
+    use fridica::{store::Store, threads::configuration as journal};
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
     setup(dir.path());
@@ -543,7 +544,7 @@ async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflict
     // Commit file, lose runtime acknowledgement, then restart with the new file.
     let edit = Prepared::new(&current, "limits", &json!({"max_jobs":2}), &ctx).unwrap();
     journal::replace(&store, edit, 10.).await.unwrap();
-    assert!(journal::pending(&store).await.unwrap().is_some());
+    assert!(pending(&store).await.unwrap().is_some());
     assert!(journal::recover_startup(&store, &current, 11.)
         .await
         .is_err());
@@ -554,7 +555,7 @@ async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflict
     journal::recover_startup(&store, &updated, 13.)
         .await
         .unwrap();
-    assert!(journal::pending(&store).await.unwrap().is_none());
+    assert!(pending(&store).await.unwrap().is_none());
     // Crash after intent but before rename. Startup records not_applied.
     let edit = Prepared::new(&updated, "limits", &json!({"max_jobs":1}), &ctx).unwrap();
     let intent = journal::Intent {
@@ -570,7 +571,7 @@ async fn configuration_journal_recovers_both_sides_of_rename_and_blocks_conflict
     assert!(journal::recover_startup(&store, &external, 15.)
         .await
         .is_err());
-    assert_eq!(journal::pending(&store).await.unwrap().unwrap().0, id);
+    assert_eq!(pending(&store).await.unwrap().unwrap().0, id);
     std::fs::write(&path, text).unwrap();
     journal::recover_startup(&store, &updated, 16.)
         .await

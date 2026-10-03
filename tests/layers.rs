@@ -47,6 +47,14 @@ impl Check {
             "do not alias the crate root in {}",
             self.path.display()
         );
+        // The store is extracted into fridica-store-sqlite (#117): it may use
+        // fridica-core only, nothing else of fridica's.
+        assert!(
+            self.module != "store" || matches!(target[0].as_str(), "store" | "core"),
+            "store depends on fridica's {} in {}; it may use only core",
+            target[0],
+            self.path.display()
+        );
         assert!(
             level(&target[0]) <= level(&self.module),
             "upward dependency in {}: {} -> {}",

@@ -77,7 +77,7 @@ pub fn references(text: &str) -> References {
 /// only to a thread of the same channel that exists (the thread itself, or the
 /// thread a reply with that timestamp belongs to); a thread never links to
 /// itself.
-pub(crate) fn record_tx(
+pub fn record_tx(
     c: &Connection,
     workspace: &str,
     channel: &str,

@@ -1,7 +1,6 @@
 //! Offline migration with a recoverable file journal. Never replace a live SQLite
 //! file; rollback uses SQLite's backup API under the same lock as the daemon.
 use super::{lock, private_file, schema};
-use crate::config;
 use anyhow::{bail, Context, Result};
 use rusqlite::{backup::Backup, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -93,15 +92,22 @@ fn automatic(reason: &str) -> bool {
         )
 }
 
-pub fn dry_run(database: &Path, configuration: &Path) -> Result<Plan> {
+/// A file migrated together with the database, sharing its journal, backup
+/// and rollback: the host's configuration. The store only reads, fingerprints
+/// and backs it up; what it means is the host's.
+pub trait Companion {
+    /// The file's text after this migration (`source` itself when nothing changes).
+    fn migrate_text(&self, source: &str) -> Result<String>;
+    /// Refuse when the file at `path` (with `source`) does not describe `database`.
+    fn check(&self, source: &str, path: &Path, database: &Path) -> Result<()>;
+    /// Replace the file with `text`, only if its contents still have digest `expected`.
+    fn replace(&self, path: &Path, expected: &str, text: &str) -> Result<()>;
+}
+
+pub fn dry_run(database: &Path, configuration: &Path, companion: &dyn Companion) -> Result<Plan> {
     let source = fs::read_to_string(configuration)?;
-    let edited = config::migrate_text(&source)?;
-    let context = config::LoadContext::current()?;
-    let resolved = config::loader::parse(&source, configuration, &context)?;
-    let target = config::loader::resolve_path(database, &std::env::current_dir()?, &context.home)?;
-    if resolved.state.path != target {
-        bail!("migration database differs from configuration state.path");
-    }
+    let edited = companion.migrate_text(&source)?;
+    companion.check(&source, configuration, database)?;
     let c = read_connection(database)?;
     let from = schema::version(&c)?;
     if from > schema::VERSION {
@@ -142,14 +148,20 @@ fn generation(c: &Connection) -> Result<Option<i64>> {
     )
     .optional()?)
 }
-pub fn migrate(database: &Path, configuration: &Path, now: f64) -> Result<Plan> {
-    migrate_with_checkpoint(database, configuration, now, |_| Ok(()))
+pub fn migrate(
+    database: &Path,
+    configuration: &Path,
+    now: f64,
+    companion: &dyn Companion,
+) -> Result<Plan> {
+    migrate_with_checkpoint(database, configuration, now, companion, |_| Ok(()))
 }
 
 fn migrate_with_checkpoint(
     database: &Path,
     configuration: &Path,
     now: f64,
+    companion: &dyn Companion,
     mut checkpoint: impl FnMut(&str) -> Result<()>,
 ) -> Result<Plan> {
     if !now.is_finite() {
@@ -162,7 +174,7 @@ fn migrate_with_checkpoint(
     // Named for the schema the upgrade reaches, so each upgrade keeps its own.
     let backup_path = sibling(&database, &backup_suffix());
     let config_backup = sibling(&configuration, &backup_suffix());
-    let plan = dry_run(&database, &configuration)?;
+    let plan = dry_run(&database, &configuration, companion)?;
     let prior: Option<Journal> = if journal_path.exists() {
         let prior: Journal = serde_json::from_slice(&fs::read(&journal_path)?)?;
         if prior.database != database || prior.config != configuration {
@@ -204,7 +216,7 @@ fn migrate_with_checkpoint(
             bail!("backup already exists without a migration journal; preserve it before retrying");
         }
         let source = fs::read_to_string(&configuration)?;
-        let after = config::migrate_text(&source)?;
+        let after = companion.migrate_text(&source)?;
         // Write the recovery intent before creating either backup. A crash at any
         // following instruction is resumed using these immutable fingerprints.
         let journal = Journal {
@@ -345,7 +357,7 @@ fn migrate_with_checkpoint(
     };
     tx.commit()?;
     checkpoint("conversion")?;
-    config::editor::replace(
+    companion.replace(
         &configuration,
         &digest(&current_config),
         &journal.config_after,
@@ -366,13 +378,14 @@ fn migrate_with_checkpoint(
     Ok(plan)
 }
 
-pub fn rollback(database: &Path, configuration: &Path) -> Result<()> {
-    rollback_with_checkpoint(database, configuration, |_| Ok(()))
+pub fn rollback(database: &Path, configuration: &Path, companion: &dyn Companion) -> Result<()> {
+    rollback_with_checkpoint(database, configuration, companion, |_| Ok(()))
 }
 
 fn rollback_with_checkpoint(
     database: &Path,
     configuration: &Path,
+    companion: &dyn Companion,
     mut checkpoint: impl FnMut(&str) -> Result<()>,
 ) -> Result<()> {
     let _guard = lock(database)?;
@@ -440,7 +453,7 @@ fn rollback_with_checkpoint(
     if before != journal.config_after.as_bytes() && digest(&before) != journal.config_before {
         bail!("configuration changed during rollback");
     }
-    config::editor::replace(
+    companion.replace(
         &configuration,
         &digest(&before),
         std::str::from_utf8(&config_backup)?,

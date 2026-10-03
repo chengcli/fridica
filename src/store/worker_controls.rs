@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Intent {
+pub struct Intent {
     pub session: String,
     pub inbox: i64,
     pub worker: String,
@@ -18,7 +18,7 @@ pub(crate) struct Intent {
     pub attempt: Option<u32>,
 }
 
-pub(crate) fn jobs_tx(c: &Connection, session: &str) -> Result<Vec<Value>> {
+pub fn jobs_tx(c: &Connection, session: &str) -> Result<Vec<Value>> {
     let rows: Vec<String> = c.prepare("SELECT json_object('id',id,'worker_id',worker_id,'status',status,'attempt',attempt) FROM jobs WHERE session_id=? AND status IN ('queued','running') ORDER BY id")?
         .query_map([session], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
@@ -26,11 +26,11 @@ pub(crate) fn jobs_tx(c: &Connection, session: &str) -> Result<Vec<Value>> {
         .collect()
 }
 
-pub(crate) fn pending_tx(c: &Connection, session: &str) -> Result<bool> {
+pub fn pending_tx(c: &Connection, session: &str) -> Result<bool> {
     Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='parent_worker_control' AND complete=0 AND json_extract(payload_json,'$.session')=?)",[session],|r|r.get(0))?)
 }
 
-pub(crate) fn recent_tx(c: &Connection, session: &str) -> Result<Vec<Value>> {
+pub fn recent_tx(c: &Connection, session: &str) -> Result<Vec<Value>> {
     let rows:Vec<String>=c.prepare("SELECT json_object('id',e.seq,'created',e.time,'request',json(e.payload_json),'complete',json(CASE WHEN e.complete THEN 'true' ELSE 'false' END),'outcome',(SELECT json_extract(r.payload_json,'$.outcome') FROM replay_events r WHERE r.kind='parent_worker_control_result' AND json_extract(r.payload_json,'$.intent')=e.seq ORDER BY r.seq DESC LIMIT 1)) FROM replay_events e WHERE e.kind='parent_worker_control' AND json_extract(e.payload_json,'$.session')=? ORDER BY e.seq DESC LIMIT 20")?
         .query_map([session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
     rows.into_iter()
@@ -38,12 +38,12 @@ pub(crate) fn recent_tx(c: &Connection, session: &str) -> Result<Vec<Value>> {
         .collect()
 }
 
-pub(crate) fn interrupt_pending_tx(c: &Connection, job: &str, attempt: u32) -> Result<bool> {
+pub fn interrupt_pending_tx(c: &Connection, job: &str, attempt: u32) -> Result<bool> {
     Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='parent_worker_control' AND complete=0 AND json_extract(payload_json,'$.op')='interrupt' AND json_extract(payload_json,'$.job')=? AND json_extract(payload_json,'$.attempt')=?)",params![job,attempt],|r|r.get(0))?)
 }
 
 /// Admission does not change thread.version, so compare targeted active jobs too.
-pub(crate) fn current_tx(
+pub fn current_tx(
     c: &Connection,
     request: &ParentRequest,
     controls: &[WorkerControl],
@@ -77,7 +77,7 @@ pub(crate) fn current_tx(
     Ok(true)
 }
 
-pub(crate) fn enqueue_tx(
+pub fn enqueue_tx(
     c: &Connection,
     request: &ParentRequest,
     controls: &[WorkerControl],
@@ -116,7 +116,7 @@ pub(crate) fn enqueue_tx(
     Ok(())
 }
 
-pub(crate) async fn pending(store: &Store) -> Result<Vec<(i64, Intent)>> {
+pub async fn pending(store: &Store) -> Result<Vec<(i64, Intent)>> {
     store.call(|c| {
         let rows: Vec<(i64,String)>=c.prepare("SELECT seq,payload_json FROM replay_events WHERE kind='parent_worker_control' AND complete=0 ORDER BY seq LIMIT 128")?
             .query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -124,12 +124,7 @@ pub(crate) async fn pending(store: &Store) -> Result<Vec<(i64, Intent)>> {
     }).await
 }
 
-pub(crate) async fn complete(
-    store: &Store,
-    seq: i64,
-    outcome: &'static str,
-    now: f64,
-) -> Result<()> {
+pub async fn complete(store: &Store, seq: i64, outcome: &'static str, now: f64) -> Result<()> {
     store.call(move|c| {
         let tx=c.transaction()?;
         if tx.execute("UPDATE replay_events SET complete=1 WHERE seq=? AND kind='parent_worker_control' AND complete=0",[seq])?==1 {

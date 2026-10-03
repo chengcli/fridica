@@ -1,4 +1,7 @@
 //! One bounded queue and one dedicated SQLite thread; callers never share a connection.
+/// The SQLite binding the store's API exposes, until every query is behind
+/// the storage traits (#117 stage 2).
+pub use rusqlite;
 pub mod approvals;
 pub mod archive;
 pub mod configuration;
