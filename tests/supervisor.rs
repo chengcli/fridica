@@ -243,6 +243,9 @@ impl Harness {
         )
         .unwrap();
         config.limits.max_jobs = 3;
+        // The frozen Python briefs predate progress notes (#105), which have
+        // their own runtime test.
+        config.limits.progress_interval = 0.;
         edit(&mut config);
         let config = Arc::new(config);
         let factory = Arc::new(Fakes::default());
@@ -419,8 +422,10 @@ async fn a_rate_limited_job_is_not_retried_at_once() {
         .lock()
         .unwrap()
         .push_back(Err(WorkerFailure {
-            kind: Failure::Execution,
-            code: "backend_rate_limited".into(),
+            kind: Failure::RateLimited {
+                retry_at: Some(5000),
+            },
+            code: "claude_rate_limited".into(),
             backend_session_id: "resume-me".into(),
         }));
     h.supervisor.schedule().await.unwrap();
@@ -432,10 +437,16 @@ async fn a_rate_limited_job_is_not_retried_at_once() {
     );
     let error: String = h
         .store
-        .call(|c| Ok(c.query_row("SELECT error FROM jobs WHERE id='a-0'", [], |r| r.get(0))?))
+        .call(|c| {
+            Ok(c.query_row(
+                "SELECT error||' '||CAST(retry_at AS INTEGER) FROM jobs WHERE id='a-0'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
         .await
         .unwrap();
-    assert_eq!(error, "backend_rate_limited");
+    assert_eq!(error, "claude_rate_limited 5000");
     assert!(h.supervisor.schedule().await.unwrap().is_empty());
     h.supervisor.close().await.unwrap();
 }

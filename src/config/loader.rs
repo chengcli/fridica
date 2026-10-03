@@ -261,6 +261,12 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         }
     }
     let isolation: super::isolation::Settings = decode(root.get("isolation"))?;
+    if !limits.progress_interval.is_finite() || limits.progress_interval < 0. {
+        bail!("limits.progress_interval must be 0 (off) or a positive number of seconds");
+    }
+    if !(200..=6000).contains(&limits.progress_chars) {
+        bail!("limits.progress_chars must be between 200 and 6000");
+    }
     let config = Config {
         owner,
         slack,

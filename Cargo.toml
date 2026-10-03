@@ -16,8 +16,8 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = "0.1"
-fridica-agent = "0.2"
+fridica-core = "0.2"
+fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -50,4 +50,3 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-

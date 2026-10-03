@@ -132,6 +132,8 @@
         "channel_watermarks": [],
         "cooldowns": [],
         "health_events": [],
+        "item_links": [],
+        "job_progress": [],
         "jobs": [],
         "messages": [
           {
@@ -156,11 +158,15 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "9"
+            "value": "10"
           },
           {
             "key": "durable_generation",
-            "value": "6"
+            "value": "7"
+          },
+          {
+            "key": "links_backfilled",
+            "value": "20"
           }
         ],
         "notes": [],
@@ -252,6 +258,7 @@
             "state": "pending"
           }
         ],
+        "thread_links": [],
         "threads": [
           {
             "channel": "CROOM",
@@ -320,6 +327,8 @@
         "channel_watermarks": [],
         "cooldowns": [],
         "health_events": [],
+        "item_links": [],
+        "job_progress": [],
         "jobs": [],
         "messages": [
           {
@@ -344,11 +353,15 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "9"
+            "value": "10"
           },
           {
             "key": "durable_generation",
-            "value": "22"
+            "value": "23"
+          },
+          {
+            "key": "links_backfilled",
+            "value": "20"
           }
         ],
         "notes": [
@@ -398,6 +411,7 @@
               "decisions": [],
               "delegations": [],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -705,6 +719,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -862,6 +877,7 @@
             "state": "done"
           }
         ],
+        "thread_links": [],
         "threads": [
           {
             "channel": "CROOM",
@@ -930,6 +946,8 @@
         "channel_watermarks": [],
         "cooldowns": [],
         "health_events": [],
+        "item_links": [],
+        "job_progress": [],
         "jobs": [],
         "messages": [
           {
@@ -954,11 +972,15 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "9"
+            "value": "10"
           },
           {
             "key": "durable_generation",
-            "value": "22"
+            "value": "23"
+          },
+          {
+            "key": "links_backfilled",
+            "value": "20"
           }
         ],
         "notes": [
@@ -1008,6 +1030,7 @@
               "decisions": [],
               "delegations": [],
               "dispositions": [],
+              "handoffs": [],
               "note": {
                 "assignee": "",
                 "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -1315,6 +1338,7 @@
                 "decisions": [],
                 "delegations": [],
                 "dispositions": [],
+                "handoffs": [],
                 "note": {
                   "assignee": "",
                   "blocker": "I couldn't get to this just now; I'll need to look at it myself before anyone retries.",
@@ -1472,6 +1496,7 @@
             "state": "done"
           }
         ],
+        "thread_links": [],
         "threads": [
           {
             "channel": "CROOM",

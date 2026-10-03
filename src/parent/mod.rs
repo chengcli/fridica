@@ -133,7 +133,7 @@ impl CliParent {
         let (result, output, complete) = match completed {
             Ok(output) => {
                 let result = if cli::rate_limited(backend, &output.stdout) {
-                    Err(failure(cli::RATE_LIMITED))
+                    Err(failure(crate::core::failure::RATE_LIMITED))
                 } else if output.returncode != 0 {
                     Err(failure(&format!("parent_exit_{}", output.returncode)))
                 } else {

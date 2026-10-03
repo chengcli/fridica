@@ -19,8 +19,6 @@ fn worker(c: &Connection, id: &str) -> Result<WorkerRecord> {
     let raw: String = c.query_row(&format!("{WORKER} WHERE id=?"), [id], |r| r.get(0))?;
     Ok(serde_json::from_str(&raw)?)
 }
-/// The failure code of a job the backend's usage limit stopped (#107).
-pub const RATE_LIMITED: &str = "backend_rate_limited";
 pub async fn get_job(store: &Store, id: String) -> Result<Job> {
     store.call(move |c| job(c, &id)).await
 }
@@ -71,6 +69,20 @@ pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Va
     let elsewhere = elsewhere_tx(c, session)?;
     if !elsewhere.is_empty() {
         context["elsewhere"] = json!(elsewhere);
+    }
+    // The latest progress note of each running job (#105), for "how is it going".
+    let progress: Vec<String> = c.prepare("SELECT json_object('job_id',j.id,'worker_id',j.worker_id,'note',p.text,'at',p.created)
+        FROM jobs j JOIN job_progress p ON p.job_id=j.id AND p.attempt=j.attempt
+        WHERE j.session_id=? AND j.status='running' AND p.seq=(SELECT MAX(seq) FROM job_progress WHERE job_id=j.id AND attempt=j.attempt)
+        ORDER BY j.queued_at,j.rowid")?
+        .query_map([session], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !progress.is_empty() {
+        context["progress"] = progress
+            .iter()
+            .map(|r| serde_json::from_str(r))
+            .collect::<std::result::Result<Vec<serde_json::Value>, _>>()?
+            .into();
     }
     Ok(context)
 }
@@ -262,6 +274,28 @@ pub enum Completed {
     Retried,
     Stale,
 }
+/// Record a progress note of a running job attempt and queue it for the
+/// job's thread (#105). A note for an attempt that is no longer running is
+/// dropped: its result is, or soon will be, the thread's news.
+pub async fn progress(
+    store: &Store,
+    job_id: String,
+    attempt: u32,
+    text: String,
+    now: f64,
+) -> Result<bool> {
+    store.call(move|c|{
+        let tx=c.transaction()?;
+        let session:Option<String>=tx.query_row("SELECT session_id FROM jobs WHERE id=? AND attempt=? AND status='running'",params![job_id,attempt],|r|r.get(0)).optional()?;
+        let Some(session)=session else {return Ok(false)};
+        let seq:i64=tx.query_row("SELECT COALESCE(MAX(seq),0)+1 FROM job_progress WHERE job_id=? AND attempt=?",params![job_id,attempt],|r|r.get(0))?;
+        tx.execute("INSERT INTO job_progress(job_id,attempt,seq,text,created) VALUES(?,?,?,?,?)",params![job_id,attempt,seq,text,now])?;
+        tx.execute("INSERT OR IGNORE INTO thread_inbox(session_id,kind,ref,payload_json,created,dedup_key) VALUES(?,'worker_progress',?,?,?,?)",
+            params![session,job_id,json!({"attempt":attempt,"seq":seq}).to_string(),now,format!("worker-progress:{job_id}:{attempt}:{seq}")])?;
+        tx.commit()?;
+        Ok(true)
+    }).await
+}
 pub async fn complete(
     store: &Store,
     id: String,
@@ -287,9 +321,10 @@ pub async fn complete(
         let resume=if session.is_empty(){w.backend_session_id.as_str()}else{session};
         let control:String=tx.query_row("SELECT control FROM threads WHERE id=?",[&j.session_id],|r|r.get(0))?;
         let retry=completion.allow_retry && !stopped && !interrupted && j.attempt==1 && !resume.is_empty() && control=="active" &&
-            // A usage limit is not retried at once into the same limit (#107);
-            // the parent sees the reset time with the result instead.
-            matches!(&completion.outcome,Err(e) if e.kind==Failure::Execution && e.code!=RATE_LIMITED);
+            // A usage limit (Failure::RateLimited) is never retried at once into
+            // the same limit (#107); the parent sees its reset time instead.
+            matches!(&completion.outcome,Err(e) if e.kind==Failure::Execution);
+        let retry_at=match &completion.outcome {Err(WorkerFailure{kind:Failure::RateLimited{retry_at},..})=>retry_at.map(|t|t as f64),_=>None};
         let result_json=result.map(serde_json::to_string).transpose()?;
         let summary=result.map(|r|r.summary.as_str()).unwrap_or("");
         let retire=stopped || (w.ephemeral && !retry);
@@ -302,7 +337,7 @@ pub async fn complete(
             tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','job.retry',?,?)",params![now,id,json!({"attempt":attempt,"same_session":true}).to_string()])?;
             tx.commit()?;return Ok(Completed::Retried);
         }
-        tx.execute("UPDATE jobs SET status=?,result_json=?,error=?,finished_at=? WHERE id=?",params![status,result_json,error,now,id])?;
+        tx.execute("UPDATE jobs SET status=?,result_json=?,error=?,finished_at=?,retry_at=? WHERE id=?",params![status,result_json,error,now,retry_at,id])?;
         for (index,a) in completion.artifacts.iter().enumerate(){
             tx.execute("INSERT INTO artifacts(id,job_id,session_id,machine,path,kind,caption,size,blob,status,error) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 params![format!("artifact:{id}:{index}"),id,j.session_id,w.machine,a.reference.path,a.reference.kind,a.reference.caption,

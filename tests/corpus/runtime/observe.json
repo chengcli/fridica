@@ -13,6 +13,8 @@
         "channel_watermarks": [],
         "cooldowns": [],
         "health_events": [],
+        "item_links": [],
+        "job_progress": [],
         "jobs": [],
         "messages": [
           {
@@ -37,11 +39,15 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "9"
+            "value": "10"
           },
           {
             "key": "durable_generation",
-            "value": "6"
+            "value": "7"
+          },
+          {
+            "key": "links_backfilled",
+            "value": "20"
           }
         ],
         "notes": [],
@@ -133,6 +139,7 @@
             "state": "pending"
           }
         ],
+        "thread_links": [],
         "threads": [
           {
             "channel": "CROOM",
@@ -176,6 +183,8 @@
         "channel_watermarks": [],
         "cooldowns": [],
         "health_events": [],
+        "item_links": [],
+        "job_progress": [],
         "jobs": [],
         "messages": [
           {
@@ -200,11 +209,15 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "9"
+            "value": "10"
           },
           {
             "key": "durable_generation",
-            "value": "9"
+            "value": "10"
+          },
+          {
+            "key": "links_backfilled",
+            "value": "20"
           }
         ],
         "notes": [],
@@ -296,6 +309,7 @@
             "state": "done"
           }
         ],
+        "thread_links": [],
         "threads": [
           {
             "channel": "CROOM",
@@ -339,6 +353,8 @@
         "channel_watermarks": [],
         "cooldowns": [],
         "health_events": [],
+        "item_links": [],
+        "job_progress": [],
         "jobs": [],
         "messages": [
           {
@@ -363,11 +379,15 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "9"
+            "value": "10"
           },
           {
             "key": "durable_generation",
-            "value": "9"
+            "value": "10"
+          },
+          {
+            "key": "links_backfilled",
+            "value": "20"
           }
         ],
         "notes": [],
@@ -459,6 +479,7 @@
             "state": "done"
           }
         ],
+        "thread_links": [],
         "threads": [
           {
             "channel": "CROOM",
