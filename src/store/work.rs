@@ -72,6 +72,20 @@ pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Va
     if !elsewhere.is_empty() {
         context["elsewhere"] = json!(elsewhere);
     }
+    // The latest progress note of each running job (#105), for "how is it going".
+    let progress: Vec<String> = c.prepare("SELECT json_object('job_id',j.id,'worker_id',j.worker_id,'note',p.text,'at',p.created)
+        FROM jobs j JOIN job_progress p ON p.job_id=j.id AND p.attempt=j.attempt
+        WHERE j.session_id=? AND j.status='running' AND p.seq=(SELECT MAX(seq) FROM job_progress WHERE job_id=j.id AND attempt=j.attempt)
+        ORDER BY j.queued_at,j.rowid")?
+        .query_map([session], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !progress.is_empty() {
+        context["progress"] = progress
+            .iter()
+            .map(|r| serde_json::from_str(r))
+            .collect::<std::result::Result<Vec<serde_json::Value>, _>>()?
+            .into();
+    }
     Ok(context)
 }
 /// This thread's finished jobs, oldest first: what earlier workers found, for
@@ -261,6 +275,28 @@ pub enum Completed {
     Finished,
     Retried,
     Stale,
+}
+/// Record a progress note of a running job attempt and queue it for the
+/// job's thread (#105). A note for an attempt that is no longer running is
+/// dropped: its result is, or soon will be, the thread's news.
+pub async fn progress(
+    store: &Store,
+    job_id: String,
+    attempt: u32,
+    text: String,
+    now: f64,
+) -> Result<bool> {
+    store.call(move|c|{
+        let tx=c.transaction()?;
+        let session:Option<String>=tx.query_row("SELECT session_id FROM jobs WHERE id=? AND attempt=? AND status='running'",params![job_id,attempt],|r|r.get(0)).optional()?;
+        let Some(session)=session else {return Ok(false)};
+        let seq:i64=tx.query_row("SELECT COALESCE(MAX(seq),0)+1 FROM job_progress WHERE job_id=? AND attempt=?",params![job_id,attempt],|r|r.get(0))?;
+        tx.execute("INSERT INTO job_progress(job_id,attempt,seq,text,created) VALUES(?,?,?,?,?)",params![job_id,attempt,seq,text,now])?;
+        tx.execute("INSERT OR IGNORE INTO thread_inbox(session_id,kind,ref,payload_json,created,dedup_key) VALUES(?,'worker_progress',?,?,?,?)",
+            params![session,job_id,json!({"attempt":attempt,"seq":seq}).to_string(),now,format!("worker-progress:{job_id}:{attempt}:{seq}")])?;
+        tx.commit()?;
+        Ok(true)
+    }).await
 }
 pub async fn complete(
     store: &Store,

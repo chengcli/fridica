@@ -129,6 +129,12 @@ pub trait JobIo: Send + Sync {
             })
         })
     }
+    /// The job attempt's progress file (`file`, in the slot workspace) while
+    /// it runs (#105), at most `PROGRESS_LIMIT` bytes. `None` when there is
+    /// none, or it cannot be read: progress is best effort, never a failure.
+    fn progress(&self, _spec: WorkerSpec, _file: String) -> AdapterFuture<'_, Option<Vec<u8>>> {
+        Box::pin(async { None })
+    }
     /// Read only validated artifacts confined to the slot workspace.
     fn collect(
         &self,

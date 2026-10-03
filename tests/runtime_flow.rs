@@ -4411,3 +4411,209 @@ async fn another_threads_jobs_in_the_channel_are_visible_but_other_channels_are_
     assert!(calls[0].session["work"].get("elsewhere").is_none());
     h.runtime.close().await.unwrap();
 }
+
+/// Progress files by name, which a test can write; collect behaves like
+/// `NoJobIo`.
+#[derive(Default)]
+struct ProgressFile(Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+impl JobIo for ProgressFile {
+    fn prepare(&self, _: WorkerSpec, _: Job) -> AdapterFuture<'_, Result<String, WorkerFailure>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+    fn progress(&self, _: WorkerSpec, file: String) -> AdapterFuture<'_, Option<Vec<u8>>> {
+        let contents = self.0.lock().unwrap().get(&file).cloned();
+        Box::pin(async move { contents })
+    }
+    fn collect(
+        &self,
+        spec: WorkerSpec,
+        artifacts: Vec<ArtifactRef>,
+    ) -> AdapterFuture<'_, Result<Vec<CollectedArtifact>, WorkerFailure>> {
+        NoJobIo.collect(spec, artifacts)
+    }
+}
+
+/// Interim progress (#105): what a running worker appends to the progress file
+/// its brief names is posted to its thread as a notice before the final
+/// report, without a parent turn; another job's file is never read; with
+/// polling off the brief names no file and nothing is posted.
+#[tokio::test]
+async fn a_running_jobs_progress_notes_reach_the_thread_before_its_report() {
+    for interval in ["0.02", "0"] {
+        let file = Arc::new(ProgressFile::default());
+        file.0.lock().unwrap().insert(
+            "progress-earlier-1.md".into(),
+            b"Note from an earlier job.\n".to_vec(),
+        );
+        let h = Harness::with_machines(
+            vec![delegate()],
+            false,
+            file.clone(),
+            &format!("[progress]\ninterval={interval}\nchars=200"),
+            None,
+        )
+        .await;
+        h.intake(false).await;
+        h.runtime.pass().await.unwrap();
+        assert_eq!(h.scalar("SELECT status FROM jobs").await, "running");
+        let brief = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(call) = h.worker.calls.lock().unwrap().first() {
+                    break call.brief.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let named = brief
+            .split("Progress notes for this job go in ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .map(str::to_owned);
+        let job = h.scalar("SELECT id FROM jobs").await;
+        if interval == "0" {
+            assert_eq!(named, None);
+        } else {
+            assert_eq!(named.as_deref(), Some(&*format!("progress-{job}-1.md")));
+        }
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        file.0.lock().unwrap().insert(
+            format!("progress-{job}-1.md"),
+            b"Built the CUDA target; ctest is running.\n".to_vec(),
+        );
+        let wait = tokio::time::timeout(Duration::from_secs(3), async {
+            while h
+                .scalar("SELECT CAST(count(*) AS TEXT) FROM job_progress")
+                .await
+                == "0"
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        if interval == "0" {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(
+                h.scalar("SELECT CAST(count(*) AS TEXT) FROM job_progress")
+                    .await,
+                "0"
+            );
+            h.finish(1, 1).await;
+            h.runtime.close().await.unwrap();
+            continue;
+        }
+        wait.unwrap();
+        h.runtime.pass().await.unwrap();
+        {
+            let calls = h.sink.calls.lock().unwrap();
+            let notices: Vec<_> = calls.iter().filter(|c| c.post.kind == "notice").collect();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(
+                notices[0].post.text,
+                "Built the CUDA target; ctest is running."
+            );
+            assert_eq!(notices[0].post.meta.as_ref().unwrap()["kind"], "progress");
+            assert_eq!(notices[0].post.thread_ts.as_deref(), Some("100.1"));
+        }
+        // The parent sees the note of the running job, and was not called for it.
+        assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+        h.finish(1, 1).await;
+        h.runtime.pass().await.unwrap();
+        let kinds: Vec<String> = h
+            .sink
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.post.kind.clone())
+            .collect();
+        let notice = kinds.iter().position(|k| k == "notice").unwrap();
+        let report = kinds.iter().position(|k| k == "report").unwrap();
+        assert!(notice < report, "{kinds:?}");
+        h.runtime.close().await.unwrap();
+    }
+}
+
+/// The channel ledger (#108): a check-up posted as a new thread, naming a
+/// pull request and another thread, is decided with that thread's state. The
+/// same number in a differently named repository is not the same item, and an
+/// archived thread is left out.
+#[tokio::test]
+async fn a_new_thread_sees_the_threads_it_links_to() {
+    let h = Harness::new(
+        vec![
+            json!({"reply":{"text":"Reviewing snapy #269.","status":"complete"},"summary":"Review of snapy #269 at a655d9c; ctest 821/1014 failures match main.","decisions":["#269 needs a clean ctest before sign-off"]}),
+            json!({"reply":{"text":"Looking at kintera #269.","status":"complete"}}),
+            json!({"reply":{"text":"#269 is in review in its thread.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    let message = |event: &str, ts: &str, text: &str| Message {
+        files: vec![],
+        event_id: event.into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: ts.into(),
+        thread_ts: None,
+        sender: "UALICE".into(),
+        text: text.into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![],
+    };
+    h.runtime
+        .intake(message(
+            "e1",
+            "1790927185.684379",
+            "<@UOWNER> please review https://github.com/chengcli/snapy/pull/269",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    h.runtime
+        .intake(message(
+            "e3",
+            "1790930000.000001",
+            "<@UOWNER> what about chengcli/kintera#269?",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    h.store
+        .call(|c| {
+            c.execute(
+                "UPDATE threads SET control='archived' WHERE root_ts='1790930000.000001'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.runtime
+        .intake(message(
+            "e2",
+            "1790944278.167119",
+            "<@UOWNER> Hourly summary. snapy #269: your SIGN-OFF line in thread 1790927185.684379, now.",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].session.get("linked_threads").is_none());
+    // kintera#269 is not snapy#269.
+    assert!(calls[1].session.get("linked_threads").is_none());
+    let linked = calls[2].session["linked_threads"].as_array().unwrap();
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0]["thread"], "1790927185.684379");
+    assert_eq!(linked[0]["linked_by"]["shared_items"], json!(["snapy#269"]));
+    assert_eq!(linked[0]["linked_by"]["this_thread_refers_to_it"], true);
+    assert!(linked[0]["summary"].as_str().unwrap().contains("821/1014"));
+    assert_eq!(
+        linked[0]["decisions"],
+        json!(["#269 needs a clean ctest before sign-off"])
+    );
+    h.runtime.close().await.unwrap();
+}

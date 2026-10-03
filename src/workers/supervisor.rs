@@ -1,6 +1,6 @@
 //! One supervisor per daemon. Durable job permits are distinct from sticky
 //! placement and the live process pool. Closing processes retain their permits.
-use super::protocol::*;
+use super::{progress::Tracker, protocol::*};
 use crate::{
     config::Config,
     core::{time::Clock, worker::*},
@@ -806,6 +806,14 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
             brief.push_str(&fork_header(&t).await?);
         }
         brief.push_str(&prepared);
+        // Progress notes (#105): each attempt writes its own file.
+        let watching = t.config.progress.interval > 0.;
+        let progress_file = super::artifacts::progress_file(&t.job);
+        if watching {
+            brief.push_str(&format!(
+                "\n\nProgress notes for this job go in {progress_file} in your working folder."
+            ));
+        }
         let request = RunRequest {
             job_id: t.job.id.clone(),
             attempt: t.job.attempt,
@@ -821,15 +829,21 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
         let now = t.clock.now();
         t.store.call(move|c|{c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('worker_call',?,?,0)",rusqlite::params![now,payload.to_string()])?;Ok(())}).await.map_err(|_|WorkerFailure{kind:Failure::Execution,code:"worker_intent_storage_failed".into(),backend_session_id:String::new()})?;
         in_backend.store(true, Ordering::SeqCst);
-        let outcome = t
-            .worker
-            .run(
-                request,
-                t.record.clone(),
-                t.job.clone(),
-                t.approvals.clone(),
-            )
-            .await?;
+        let run = t.worker.run(
+            request,
+            t.record.clone(),
+            t.job.clone(),
+            t.approvals.clone(),
+        );
+        let outcome = if watching {
+            let poll = poll_progress(&t, progress_file, Tracker::default());
+            tokio::select! {
+                outcome = run => outcome,
+                never = poll => match never {},
+            }
+        } else {
+            run.await
+        }?;
         if !["done", "partial", "failed", "needs_input"].contains(&outcome.result.status.as_str()) {
             return Err(WorkerFailure {
                 kind: Failure::Refusal,
@@ -915,6 +929,30 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
         });
     }
     Ok(TaskEnd { retire, closed })
+}
+
+/// Post what the worker adds to its progress file while its turn runs
+/// (#105). Never finishes on its own: it is dropped with the turn, so it cannot
+/// delay a result, an interrupt or a timeout. A failed read or store write
+/// skips one round; progress never fails a job.
+async fn poll_progress(t: &Task, file: String, mut tracker: Tracker) -> std::convert::Infallible {
+    let every = Duration::from_secs_f64(t.config.progress.interval);
+    loop {
+        tokio::time::sleep(every).await;
+        let Some(contents) = t.io.progress(t.spec.clone(), file.clone()).await else {
+            continue;
+        };
+        if let Some(note) = tracker.take(&contents, t.config.progress.chars) {
+            let _ = work::progress(
+                &t.store,
+                t.job.id.clone(),
+                t.job.attempt,
+                note,
+                t.clock.now(),
+            )
+            .await;
+        }
+    }
 }
 
 async fn record_close_failure(store: &Store, worker_id: &str, now: f64) -> Result<()> {

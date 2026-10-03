@@ -84,6 +84,9 @@ impl JobIo for LocalJobIo {
                 .map_err(|_| placement_failed())
         })
     }
+    fn progress(&self, spec: WorkerSpec, file: String) -> AdapterFuture<'_, Option<Vec<u8>>> {
+        Box::pin(progress(&self.home, None, spec, file))
+    }
     fn collect(
         &self,
         spec: WorkerSpec,
@@ -137,12 +140,70 @@ impl JobIo for SystemJobIo {
             .map_err(|_| placement_failed())
         })
     }
+    fn progress(&self, spec: WorkerSpec, file: String) -> AdapterFuture<'_, Option<Vec<u8>>> {
+        Box::pin(progress(&self.home, Some(self), spec, file))
+    }
     fn collect(
         &self,
         spec: WorkerSpec,
         artifacts: Vec<ArtifactRef>,
     ) -> AdapterFuture<'_, Result<Vec<CollectedArtifact>, WorkerFailure>> {
         Box::pin(collect(&self.home, Some(self), spec, artifacts))
+    }
+}
+/// The progress notes file in a slot workspace, and the most of it read.
+pub const PROGRESS_LIMIT: usize = 64 * 1024;
+/// The progress file of one job attempt, in its slot workspace. One file per
+/// attempt: a persistent worker's earlier notes are never posted again, and
+/// no file outgrows `PROGRESS_LIMIT` across jobs.
+pub fn progress_file(job: &Job) -> String {
+    let id: String = job
+        .id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    format!("progress-{id}-{}.md", job.attempt)
+}
+/// A confined read of the slot's progress file, like an artifact's; any
+/// failure (missing, refused, oversize, unreachable) reads as nothing.
+async fn progress(
+    home: &Path,
+    remote: Option<&SystemJobIo>,
+    spec: WorkerSpec,
+    file: String,
+) -> Option<Vec<u8>> {
+    if file.contains('/') || file.starts_with('.') {
+        return None;
+    }
+    let path = spec.workspace.path.join(file);
+    let roots = vec![spec.workspace.path.clone()];
+    match spec.machine.transport.as_str() {
+        "local" => LocalTransport {
+            machine: spec.machine.clone(),
+            home: home.into(),
+            excluded_env: spec.excluded_env.clone(),
+        }
+        .read_file(path, roots, PROGRESS_LIMIT)
+        .await
+        .ok(),
+        "ssh" => {
+            let remote = remote?;
+            SshTransport {
+                machine: spec.machine.clone(),
+                excluded_env: spec.excluded_env.clone(),
+                control_directory: remote.ssh_control_directory.clone(),
+            }
+            .read_file(
+                path,
+                roots,
+                PROGRESS_LIMIT,
+                remote.environment.clone(),
+                remote.read_timeout,
+            )
+            .await
+            .ok()
+        }
+        _ => None,
     }
 }
 async fn collect(
