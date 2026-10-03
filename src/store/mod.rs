@@ -3,6 +3,7 @@ pub mod approvals;
 pub mod configuration;
 pub mod diagnostics;
 pub mod fetch;
+pub mod links;
 pub mod migration;
 pub mod outbox;
 pub mod schema;

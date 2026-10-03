@@ -87,6 +87,16 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         work::recover(&store, clock.now()).await?;
         outbox::recover(&store, clock.now()).await?;
         actor::recover(&store).await?;
+        // A database from before the channel ledger links its last week once (#108).
+        let now = clock.now();
+        store
+            .call(move |c| {
+                let tx = c.transaction()?;
+                crate::store::links::backfill_tx(&tx, now, 7. * 86400.)?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
         let approvals = Arc::new(Broker::new(
             store.clone(),
             config.clone(),

@@ -378,3 +378,75 @@ async fn a_completed_journal_from_an_earlier_upgrade_does_not_block_the_next() {
     );
     assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 7);
 }
+#[tokio::test]
+async fn a_used_v9_database_upgrades_and_rolls_back_cleanly() {
+    used_database_upgrades_and_rolls_back(9).await;
+}
+/// A database from before the channel ledger links its last week of messages
+/// once (#108): references and thread pointers, within one channel.
+#[test]
+fn the_ledger_backfills_recent_messages_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Connection::open(dir.path().join("db")).unwrap();
+    schema::migrate(&mut c).unwrap();
+    for (event, ts, root, text, at) in [
+        (
+            "e1",
+            "1790927185.684379",
+            "1790927185.684379",
+            "Review chengcli/snapy#269",
+            100.,
+        ),
+        (
+            "e2",
+            "1790944278.167119",
+            "1790944278.167119",
+            "SIGN-OFF #269 in thread 1790927185.684379",
+            200.,
+        ),
+        (
+            "e3",
+            "1790000000.000001",
+            "1790000000.000001",
+            "Old: #269",
+            1.,
+        ),
+    ] {
+        c.execute("INSERT OR IGNORE INTO threads(id,workspace,channel,root_ts,created,updated) VALUES(?,'W','C',?,1,1)", [format!("W:C:{root}"), root.to_string()]).unwrap();
+        c.execute("INSERT INTO messages(event_id,workspace,channel,ts,root_ts,sender,text,files_json,source,received_at) VALUES(?,'W','C',?,?,'U',?,'[]','socket',?)",
+            rusqlite::params![event, ts, root, text, at]).unwrap();
+    }
+    // A top-level post of Fridica's own (a debrief) has no thread row.
+    c.execute("INSERT INTO messages(event_id,workspace,channel,ts,root_ts,sender,text,files_json,source,received_at) VALUES('e4','W','C','1790950000.000001','1790950000.000001','U','Debrief: #269 done','[]','self',150)", []).unwrap();
+    let now = 100. + 86400.;
+    assert_eq!(
+        fridica::store::links::backfill_tx(&c, now, 86400.).unwrap(),
+        3
+    );
+    assert_eq!(
+        fridica::store::links::backfill_tx(&c, now, 86400.).unwrap(),
+        0
+    );
+    let items: Vec<(String, String)> = c
+        .prepare("SELECT session_id,repo FROM item_links WHERE item='#269' ORDER BY session_id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        items,
+        [
+            ("W:C:1790927185.684379".to_string(), "snapy".to_string()),
+            ("W:C:1790944278.167119".to_string(), String::new())
+        ]
+    );
+    let target: String = c
+        .query_row(
+            "SELECT target FROM thread_links WHERE session_id='W:C:1790944278.167119'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(target, "W:C:1790927185.684379");
+}

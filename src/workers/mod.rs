@@ -5,6 +5,7 @@ pub mod fetch;
 pub mod inputs;
 pub mod instructions;
 pub mod jsonl;
+pub mod progress;
 pub mod protocol;
 pub use fridica_core::result;
 pub mod supervisor;

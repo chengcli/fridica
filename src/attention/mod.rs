@@ -120,6 +120,15 @@ pub(crate) fn intake_tx(
     }
     c.execute("INSERT OR IGNORE INTO threads(id,workspace,channel,root_ts,created,updated,control_json) VALUES(?,?,?,?,?,?,'{\"kind\":\"active\"}')",
         params![session,msg.workspace,msg.channel,root,created,created])?;
+    // The channel ledger (#108): what this message refers to.
+    crate::store::links::record_tx(
+        c,
+        &msg.workspace,
+        &msg.channel,
+        &session,
+        &msg.text,
+        created,
+    )?;
     if msg.source == "self" || !work {
         return Ok(None);
     }

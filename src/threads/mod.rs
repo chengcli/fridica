@@ -6,6 +6,8 @@ pub mod manager;
 mod debrief;
 use fridica_core::delegation;
 mod effects;
+mod linked;
+mod progress;
 use fridica_core::failure;
 mod replies;
 mod results;

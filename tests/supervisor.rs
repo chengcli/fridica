@@ -243,6 +243,9 @@ impl Harness {
         )
         .unwrap();
         config.limits.max_jobs = 3;
+        // The frozen Python briefs predate progress notes (#105), which have
+        // their own runtime test.
+        config.progress.interval = 0.;
         edit(&mut config);
         let config = Arc::new(config);
         let factory = Arc::new(Fakes::default());

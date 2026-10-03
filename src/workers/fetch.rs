@@ -242,6 +242,9 @@ impl JobIo for ScopedJobIo {
     ) -> AdapterFuture<'_, Result<Vec<inputs::Placed>, WorkerFailure>> {
         self.artifacts.place(spec, job, inputs)
     }
+    fn progress(&self, spec: WorkerSpec, file: String) -> AdapterFuture<'_, Option<Vec<u8>>> {
+        self.artifacts.progress(spec, file)
+    }
     fn collect(
         &self,
         spec: WorkerSpec,

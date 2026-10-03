@@ -594,6 +594,23 @@ Alice:   can you fix snowy and rerun?
   comes from someone else; after an owner resume or instruction; for worker results and
   corrections; and when the earlier post never reached Slack. A dropped repeat counts
   as a turn without progress.
+- **Progress while a job runs.** For a long job, a worker appends short notes to a
+  progress file its brief names (one per job attempt, `progress-<job>-<attempt>.md`
+  in its working folder) as stages finish. Fridica reads the file every
+  `[progress] interval` seconds (default 120; 0 turns this off) and posts each new
+  note to the thread, cut to `chars` (default 1500). Notes come before the final
+  report, pass the same egress checks, and need no parent call; the parent sees the
+  latest note of each running job.
+- **Threads know their neighbours.** A check-up posted as a new thread ("Hourly
+  summary: #269, your sign-off in thread 1790927185.684379") is answered with the
+  state of the threads it points at. Fridica links threads of one channel when a
+  message names another thread (a timestamp or permalink) or the same pull request
+  or issue (`#269`, `owner/repo#269`, or a GitHub URL). Each turn, the parent sees up
+  to four linked threads: their summary, notes, latest decisions, open asks, jobs
+  with their progress, and latest messages. A shared number links two threads only
+  when both mentioned it within 14 days, and never across differently named
+  repositories. Links never cross channels, archived, closed and cleaned threads are
+  left out, and on upgrade the last week of messages is linked once.
 - **Debrief.** When the parent marks a discussion finished, a debrief is posted to
   the channel.
 - **Several owners' Fridicas in one thread.** Every post carries metadata:
