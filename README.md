@@ -724,13 +724,19 @@ versioned `migrations/`) is the only code that runs DDL.
 ## Development
 
 ```bash
-cargo test --locked --all-targets     # the native daemon
+cargo nextest run --locked --all-targets   # the native daemon (cargo install cargo-nextest)
+cargo test --locked --doc                  # doctests, which nextest does not run
 pip install -r requirements-dev.txt
 python -m pytest -q                   # no network; fake Slack, fake claude/codex/ssh/bwrap executables
 maturin build --release --out dist    # a wheel for this machine; scripts/smoke_wheel.sh dist/*.whl
 node --test tests/dashboard.test.cjs
 ruff check src tests
 ```
+
+nextest runs each test in its own process and schedules tests from all test binaries
+together, which is much faster than `cargo test` here: many tests start real child
+processes and wait on real timeouts. `cargo test --locked --all-targets` still works.
+Profiles are in [`.config/nextest.toml`](.config/nextest.toml); CI uses `--profile ci`.
 
 The architecture is described in [`docs/architecture.md`](docs/architecture.md).
 A data-backed design document (layers, context management, security, mapping to Slack, and a comparison

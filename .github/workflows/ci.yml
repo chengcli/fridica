@@ -47,11 +47,13 @@ jobs:
             sudo apparmor_parser -r /etc/apparmor.d/bwrap
           fi
           bwrap --unshare-user --ro-bind / / -- /bin/true
+      - uses: taiki-e/install-action@nextest
       - name: Formatting, lints and tests
         run: |
           cargo fmt --all --check
           cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets -- --test-threads=2
+          cargo nextest run --locked --all-targets --profile ci
+          cargo test --locked --doc
 
   native-candidate:
     name: Native candidate packaging (Linux x86_64)
