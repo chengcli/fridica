@@ -117,7 +117,9 @@ async fn signals_drain_real_observer_and_database_lock_rejects_second_launch() {
             .spawn()
             .unwrap();
         let pid = Pid::from_raw(child.id().unwrap() as i32).unwrap();
-        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), proxy.accept())
+        // Daemon startup on a busy runner (all cores taken by nextest) can pass
+        // 5 s; the bound only has to catch a hang.
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(30), proxy.accept())
             .await
             .unwrap()
             .unwrap();
