@@ -139,7 +139,6 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
 ) -> Result<ComposedRuntime<S>> {
     let context = crate::config::LoadContext::current()?;
     let files: Arc<dyn Downloader> = slack.clone();
-    let mut heads = None;
     let (adapters, observe_only, parent_factory): (_, _, ParentFactory<ComposedParent>) = match mode
     {
         Mode::ObserveOnly => (
@@ -161,7 +160,6 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                 let (store, clock, slack) = (store.clone(), clock.clone(), slack.clone());
                 let options = execution.parent;
                 let github = execution.github;
-                heads = github.clone();
                 Arc::new(move |config| {
                     let mut parent = CliParent::new(
                         config.clone(),
@@ -222,8 +220,5 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
         .await?
         .with_configuration_editor(parent_factory, context)
         .with_files(files);
-    Ok(match heads {
-        Some(heads) => runtime.with_github(heads),
-        None => runtime,
-    })
+    Ok(runtime)
 }

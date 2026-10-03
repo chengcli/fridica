@@ -19,6 +19,8 @@ fn worker(c: &Connection, id: &str) -> Result<WorkerRecord> {
     let raw: String = c.query_row(&format!("{WORKER} WHERE id=?"), [id], |r| r.get(0))?;
     Ok(serde_json::from_str(&raw)?)
 }
+/// The failure code of a job the backend's usage limit stopped (#107).
+pub const RATE_LIMITED: &str = "backend_rate_limited";
 pub async fn get_job(store: &Store, id: String) -> Result<Job> {
     store.call(move |c| job(c, &id)).await
 }
@@ -285,7 +287,9 @@ pub async fn complete(
         let resume=if session.is_empty(){w.backend_session_id.as_str()}else{session};
         let control:String=tx.query_row("SELECT control FROM threads WHERE id=?",[&j.session_id],|r|r.get(0))?;
         let retry=completion.allow_retry && !stopped && !interrupted && j.attempt==1 && !resume.is_empty() && control=="active" &&
-            matches!(&completion.outcome,Err(e) if e.kind==Failure::Execution);
+            // A usage limit is not retried at once into the same limit (#107);
+            // the parent sees the reset time with the result instead.
+            matches!(&completion.outcome,Err(e) if e.kind==Failure::Execution && e.code!=RATE_LIMITED);
         let result_json=result.map(serde_json::to_string).transpose()?;
         let summary=result.map(|r|r.summary.as_str()).unwrap_or("");
         let retire=stopped || (w.ephemeral && !retry);

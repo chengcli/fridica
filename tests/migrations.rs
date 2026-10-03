@@ -313,3 +313,68 @@ fn rollback_after_a_used_v6_upgrade_refuses_once_the_daemon_wrote() {
     let error = migration::rollback(&db, &cfg).unwrap_err().to_string();
     assert!(error.contains("durable mutations"), "{error}");
 }
+
+/// The next upgrade after a finished one (#106): the earlier upgrade's
+/// `complete` journal is archived beside its backup instead of blocking the
+/// new upgrade as "not resumable", and the new upgrade still rolls back.
+#[tokio::test]
+async fn a_completed_journal_from_an_earlier_upgrade_does_not_block_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let cfg = dir.path().join("config.toml");
+    config_file(&cfg);
+    drop(used_at(&db, 7));
+    // What the v4 -> v7 upgrade left behind.
+    let journal = dir.path().join("state.sqlite3.migration.json");
+    let earlier = serde_json::json!({
+        "database": std::fs::canonicalize(&db).unwrap(),
+        "config": std::fs::canonicalize(&cfg).unwrap(),
+        "from": 4,
+        "config_before": "earlier",
+        "config_after": "earlier",
+        "backup_hash": "earlier",
+        "phase": "complete",
+        "generation": 1
+    });
+    std::fs::write(&journal, serde_json::to_vec(&earlier).unwrap()).unwrap();
+    migration::migrate(&db, &cfg, 10.).unwrap();
+    assert_eq!(
+        schema::version(&Connection::open(&db).unwrap()).unwrap(),
+        schema::VERSION
+    );
+    let archived: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.path().join("state.sqlite3.migration.v7.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(archived, earlier);
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+    assert_eq!(
+        (current["phase"].as_str(), current["from"].as_u64()),
+        (Some("complete"), Some(7))
+    );
+    migration::rollback(&db, &cfg).unwrap();
+    assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 7);
+
+    // An archive in the way is preserved, never overwritten.
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.sqlite3");
+    let cfg = dir.path().join("config.toml");
+    config_file(&cfg);
+    drop(used_at(&db, 7));
+    let mut earlier = earlier;
+    earlier["database"] = serde_json::json!(std::fs::canonicalize(&db).unwrap());
+    earlier["config"] = serde_json::json!(std::fs::canonicalize(&cfg).unwrap());
+    std::fs::write(
+        dir.path().join("state.sqlite3.migration.json"),
+        serde_json::to_vec(&earlier).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("state.sqlite3.migration.v7.json"), b"keep").unwrap();
+    assert!(migration::migrate(&db, &cfg, 10.).is_err());
+    assert_eq!(
+        std::fs::read(dir.path().join("state.sqlite3.migration.v7.json")).unwrap(),
+        b"keep"
+    );
+    assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 7);
+}

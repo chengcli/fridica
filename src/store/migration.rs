@@ -163,7 +163,7 @@ fn migrate_with_checkpoint(
     let backup_path = sibling(&database, &backup_suffix());
     let config_backup = sibling(&configuration, &backup_suffix());
     let plan = dry_run(&database, &configuration)?;
-    let mut journal: Journal = if journal_path.exists() {
+    let prior: Option<Journal> = if journal_path.exists() {
         let prior: Journal = serde_json::from_slice(&fs::read(&journal_path)?)?;
         if prior.database != database || prior.config != configuration {
             bail!("migration journal path mismatch");
@@ -171,12 +171,30 @@ fn migrate_with_checkpoint(
         if prior.phase == "complete" && plan.from == schema::VERSION {
             return Ok(plan);
         }
-        if prior.phase == "rolled_back" {
+        if prior.phase == "complete" {
+            // An earlier upgrade finished (to the schema the database is at
+            // now); this is the next one (#106). Its journal is kept beside its
+            // own backup, and this upgrade starts a journal of its own.
+            let archive = sibling(&database, &format!(".migration.v{}.json", plan.from));
+            if archive.exists() {
+                bail!("an archived migration journal already exists; preserve it before retrying");
+            }
+            fs::rename(&journal_path, &archive)?;
+            if let Some(parent) = journal_path.parent() {
+                fs::File::open(parent)?.sync_all()?;
+            }
+            None
+        } else if prior.phase == "rolled_back" {
             bail!("archive the completed rollback journal before a new migration");
-        }
-        if !matches!(prior.phase.as_str(), "preparing" | "prepared") {
+        } else if !matches!(prior.phase.as_str(), "preparing" | "prepared") {
             bail!("migration journal is not resumable; finish rollback or restore explicitly");
+        } else {
+            Some(prior)
         }
+    } else {
+        None
+    };
+    let mut journal: Journal = if let Some(prior) = prior {
         prior
     } else {
         if plan.from == schema::VERSION && !plan.config_changes {
