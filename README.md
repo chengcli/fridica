@@ -453,6 +453,12 @@ Only text under `##` headings reaches a model:
 
 Missing optional sections fall back to the packaged ones.
 
+The fixed instructions Fridica adds around the contract are packaged too, in
+[`assets/prompts`](assets/prompts): the parent's action rules
+(`parent-action.md`), the triage and debrief answer formats, and the
+untrusted-data line that closes every parent and worker prompt. They are not
+read from `config.toml`'s directory; changing them is a pull request.
+
 ## Repository list
 
 `fridica/parent/repos.toml` ships with the package and is shared by the whole team.

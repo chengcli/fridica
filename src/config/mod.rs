@@ -4,6 +4,7 @@ pub mod editor;
 pub mod egress;
 pub mod isolation;
 pub mod loader;
+pub mod prompts;
 pub mod provisions;
 pub mod repos;
 pub mod schema;
