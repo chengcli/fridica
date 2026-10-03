@@ -88,7 +88,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         observe_only: bool,
     ) -> Result<Self> {
         adapters.workers.validate_config(&config)?;
-        configuration::recover_startup(&store, &config, clock.now()).await?;
+        super::configuration::recover_startup(&store, &config, clock.now()).await?;
         let timeout = Duration::try_from_secs_f64(config.parent.timeout)?;
         work::recover(&store, clock.now()).await?;
         outbox::recover(&store, clock.now()).await?;
@@ -228,7 +228,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
                 anyhow::anyhow!("configuration reconciliation requires adapter factory")
             })?;
             let config = Arc::new(crate::config::load(&current.path, context)?);
-            configuration::verify(&intent, &config)?;
+            super::configuration::verify(&intent, &config)?;
             let manager = self.manager_for(config.clone())?;
             self.supervisor.reconfigure(config.clone()).await?;
             *self.snapshot.write().unwrap() = Snapshot { config, manager };
@@ -261,7 +261,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         if edit.config.fingerprint == current.fingerprint {
             return Ok(current);
         }
-        configuration::replace(&self.store, edit, self.now()).await?;
+        super::configuration::replace(&self.store, edit, self.now()).await?;
         self.reconcile_configuration().await?;
         Ok(self.config())
     }

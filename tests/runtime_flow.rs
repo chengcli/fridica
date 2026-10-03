@@ -3203,12 +3203,17 @@ async fn parent_interrupt_blocks_retry_and_admission_until_its_outcome_is_reconc
         "interrupted"
     );
     assert_eq!(h.worker.interruptions.load(Ordering::SeqCst), 0);
-    assert!(
-        work::claim(&h.store, "next".into(), 1, h.config.clone(), 20.)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(work::claim(
+        &h.store,
+        "next".into(),
+        1,
+        h.config.machines.clone(),
+        h.config.limits.clone(),
+        20.
+    )
+    .await
+    .unwrap()
+    .is_none());
     h.parent.responses.lock().unwrap().push_back(json!({}));
     h.runtime.pass().await.unwrap();
     assert_eq!(
@@ -3334,12 +3339,17 @@ async fn parent_control_snapshot_is_fenced_by_admission_or_owner_pause_during_th
                 .await
                 .unwrap();
         } else {
-            assert!(
-                work::claim(&h.store, "queued".into(), 1, h.config.clone(), 20.)
-                    .await
-                    .unwrap()
-                    .is_some()
-            );
+            assert!(work::claim(
+                &h.store,
+                "queued".into(),
+                1,
+                h.config.machines.clone(),
+                h.config.limits.clone(),
+                20.
+            )
+            .await
+            .unwrap()
+            .is_some());
         }
         gate.add_permits(1);
         assert_eq!(
@@ -3683,7 +3693,9 @@ async fn lost_configuration_ack_rebuilds_actor_limits_before_the_next_turn() {
         &context,
     )
     .unwrap();
-    configuration::replace(&h.store, edit, 20.).await.unwrap();
+    fridica::threads::configuration::replace(&h.store, edit, 20.)
+        .await
+        .unwrap();
     assert_eq!(h.runtime.config().limits.max_delegations_per_turn, 3);
     h.intake(false).await;
     h.runtime.pass().await.unwrap();

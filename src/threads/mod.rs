@@ -1,4 +1,5 @@
 pub mod actor;
+pub mod configuration;
 pub mod controls;
 pub mod dispatcher;
 pub mod manager;

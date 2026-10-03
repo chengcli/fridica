@@ -1,14 +1,14 @@
 //! Durable job admission and completion. Backend I/O never runs on this thread.
 use super::Store;
 use crate::{
-    config::Config,
+    core::config::{registry::Registry, Limits},
     core::worker::{CollectedArtifact, Failure, Job, Outcome, WorkerFailure, WorkerRecord},
 };
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 const JOB:&str="SELECT json_object('id',id,'worker_id',worker_id,'session_id',session_id,'brief',brief,'join_group',join_group,'inbox_id',inbox_id,'deliverable',deliverable,'fetch_repo',fetch_repo,'fetch_ref',fetch_ref,'files',json(files_json),'context',context,'snapshot',json(snapshot_json),'fork_from_worker',fork_from_worker,'status',status,'attempt',attempt,'work_item_id',work_item_id,'target_sha',target_sha,'target_tree',target_tree,'retry_of',retry_of,'clearance',clearance) FROM jobs";
 const WORKER:&str="SELECT json_object('id',id,'session_id',session_id,'machine',machine,'workspace',workspace,'backend',backend,'role',role,'ephemeral',json(CASE WHEN ephemeral THEN 'true' ELSE 'false' END),'backend_session_id',backend_session_id,'status',status,'slot',slot,'updated',updated) FROM workers";
 fn job(c: &Connection, id: &str) -> Result<Job> {
@@ -25,7 +25,7 @@ pub async fn get_job(store: &Store, id: String) -> Result<Job> {
 pub async fn get_worker(store: &Store, id: String) -> Result<WorkerRecord> {
     store.call(move |c| worker(c, &id)).await
 }
-pub(crate) fn add_worker_tx(c: &Connection, w: &WorkerRecord, now: f64) -> Result<()> {
+pub fn add_worker_tx(c: &Connection, w: &WorkerRecord, now: f64) -> Result<()> {
     if w.id.is_empty() || !now.is_finite() {
         bail!("invalid worker identity/time");
     }
@@ -36,7 +36,7 @@ pub(crate) fn add_worker_tx(c: &Connection, w: &WorkerRecord, now: f64) -> Resul
 pub async fn add_worker(store: &Store, w: WorkerRecord, now: f64) -> Result<()> {
     store.call(move |c| add_worker_tx(c, &w, now)).await
 }
-pub(crate) fn enqueue_tx(c: &Connection, j: &Job, now: f64) -> Result<()> {
+pub fn enqueue_tx(c: &Connection, j: &Job, now: f64) -> Result<()> {
     if j.id.is_empty() || j.brief.trim().is_empty() || !now.is_finite() || j.clearance != "worker" {
         bail!("invalid job identity/brief/time");
     }
@@ -53,7 +53,7 @@ pub async fn enqueue(store: &Store, j: Job, now: f64) -> Result<()> {
     store.call(move |c| enqueue_tx(c, &j, now)).await
 }
 /// Context and placement load are read inside the actor's snapshot transaction.
-pub(crate) fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Value> {
+pub fn context_tx(c: &Connection, session: &str) -> Result<serde_json::Value> {
     let workers: Vec<String> = c
         .prepare(&format!("{WORKER} WHERE session_id=? ORDER BY id"))?
         .query_map([session], |r| r.get(0))?
@@ -125,7 +125,7 @@ pub async fn previous_snapshot(
 }
 /// Files attached in this thread by others, newest first, that a delegation
 /// may hand to a worker. Fridica's own uploads are left out.
-pub(crate) fn files_tx(c: &Connection, session: &str) -> Result<Vec<serde_json::Value>> {
+pub fn files_tx(c: &Connection, session: &str) -> Result<Vec<serde_json::Value>> {
     let rows: Vec<(String, String, String)> = c
         .prepare("SELECT attachments_json,ts,sender FROM messages WHERE workspace||':'||channel||':'||root_ts=? AND attachments_json!='[]' ORDER BY CAST(ts AS REAL) DESC LIMIT 100")?
         .query_map([session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
@@ -226,18 +226,20 @@ fn cancel(c: &Connection, j: &Job, error: &str, now: f64) -> Result<()> {
     )?;
     notify(c, j, now)
 }
-/// Candidate slot selection is advisory. Recheck all durable limits at admission.
+/// Candidate slot selection is advisory. Recheck all durable limits at
+/// admission, against the configured `machines` and `limits`.
 pub async fn claim(
     store: &Store,
     id: String,
     slot: usize,
-    config: Arc<Config>,
+    machines: Registry,
+    limits: Limits,
     now: f64,
 ) -> Result<Option<(Job, WorkerRecord)>> {
     store.call(move|c|{
         let tx=c.transaction()?;let mut j=job(&tx,&id)?;if j.status!="queued" || j.clearance!="worker"{return Ok(None);}
         let mut w=worker(&tx,&j.worker_id)?;
-        let machine=config.machines.get(&w.machine);
+        let machine=machines.get(&w.machine);
         let active:bool=tx.query_row("SELECT control='active' FROM threads WHERE id=?",[&j.session_id],|r|r.get(0))?;
         if w.status=="stopped" || machine.is_none(){cancel(&tx,&j,if w.status=="stopped"{"worker stopped"}else{"machine no longer configured"},now)?;tx.commit()?;return Ok(None);}
         let m=machine.unwrap();
@@ -250,9 +252,9 @@ pub async fn claim(
         let (total,machine_count,worker_count,occupied):(i64,i64,i64,i64)=tx.query_row(
             "SELECT COUNT(*),COALESCE(SUM(w.machine=?),0),COALESCE(SUM(j.worker_id=?),0),COALESCE(SUM(w.machine=? AND w.slot=?),0) FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.status='running'",
             params![w.machine,w.id,w.machine,i64::try_from(slot)?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-        if total as u64>=config.limits.max_jobs as u64 || machine_count as u64>=m.max_jobs as u64 || worker_count>0 || occupied>0{return Ok(None);}
+        if total as u64>=limits.max_jobs as u64 || machine_count as u64>=m.max_jobs as u64 || worker_count>0 || occupied>0{return Ok(None);}
         tx.execute("UPDATE jobs SET status='running',started_at=?,finished_at=0,attempt=attempt+1 WHERE id=?",params![now,id])?;
-        if w.updated!=0. && now-w.updated>config.limits.session_timeout && j.retry_of.is_empty() {
+        if w.updated!=0. && now-w.updated>limits.session_timeout && j.retry_of.is_empty() {
             w.backend_session_id.clear();
         }
         tx.execute("UPDATE workers SET status='running',slot=?,backend_session_id=? WHERE id=?",params![i64::try_from(slot)?,w.backend_session_id,w.id])?;
@@ -372,7 +374,7 @@ pub async fn stop(store: &Store, worker_id: String, now: f64) -> Result<()> {
         .await
 }
 
-pub(crate) fn stop_tx(c: &Connection, worker_id: &str, actor: &str, now: f64) -> Result<()> {
+pub fn stop_tx(c: &Connection, worker_id: &str, actor: &str, now: f64) -> Result<()> {
     let queued: Vec<String> = c
         .prepare(
             "SELECT id FROM jobs WHERE worker_id=? AND status='queued' ORDER BY queued_at,rowid",

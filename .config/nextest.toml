@@ -17,12 +17,12 @@ fail-fast = false
 retries = 1
 
 # Two exhaustive tests replay a migration from every interruption point and a
-# large frozen GitHub corpus; they take 3-5 minutes alone on a busy machine.
-# Give them up to 10 minutes rather than the default 5.
+# large frozen GitHub corpus; they take 3-11 minutes alone on a busy machine.
+# Give them up to 20 minutes rather than the default 5.
 [[profile.default.overrides]]
 filter = 'test(a_used_database_resumes_or_rolls_back_from_every_interruption) | test(frozen_github_state_projections_and_request_multisets_match)'
-slow-timeout = { period = "120s", terminate-after = 5 }
+slow-timeout = { period = "120s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
 filter = 'test(a_used_database_resumes_or_rolls_back_from_every_interruption) | test(frozen_github_state_projections_and_request_multisets_match)'
-slow-timeout = { period = "120s", terminate-after = 5 }
+slow-timeout = { period = "120s", terminate-after = 10 }

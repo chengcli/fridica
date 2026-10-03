@@ -1,7 +1,8 @@
-//! The file and SQLite cannot share a transaction. Journal fingerprints before
-//! replacement and leave the request pending until runtime snapshots agree.
+//! The configuration-edit journal. The file and SQLite cannot share a
+//! transaction: record the fingerprints before replacement and leave the
+//! request pending until runtime snapshots agree. Checking an intent against a
+//! loaded configuration is the host's (fridica's `threads::configuration`).
 use super::Store;
-use crate::config::{editor, Config};
 use anyhow::{bail, Result};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,13 @@ pub async fn pending(store: &Store) -> Result<Option<(i64, Intent)>> {
         rows.into_iter().next().map(|(id, raw)| Ok((id, serde_json::from_str(&raw)?))).transpose()
     }).await
 }
-pub async fn replace(store: &Store, edit: editor::Prepared, now: f64) -> Result<()> {
+/// Record `intent` as the one pending edit, then run `commit` (which replaces
+/// the file) on the store thread, so a cancelled caller cannot leave the file
+/// replaced without its intent recorded.
+pub async fn replace<F>(store: &Store, intent: Intent, now: f64, commit: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()> + Send + 'static,
+{
     if !now.is_finite() {
         bail!("invalid configuration edit time");
     }
@@ -31,13 +38,12 @@ pub async fn replace(store: &Store, edit: editor::Prepared, now: f64) -> Result<
         let tx = c.transaction()?;
         let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='configuration_edit' AND complete=0)", [], |r| r.get(0))?;
         if pending { bail!("configuration edit awaits reconciliation"); }
-        let intent = Intent { path: edit.config.path.clone(), before: edit.before.clone(), after: edit.config.fingerprint.clone() };
         tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('configuration_edit',?,?,0)", params![now,serde_json::to_string(&intent)?])?;
         tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'owner','configuration_edit',?,?)", params![now,intent.path.to_string_lossy(),json!({"before":intent.before,"after":intent.after}).to_string()])?;
         tx.commit()?;
         // This closure survives cancellation of its caller. Never acknowledge the
         // intent here: adapters still need rebuilding, even if rename succeeds.
-        edit.commit()
+        commit()
     }).await
 }
 pub async fn complete(store: &Store, id: i64, applied: bool, now: f64) -> Result<()> {
@@ -52,26 +58,4 @@ pub async fn complete(store: &Store, id: i64, applied: bool, now: f64) -> Result
         tx.commit()?;
         Ok(())
     }).await
-}
-/// Startup adapters were constructed from `config`. An unrenamed edit is
-/// explicitly abandoned; a renamed edit is adopted only from exactly that file.
-pub async fn recover_startup(store: &Store, config: &Config, now: f64) -> Result<()> {
-    if let Some((id, intent)) = pending(store).await? {
-        let applied = verify(&intent, config)?;
-        editor::sync_directory(&config.path)?;
-        complete(store, id, applied, now).await?;
-    }
-    Ok(())
-}
-pub fn verify(intent: &Intent, config: &Config) -> Result<bool> {
-    if intent.path != config.path || editor::disk_fingerprint(&config.path)? != config.fingerprint {
-        bail!("pending configuration edit conflicts with loaded configuration");
-    }
-    if config.fingerprint == intent.after {
-        Ok(true)
-    } else if config.fingerprint == intent.before {
-        Ok(false)
-    } else {
-        bail!("pending configuration edit conflicts with external changes")
-    }
 }

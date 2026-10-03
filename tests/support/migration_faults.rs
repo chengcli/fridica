@@ -48,12 +48,18 @@ impl Fixture {
         f
     }
     fn interrupt(&self, at: &str) {
-        let error = migrate_with_checkpoint(&self.db, &self.cfg, 10., |phase| {
-            if phase == at {
-                bail!("injected interruption at {phase}");
-            }
-            Ok(())
-        })
+        let error = migrate_with_checkpoint(
+            &self.db,
+            &self.cfg,
+            10.,
+            &crate::cli::migrate::ConfigFile,
+            |phase| {
+                if phase == at {
+                    bail!("injected interruption at {phase}");
+                }
+                Ok(())
+            },
+        )
         .unwrap_err();
         assert!(
             error.to_string().contains("injected interruption"),
@@ -77,8 +83,8 @@ fn every_migration_boundary_recovers_and_retains_one_resume_and_original_backup(
         let f = Fixture::new();
         f.interrupt(phase);
         assert_eq!(check_ready(&f.db).is_ok(), phase == "complete");
-        migrate(&f.db, &f.cfg, 20.).unwrap();
-        migrate(&f.db, &f.cfg, 30.).unwrap();
+        migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile).unwrap();
+        migrate(&f.db, &f.cfg, 30., &crate::cli::migrate::ConfigFile).unwrap();
         check_ready(&f.db).unwrap();
         let c = Connection::open(&f.db).unwrap();
         assert_eq!(schema::version(&c).unwrap(), schema::VERSION);
@@ -96,7 +102,7 @@ fn every_migration_boundary_recovers_and_retains_one_resume_and_original_backup(
             fs::read_to_string(sibling(&f.cfg, &backup_suffix())).unwrap(),
             f.original
         );
-        rollback(&f.db, &f.cfg).unwrap();
+        rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).unwrap();
         assert_eq!(schema::version(&c).unwrap(), 5);
         assert_eq!(fs::read_to_string(&f.cfg).unwrap(), f.original);
     }
@@ -114,12 +120,14 @@ fn interrupted_migration_cannot_adopt_later_mutations_as_rollback_baseline() {
         )
         .unwrap();
         c.execute("DELETE FROM health_events", []).unwrap();
-        assert!(migrate(&f.db, &f.cfg, 20.)
-            .unwrap_err()
-            .to_string()
-            .contains("durable mutations"));
+        assert!(
+            migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile)
+                .unwrap_err()
+                .to_string()
+                .contains("durable mutations")
+        );
         assert!(check_ready(&f.db).is_err());
-        assert!(rollback(&f.db, &f.cfg).is_err());
+        assert!(rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).is_err());
     }
 }
 
@@ -127,22 +135,28 @@ fn interrupted_migration_cannot_adopt_later_mutations_as_rollback_baseline() {
 fn concurrent_configuration_edit_is_preserved_and_migration_can_be_reconciled() {
     let f = Fixture::new();
     let edited = format!("{}\n# edited concurrently\n", f.original);
-    let error = migrate_with_checkpoint(&f.db, &f.cfg, 10., |phase| {
-        if phase == "conversion" {
-            fs::write(&f.cfg, &edited)?;
-        }
-        Ok(())
-    })
+    let error = migrate_with_checkpoint(
+        &f.db,
+        &f.cfg,
+        10.,
+        &crate::cli::migrate::ConfigFile,
+        |phase| {
+            if phase == "conversion" {
+                fs::write(&f.cfg, &edited)?;
+            }
+            Ok(())
+        },
+    )
     .unwrap_err();
     assert!(error
         .to_string()
         .contains("configuration changed before replacement"));
     assert_eq!(fs::read_to_string(&f.cfg).unwrap(), edited);
     assert!(check_ready(&f.db).is_err());
-    assert!(migrate(&f.db, &f.cfg, 20.).is_err());
+    assert!(migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile).is_err());
     fs::write(&f.cfg, &f.original).unwrap();
-    migrate(&f.db, &f.cfg, 30.).unwrap();
-    rollback(&f.db, &f.cfg).unwrap();
+    migrate(&f.db, &f.cfg, 30., &crate::cli::migrate::ConfigFile).unwrap();
+    rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).unwrap();
 }
 
 #[test]
@@ -152,14 +166,16 @@ fn migration_respects_the_shared_configuration_writer_lock() {
     let guard =
         super::super::private_file(&f.cfg.with_file_name(".config.toml.edit.lock")).unwrap();
     guard.try_lock_exclusive().unwrap();
-    assert!(migrate(&f.db, &f.cfg, 10.)
-        .unwrap_err()
-        .to_string()
-        .contains("another Fridica configuration edit"));
+    assert!(
+        migrate(&f.db, &f.cfg, 10., &crate::cli::migrate::ConfigFile)
+            .unwrap_err()
+            .to_string()
+            .contains("another Fridica configuration edit")
+    );
     assert_eq!(fs::read_to_string(&f.cfg).unwrap(), f.original);
     drop(guard);
-    migrate(&f.db, &f.cfg, 20.).unwrap();
-    rollback(&f.db, &f.cfg).unwrap();
+    migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile).unwrap();
+    rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).unwrap();
 }
 
 #[test]
@@ -170,21 +186,22 @@ fn interrupted_rollback_resumes_its_direction_and_preserves_both_original_files(
         "rollback_configuration",
     ] {
         let f = Fixture::new();
-        migrate(&f.db, &f.cfg, 10.).unwrap();
-        let error = rollback_with_checkpoint(&f.db, &f.cfg, |at| {
-            if at == phase {
-                bail!("injected rollback interruption");
-            }
-            Ok(())
-        })
-        .unwrap_err();
+        migrate(&f.db, &f.cfg, 10., &crate::cli::migrate::ConfigFile).unwrap();
+        let error =
+            rollback_with_checkpoint(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile, |at| {
+                if at == phase {
+                    bail!("injected rollback interruption");
+                }
+                Ok(())
+            })
+            .unwrap_err();
         assert!(error.to_string().contains("injected rollback interruption"));
         assert!(check_ready(&f.db).is_err());
         assert!(
-            migrate(&f.db, &f.cfg, 20.).is_err(),
+            migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile).is_err(),
             "must not reverse an unfinished rollback"
         );
-        rollback(&f.db, &f.cfg).unwrap();
+        rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).unwrap();
         assert_eq!(
             schema::version(&Connection::open(&f.db).unwrap()).unwrap(),
             5
@@ -197,9 +214,14 @@ fn interrupted_rollback_resumes_its_direction_and_preserves_both_original_files(
 fn every_recognized_schema_upgrades_repeats_and_restores_its_own_backup() {
     for version in 0..schema::VERSION {
         let f = Fixture::at_version(version);
-        assert_eq!(dry_run(&f.db, &f.cfg).unwrap().from, version);
-        migrate(&f.db, &f.cfg, 10.).unwrap();
-        migrate(&f.db, &f.cfg, 20.).unwrap();
+        assert_eq!(
+            dry_run(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile)
+                .unwrap()
+                .from,
+            version
+        );
+        migrate(&f.db, &f.cfg, 10., &crate::cli::migrate::ConfigFile).unwrap();
+        migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile).unwrap();
         let c = Connection::open(&f.db).unwrap();
         assert_eq!(schema::version(&c).unwrap(), schema::VERSION);
         assert_eq!(
@@ -211,7 +233,7 @@ fn every_recognized_schema_upgrades_repeats_and_restores_its_own_backup() {
             .unwrap(),
             i64::from(version > 0)
         );
-        rollback(&f.db, &f.cfg).unwrap();
+        rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).unwrap();
         assert_eq!(schema::version(&c).unwrap(), version);
         assert_eq!(fs::read_to_string(&f.cfg).unwrap(), f.original);
     }
@@ -225,7 +247,7 @@ fn a_used_database_resumes_or_rolls_back_from_every_interruption() {
         // Resume: the interrupted upgrade finishes on the next run.
         let f = Fixture::used_at(version);
         f.interrupt(phase);
-        migrate(&f.db, &f.cfg, 20.).unwrap();
+        migrate(&f.db, &f.cfg, 20., &crate::cli::migrate::ConfigFile).unwrap();
         let c = Connection::open(&f.db).unwrap();
         assert_eq!(schema::version(&c).unwrap(), schema::VERSION, "{phase}");
         let journal: serde_json::Value =
@@ -236,7 +258,7 @@ fn a_used_database_resumes_or_rolls_back_from_every_interruption() {
         // half-migrated database, and the backup takes it back as it was.
         let f = Fixture::used_at(version);
         f.interrupt(phase);
-        rollback(&f.db, &f.cfg).unwrap();
+        rollback(&f.db, &f.cfg, &crate::cli::migrate::ConfigFile).unwrap();
         let c = Connection::open(&f.db).unwrap();
         assert_eq!(schema::version(&c).unwrap(), version, "{phase}");
         assert_eq!(fs::read_to_string(&f.cfg).unwrap(), f.original, "{phase}");

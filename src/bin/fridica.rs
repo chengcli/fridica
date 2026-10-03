@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use fridica::{
     core::time::{Clock, SystemClock},
     report,
-    store::{migration, Store},
+    store::Store,
 };
 use std::path::{Path, PathBuf};
 
@@ -304,13 +304,13 @@ async fn run(cli: Cli) -> Result<()> {
             let config = config_path(config)?;
             let database = database_path(database, &config)?;
             if rollback {
-                migration::rollback(&database, &config)?;
+                fridica::cli::migrate::rollback(&database, &config)?;
                 println!("Restored migration backups.");
             } else {
                 let plan = if dry_run {
-                    migration::dry_run(&database, &config)?
+                    fridica::cli::migrate::dry_run(&database, &config)?
                 } else {
-                    migration::migrate(&database, &config, SystemClock.now())?
+                    fridica::cli::migrate::migrate(&database, &config, SystemClock.now())?
                 };
                 println!("{}", serde_json::to_string_pretty(&plan)?);
             }
