@@ -10,6 +10,7 @@ use crate::{
     exec::fetch::{Fetched, Fetcher, Request},
     store::{fetch, Store},
 };
+use fridica_core::store::Store as _;
 use fridica_slack::files::Downloader;
 use serde_json::json;
 use std::sync::Arc;
@@ -210,11 +211,8 @@ impl ScopedJobIo {
         let now = self.clock.now();
         let payload = json!({"job_id":job.id,"attempt":job.attempt,"result":payload});
         self.store
-            .call(move |c| {
-                c.execute(
-                    "INSERT INTO replay_events(kind,time,payload_json) VALUES('worker_files',?,?)",
-                    rusqlite::params![now, payload.to_string()],
-                )?;
+            .transact(move |u| {
+                u.record("worker_files", now, &payload.to_string(), true)?;
                 Ok(())
             })
             .await

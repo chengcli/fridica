@@ -535,8 +535,7 @@ dependencies = [
 [[package]]
 name = "fridica-core"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f55789bb3e88f56327800a2ae3eedc1fd04f2068221dc66b034bc354e44346b7"
+source = "git+https://github.com/chengcli/fridica-core?rev=e276725733561f0f37c1a35570d643fecf837126#e276725733561f0f37c1a35570d643fecf837126"
 dependencies = [
  "anyhow",
  "regex",
@@ -566,7 +565,7 @@ dependencies = [
 [[package]]
 name = "fridica-store-sqlite"
 version = "0.1.0"
-source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=20d2f2c4c741c90de9160dc87a65e28b5fb893bd#20d2f2c4c741c90de9160dc87a65e28b5fb893bd"
+source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=62c535f520fbc42be643ac7f4e12d35c046b4875#62c535f520fbc42be643ac7f4e12d35c046b4875"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1879,7 +1878,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

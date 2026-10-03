@@ -7,7 +7,7 @@ use crate::{
     store::Store,
 };
 use anyhow::Result;
-use rusqlite::params;
+use fridica_core::store::Store as _;
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -62,13 +62,7 @@ impl Monitor {
             let payload = json!({"machine": machine.name}).to_string();
             calls.push(
                 store
-                    .call(move |c| {
-                        c.execute(
-                            "INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('machine_load_call',?,?,0)",
-                            params![now, payload],
-                        )?;
-                        Ok(c.last_insert_rowid())
-                    })
+                    .transact(move |u| u.record("machine_load_call", now, &payload, false))
                     .await?,
             );
         }
@@ -89,14 +83,9 @@ impl Monitor {
             let payload =
                 json!({"call": call, "machine": machine.name, "reading": reading}).to_string();
             store
-                .call(move |c| {
-                    let tx = c.transaction()?;
-                    tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [call])?;
-                    tx.execute(
-                        "INSERT INTO replay_events(kind,time,payload_json) VALUES('machine_load_result',?,?)",
-                        params![done, payload],
-                    )?;
-                    tx.commit()?;
+                .transact(move |u| {
+                    u.complete(call, true)?;
+                    u.record("machine_load_result", done, &payload, true)?;
                     Ok(())
                 })
                 .await?;

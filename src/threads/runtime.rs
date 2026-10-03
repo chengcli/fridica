@@ -19,6 +19,7 @@ use crate::{
     },
 };
 use anyhow::{bail, Result};
+use fridica_core::store::Store as _;
 use std::{
     sync::{Arc, RwLock},
     time::Duration,
@@ -333,14 +334,17 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         for (intent, worker) in pending {
             self.supervisor.stop(&worker).await?;
             let now = self.clock.now();
-            self.store.call(move |c| {
-                let tx = c.transaction()?;
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('thread_worker_stopped',?,?)",
-                    rusqlite::params![now,serde_json::json!({"call":intent,"worker":worker}).to_string()])?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [intent])?;
-                tx.commit()?;
-                Ok(())
-            }).await?;
+            self.store
+                .transact(move |u| {
+                    u.record(
+                        "thread_worker_stopped",
+                        now,
+                        &serde_json::json!({"call":intent,"worker":worker}).to_string(),
+                        true,
+                    )?;
+                    u.complete(intent, true)
+                })
+                .await?;
         }
         Ok(())
     }
@@ -431,13 +435,8 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
                 let details = serde_json::json!({"error":error.to_string()}).to_string();
                 let _ = self
                     .store
-                    .call(move |c| {
-                        c.execute(
-                            "INSERT INTO health_events(kind,details_json,created) SELECT 'archive_failed',?,?
-                             WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='archive_failed' AND created>?)",
-                            rusqlite::params![details, now, now - 3600.],
-                        )?;
-                        Ok(())
+                    .transact(move |u| {
+                        u.note_unless_since("archive_failed", &details, now, now - 3600.)
                     })
                     .await;
                 Default::default()

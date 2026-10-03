@@ -11,8 +11,9 @@ use crate::{
         files::{self, Downloader},
         links,
     },
-    store::Store,
+    store::{Sqlite, Store},
 };
+use fridica_core::store::{Ledger, Store as _};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -127,8 +128,7 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
                     let ours:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE kind='upload' AND (sent_ts=? OR ((sent_ts IS NULL OR sent_ts='') AND channel=? AND thread_ts=? AND filename=?)))",params![id,channel,root,name],|r|r.get(0))?;
                     if ours{own.insert(id);}
                 }
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_attachment_call',?,?,0)",params![now,json!({"key":call_key,"source":input,"own":own}).to_string()])?;
-                let call=tx.last_insert_rowid();tx.commit()?;Ok((call,own))
+                let call=Sqlite(&tx).record("parent_attachment_call",now,&json!({"key":call_key,"source":input,"own":own}).to_string(),false)?;tx.commit()?;Ok((call,own))
             }).await.map_err(|_|failure("parent_context_recording_failed"))?;
             // Independent reads share the actor's 30-second allowance, so neither
             // consumes the model deadline nor doubles the preparation budget.
@@ -206,10 +206,13 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             let context = json!({"trigger":trigger,"history":history,"linked":linked,"github_state":github_state,"github_status":github_status});
             let record = json!({"call":call,"key":key,"context":context});
             let now = self.clock.now();
-            self.store.call(move|c|{let tx=c.transaction()?;
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('parent_attachment_result',?,?)",params![now,record.to_string()])?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?",[call])?;tx.commit()?;Ok(())
-            }).await.map_err(|_|failure("parent_context_recording_failed"))?;
+            self.store
+                .transact(move |u| {
+                    u.record("parent_attachment_result", now, &record.to_string(), true)?;
+                    u.complete(call, true)
+                })
+                .await
+                .map_err(|_| failure("parent_context_recording_failed"))?;
             context
         };
         request.trigger = context["trigger"].clone();

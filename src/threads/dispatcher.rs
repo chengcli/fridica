@@ -11,8 +11,8 @@ use anyhow::Result;
 use fridica_core::{
     delivery::ClaimedPost,
     egress::{self, DenyList},
+    store::Store as _,
 };
-use rusqlite::params;
 use std::{path::Path, sync::Arc, time::Duration};
 
 pub struct Dispatcher<D: Delivery> {
@@ -43,10 +43,11 @@ impl<D: Delivery> Dispatcher<D> {
             Ok(rules) => rules.unwrap_or_default(),
             Err(_) => {
                 let now = self.clock.now();
-                self.store.call(move |c| {
-                    c.execute("INSERT INTO health_events(kind,details_json,created) SELECT 'egress_deny_list_unavailable','{}',? WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='egress_deny_list_unavailable' AND created>?)",params![now,now-3600.])?;
-                    Ok(())
-                }).await?;
+                self.store
+                    .transact(move |u| {
+                        u.note_unless_since("egress_deny_list_unavailable", "{}", now, now - 3600.)
+                    })
+                    .await?;
                 return Ok(0);
             }
         };

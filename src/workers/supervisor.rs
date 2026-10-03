@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use anyhow::{bail, Context, Result};
+use fridica_core::store::Store as _;
 use serde_json::json;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -850,7 +851,17 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
             payload["fork_fallback"] = json!(fork_fallback);
         }
         let now = t.clock.now();
-        t.store.call(move|c|{c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('worker_call',?,?,0)",rusqlite::params![now,payload.to_string()])?;Ok(())}).await.map_err(|_|WorkerFailure{kind:Failure::Execution,code:"worker_intent_storage_failed".into(),backend_session_id:String::new()})?;
+        t.store
+            .transact(move |u| {
+                u.record("worker_call", now, &payload.to_string(), false)?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| WorkerFailure {
+                kind: Failure::Execution,
+                code: "worker_intent_storage_failed".into(),
+                backend_session_id: String::new(),
+            })?;
         in_backend.store(true, Ordering::SeqCst);
         let run = t.worker.run(
             request,
@@ -980,9 +991,14 @@ async fn poll_progress(t: &Task, file: String, mut tracker: Tracker) -> std::con
 
 async fn record_close_failure(store: &Store, worker_id: &str, now: f64) -> Result<()> {
     let id = worker_id.to_owned();
-    store.call(move|c|{
-        c.execute("INSERT INTO health_events(kind,details_json,created) VALUES('worker_close_unconfirmed',?,?)",
-            rusqlite::params![json!({"worker_id":id}).to_string(),now])?;
-        Ok(())
-    }).await
+    store
+        .transact(move |u| {
+            u.note(
+                "worker_close_unconfirmed",
+                &json!({"worker_id":id}).to_string(),
+                now,
+            )?;
+            Ok(())
+        })
+        .await
 }

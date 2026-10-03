@@ -2,8 +2,9 @@
 //! local tools that follow the daemon. `replay_events.seq` is the cursor, so
 //! it survives restarts and migrations; records that mean nothing to a
 //! watcher project to nothing while the cursor still moves past them.
-use crate::{core::ids::ThreadId, slack::names::Names};
+use crate::{core::ids::ThreadId, slack::names::Names, store::Sqlite};
 use anyhow::Result;
+use fridica_core::store::{Event, Ledger};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
@@ -243,14 +244,7 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
 /// client that resumes from `next` never sees a record twice.
 pub fn read(c: &Connection, names: &Names, after: i64, limit: usize) -> Result<Value> {
     let limit = limit.clamp(1, MAX_LIMIT);
-    let rows: Vec<(i64, String, f64, String)> = c
-        .prepare(
-            "SELECT seq,kind,time,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT ?",
-        )?
-        .query_map(rusqlite::params![after, limit as i64], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+    let rows = Sqlite(c).events_after(after, limit)?;
     let post = |id: i64| {
         c.query_row("SELECT kind,session_id FROM outbox WHERE id=?", [id], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -298,7 +292,14 @@ pub fn read(c: &Connection, names: &Names, after: i64, limit: usize) -> Result<V
     let mut next = after;
     let mut events = vec![];
     let scanned = rows.len();
-    for (seq, kind, time, payload) in rows {
+    for Event {
+        seq,
+        kind,
+        time,
+        payload,
+        ..
+    } in rows
+    {
         next = seq;
         let Ok(payload) = serde_json::from_str::<Value>(&payload) else {
             continue;
@@ -313,11 +314,7 @@ pub fn read(c: &Connection, names: &Names, after: i64, limit: usize) -> Result<V
 }
 /// Where the ledger ends now: the cursor a new follower starts from.
 pub fn end(c: &Connection) -> Result<i64> {
-    Ok(
-        c.query_row("SELECT COALESCE(MAX(seq),0) FROM replay_events", [], |r| {
-            r.get(0)
-        })?,
-    )
+    Sqlite(c).last_seq()
 }
 
 #[cfg(test)]

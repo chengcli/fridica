@@ -12,6 +12,7 @@ use crate::{
     store::outbox,
     threads::{controls::Control, runtime::Runtime},
 };
+use fridica_core::store::Store as _;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
@@ -48,13 +49,10 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             return Response::error(500, "invalid_control_clock");
         }
         let record = json!({"method":request.method,"target":request.target,"body":request.body,"authority":authority});
-        let call = match store.call(move |c| {
-            c.execute(
-                "INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('control_request',?,?,0)",
-                params![now,record.to_string()],
-            )?;
-            Ok(c.last_insert_rowid())
-        }).await {
+        let call = match store
+            .transact(move |u| u.record("control_request", now, &record.to_string(), false))
+            .await
+        {
             Ok(id) => id,
             Err(_) => return Response::error(500, "control_recording_failed"),
         };
@@ -62,15 +60,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         let now = self.runtime.now();
         let record = json!({"call":call,"status":response.status,"body":response.body});
         let recorded = store
-            .call(move |c| {
-                let tx = c.transaction()?;
-                tx.execute(
-                "INSERT INTO replay_events(kind,time,payload_json) VALUES('control_response',?,?)",
-                params![now,record.to_string()],
-            )?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [call])?;
-                tx.commit()?;
-                Ok(())
+            .transact(move |u| {
+                u.record("control_response", now, &record.to_string(), true)?;
+                u.complete(call, true)
             })
             .await;
         if recorded.is_err() {

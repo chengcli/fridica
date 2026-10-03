@@ -1,9 +1,10 @@
 //! Reports are collected inside one SQLite snapshot. Export intent commits with
 //! the report; retries may replace files but never create additional channel posts.
-use crate::store::{migration::atomic_write, Store};
+use crate::store::{migration::atomic_write, Sqlite, Store};
 use anyhow::{bail, Context, Result};
 use chrono::{Days, LocalResult, NaiveDate, TimeZone};
 use chrono_tz::Tz;
+use fridica_core::store::Health;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -79,7 +80,7 @@ pub async fn generate(
             obligations_open:count("SELECT count(*) FROM obligations o JOIN threads t ON t.id=o.session_id WHERE t.channel=? AND o.created>=? AND o.created<? AND o.state IN ('open','deferred','awaiting_delivery')")?,
             obligations_answered:count("SELECT count(*) FROM obligations o JOIN threads t ON t.id=o.session_id WHERE t.channel=? AND o.updated>=? AND o.updated<? AND o.state='answered'")?,
             jobs_finished:count("SELECT count(*) FROM jobs j JOIN threads t ON t.id=j.session_id WHERE t.channel=? AND j.finished_at>=? AND j.finished_at<? AND j.status IN ('done','failed','interrupted','cancelled')")?,
-            health_events:tx.query_row("SELECT count(*) FROM health_events WHERE created>=? AND created<?",params![start,end],|r|r.get(0))?,
+            health_events:Sqlite(&tx).count_between(start,end)?,
             campaign_items:tx.query_row("SELECT count(*) FROM work_items WHERE updated>=? AND updated<?",params![start,end],|r|r.get(0))?,
         };
         let markdown=format!("# {} — {}\n\nTimezone: {}\n\n- Messages: {}\n- Mentions: {}\n- Replies delivered: {}\n- Ambiguous replies: {}\n- New obligations still open: {}\n- Obligations answered: {}\n- Jobs finished: {}\n- Health events (daemon): {}\n- Campaign items updated (daemon): {}\n",

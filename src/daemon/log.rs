@@ -5,8 +5,9 @@
 use crate::{
     config::schema::Slack,
     slack::names::{self, Names, UserNames},
-    store::Store,
+    store::{Sqlite, Store},
 };
+use fridica_core::store::{Event, Ledger, Store as _};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use std::{
@@ -41,16 +42,7 @@ pub async fn follow(
         return;
     }
     let mut attempted: BTreeMap<String, std::time::Instant> = BTreeMap::new();
-    let mut seq: i64 = store
-        .call(|c| {
-            Ok(
-                c.query_row("SELECT COALESCE(MAX(seq),0) FROM replay_events", [], |r| {
-                    r.get(0)
-                })?,
-            )
-        })
-        .await
-        .unwrap_or(0);
+    let mut seq: i64 = store.transact(|u| u.last_seq()).await.unwrap_or(0);
     loop {
         let done = *finished.borrow();
         let after = seq;
@@ -118,15 +110,13 @@ fn unknown_senders(c: &mut Connection, after: i64) -> anyhow::Result<Vec<String>
 
 fn read(c: &mut Connection, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
     let names = Names::load(c, slack)?;
-    let rows: Vec<(i64, String, String)> = c
-        .prepare(
-            "SELECT seq,kind,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT 500",
-        )?
-        .query_map([after], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<rusqlite::Result<_>>()?;
+    let rows = Sqlite(c).events_after(after, 500)?;
     let mut last = after;
     let mut lines = vec![];
-    for (seq, kind, payload) in rows {
+    for Event {
+        seq, kind, payload, ..
+    } in rows
+    {
         last = seq;
         let Ok(payload) = serde_json::from_str::<Value>(&payload) else {
             continue;

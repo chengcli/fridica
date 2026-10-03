@@ -2,9 +2,10 @@
 //! never from a request body's `actor` field. Effects and audit commit together.
 use crate::{
     core::{Authority, ThreadControl},
-    store::Store,
+    store::{Sqlite, Store},
 };
 use anyhow::{bail, Result};
+use fridica_core::store::Ledger;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -299,12 +300,11 @@ fn apply_tx(
             serde_json::to_string(&action)?
         ],
     )?;
-    tx.execute(
-        "INSERT INTO replay_events(kind,time,payload_json) VALUES('thread_control',?,?)",
-        params![
-            now,
-            json!({"session":session,"authority":actor,"control":action}).to_string()
-        ],
+    Sqlite(tx).record(
+        "thread_control",
+        now,
+        &json!({"session":session,"authority":actor,"control":action}).to_string(),
+        true,
     )?;
     Ok(instruction)
 }

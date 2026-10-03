@@ -1,7 +1,12 @@
 //! Explicit owner-requested historical mention review. Never called by migration
 //! or startup, and never infer an answer from an unrelated historical post.
-use crate::{config::Config, core::Authority, store::Store};
+use crate::{
+    config::Config,
+    core::Authority,
+    store::{Sqlite, Store},
+};
 use anyhow::{bail, Result};
+use fridica_core::store::Ledger;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -82,7 +87,7 @@ pub async fn run(
         let result=json!({"applied":request.apply,"count":items.len(),"items":items,"answer_status":"unknown","due":if request.apply{Some(now+config.attention.mention_grace)}else{None}});
         if request.apply {
             tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'obligations.backfill',?,?)",params![now,config.owner.slack_user,request.client_id,result.to_string()])?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('obligations_backfill',?,?)",params![now,json!({"request":request,"identity":identity,"result":result}).to_string()])?;
+            Sqlite(&tx).record("obligations_backfill",now,&json!({"request":request,"identity":identity,"result":result}).to_string(),true)?;
         }
         tx.commit()?;
         Ok(result)

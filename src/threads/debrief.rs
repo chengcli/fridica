@@ -7,9 +7,10 @@ use crate::{
         delivery::Post,
         parent::{Debrief, Decision, Discussion, Parent, ParentRequest, ReplyStatus},
     },
-    store::outbox,
+    store::{outbox, Sqlite},
 };
 use anyhow::{Context, Result};
+use fridica_core::store::Ledger;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 
@@ -107,7 +108,7 @@ pub(super) async fn handle<P: Parent>(
         }
         tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,created) VALUES(?,?,'adapter','debrief',?,?,?,?)",params![session,id,json!({"debrief":text}).to_string(),call["response"].to_string(),serde_json::to_string(&request)?,now])?;
         tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('debrief_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"debrief":text}).to_string()])?;
+        Sqlite(&tx).record("debrief_commit",now,&json!({"inbox_id":id,"request":request,"debrief":text}).to_string(),true)?;
         tx.commit()?;
         Ok(Step::Committed)
     }).await

@@ -17,6 +17,7 @@ use crate::{
     store::Store,
 };
 use fridica_agent::{Agent, Backend, BoxFuture, Child, LaunchError, OutputFormat, Turn};
+use fridica_core::store::Store as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, ffi::OsString, io, path::PathBuf, sync::Arc, time::Duration};
@@ -337,15 +338,14 @@ impl WireRecorder for StoreWireRecorder {
     fn record(&self, context: Value, event: Value) -> AdapterFuture<'_, Result<(), WorkerFailure>> {
         Box::pin(async move {
             let now = self.clock.now();
-            self.store.call(move|c|{
-                let tx=c.transaction()?;
+            self.store.transact(move|u|{
                 // Received bytes are kept as text when they are UTF-8 (#116).
                 let payload=json!({"context":context,"event":crate::store::record::wire(event.clone())}).to_string();
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('backend_wire',?,?,?)",rusqlite::params![now,payload,event["incomplete"]!=true])?;
+                u.record("backend_wire",now,&payload,event["incomplete"]!=true)?;
                 if event["direction"]=="notice" && event["notice"]["code"]=="claude_permission_mode_fallback" {
-                    tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('claude_permission_mode_fallback',?,?)",rusqlite::params![payload,now])?;
+                    u.note("claude_permission_mode_fallback",&payload,now)?;
                 }
-                tx.commit()?;Ok(())
+                Ok(())
             }).await.map_err(|_|failure(Failure::Execution,"backend_wire_storage_failed",""))
         })
     }

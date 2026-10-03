@@ -4,9 +4,10 @@ pub mod backfill;
 use crate::{
     config::Attention,
     core::{ids::ThreadId, Authority},
-    store::Store,
+    store::{Sqlite, Store},
 };
 use anyhow::{bail, Context, Result};
+use fridica_core::store::Ledger;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -110,10 +111,7 @@ pub(crate) fn intake_tx(
     if history_before.is_some() {
         record["work"] = json!(work);
     }
-    c.execute(
-        "INSERT INTO replay_events(kind,time,payload_json) VALUES('intake',?,?)",
-        params![now, record.to_string()],
-    )?;
+    Sqlite(c).record("intake", now, &record.to_string(), true)?;
     let root = msg.thread_ts.as_ref().unwrap_or(&msg.ts);
     let inserted=c.execute("INSERT OR IGNORE INTO messages(event_id,workspace,channel,ts,root_ts,thread_ts,sender,text,files_json,source,meta_json,received_at,attachments_json,mentions_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         params![msg.event_id,msg.workspace,msg.channel,msg.ts,root,msg.thread_ts,msg.sender,msg.text,serde_json::to_string(&msg.files)?,msg.source,msg.meta.map(|m|m.to_string()),now,serde_json::to_string(&msg.attachments)?,mentioned])?;

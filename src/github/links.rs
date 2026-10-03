@@ -7,8 +7,8 @@ use crate::{
     core::{delivery::AdapterFuture, time::Clock},
     store::Store,
 };
+use fridica_core::store::Store as _;
 use regex::Regex;
-use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -154,7 +154,13 @@ impl<A: Api + ?Sized> Links<A> {
                 value["age_seconds"] = json!((now - fetched).max(0.).round());
             }
             let record = json!({"key":key,"value":value});
-            self.store.call(move|c|{c.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('github_cache_hit',?,?)",params![now,record.to_string()])?;Ok(())}).await.map_err(|_|Failure::Recording)?;
+            self.store
+                .transact(move |u| {
+                    u.record("github_cache_hit", now, &record.to_string(), true)?;
+                    Ok(())
+                })
+                .await
+                .map_err(|_| Failure::Recording)?;
             return Ok(value);
         }
         let result = self.fetch(&link).await;

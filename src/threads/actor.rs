@@ -11,9 +11,10 @@ use crate::{
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
-    store::{work, Store},
+    store::{work, Sqlite, Store},
 };
 use anyhow::{bail, Context, Result};
+use fridica_core::store::{Ledger, Store as _};
 use rusqlite::params;
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -454,10 +455,10 @@ impl<P: Parent> Actor<P> {
     pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
         let started = self.clock.now();
         let encoded = serde_json::to_string(request)?;
-        let call_id=self.store.call(move|c| {
-            c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_call',?,?,0)",params![started,encoded])?;
-            Ok(c.last_insert_rowid())
-        }).await?;
+        let call_id = self
+            .store
+            .transact(move |u| u.record("parent_call", started, &encoded, false))
+            .await?;
         let timeout = self.parent_timeout.saturating_add(
             self.parent
                 .preparation_timeout(request)
@@ -472,14 +473,9 @@ impl<P: Parent> Actor<P> {
         let now = self.clock.now();
         let outcome = json!({"call_id":call_id,"response":raw,"error":error,"failure":failure});
         self.store
-            .call(move |c| {
-                let tx = c.transaction()?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [call_id])?;
-                tx.execute(
-                    "INSERT INTO replay_events(kind,time,payload_json) VALUES('parent_result',?,?)",
-                    params![now, outcome.to_string()],
-                )?;
-                tx.commit()?;
+            .transact(move |u| {
+                u.complete(call_id, true)?;
+                u.record("parent_result", now, &outcome.to_string(), true)?;
                 Ok(())
             })
             .await?;
@@ -901,7 +897,7 @@ async fn commit(
         if let Some(event)=request.trigger["message"]["event_id"].as_str() {tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,event])?;}
         tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
         tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('actor_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string()])?;
+        Sqlite(&tx).record("actor_commit",now,&json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string(),true)?;
         tx.commit()?;Ok(Step::Committed)
     }).await
 }
@@ -947,7 +943,7 @@ async fn settle_triage(
         tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
         tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
         tx.execute("UPDATE threads SET version=version+1,updated=? WHERE id=?",params![now,session])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('triage_commit',?,?)",params![now,json!({"inbox_id":id,"verdict":verdict}).to_string()])?;
+        Sqlite(&tx).record("triage_commit",now,&json!({"inbox_id":id,"verdict":verdict}).to_string(),true)?;
         tx.commit()?;Ok(Step::Observed)
     }).await
 }
