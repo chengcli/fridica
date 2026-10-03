@@ -707,8 +707,9 @@ and edit the parent and limits settings. Stop it with Ctrl-C.
 
 ## State, recovery, and guarantees
 
-The daemon owns a single SQLite database. `src/store/` (`schema.rs` and the
-versioned `migrations/`) is the only code that runs DDL.
+The daemon owns a single SQLite database, kept by
+[fridica-store-sqlite](https://github.com/chengcli/fridica-store-sqlite): its
+`schema` and versioned `migrations/` are the only code that runs DDL.
 
 - **Persist before acknowledging.** A Slack event is stored, together with its
   thread and inbox row, before Socket Mode is acked. Catch-up re-reads each channel

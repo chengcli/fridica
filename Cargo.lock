@@ -497,6 +497,7 @@ dependencies = [
  "fridica-agent",
  "fridica-core",
  "fridica-slack",
+ "fridica-store-sqlite",
  "fs2",
  "futures-util",
  "http-body-util",
@@ -560,6 +561,24 @@ dependencies = [
  "slack-morphism",
  "tokio",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "fridica-store-sqlite"
+version = "0.1.0"
+source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=20d2f2c4c741c90de9160dc87a65e28b5fb893bd#20d2f2c4c741c90de9160dc87a65e28b5fb893bd"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "fridica-core",
+ "fs2",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

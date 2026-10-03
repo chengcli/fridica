@@ -491,3 +491,67 @@ fn per_pass_replay_lookups_use_the_kind_index() {
         );
     }
 }
+
+// The migration engine lives in fridica-store-sqlite (#117) and is tested
+// there; these two exercise Fridica's own configuration file as its companion.
+
+#[test]
+fn concurrent_configuration_edit_is_preserved_and_migration_can_be_reconciled() {
+    use fridica::cli::migrate::{migrate, rollback, ConfigFile};
+    let dir = tempfile::tempdir().unwrap();
+    let (db, cfg) = (
+        dir.path().join("state.sqlite3"),
+        dir.path().join("config.toml"),
+    );
+    drop(v5(&db));
+    config_file(&cfg);
+    let original = std::fs::read_to_string(&cfg).unwrap();
+    let edited = format!("{original}\n# edited concurrently\n");
+    let error = migration::testing::migrate_with_checkpoint(&db, &cfg, 10., &ConfigFile, |phase| {
+        if phase == "conversion" {
+            std::fs::write(&cfg, &edited)?;
+        }
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("configuration changed before replacement"));
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), edited);
+    assert!(migration::check_ready(&db).is_err());
+    assert!(migrate(&db, &cfg, 20.).is_err());
+    std::fs::write(&cfg, &original).unwrap();
+    migrate(&db, &cfg, 30.).unwrap();
+    rollback(&db, &cfg).unwrap();
+}
+
+#[test]
+fn migration_respects_the_shared_configuration_writer_lock() {
+    use fridica::cli::migrate::{migrate, rollback};
+    use fs2::FileExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (db, cfg) = (
+        dir.path().join("state.sqlite3"),
+        dir.path().join("config.toml"),
+    );
+    drop(v5(&db));
+    config_file(&cfg);
+    let original = std::fs::read_to_string(&cfg).unwrap();
+    let guard = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(cfg.with_file_name(".config.toml.edit.lock"))
+        .unwrap();
+    guard.try_lock_exclusive().unwrap();
+    assert!(migrate(&db, &cfg, 10.)
+        .unwrap_err()
+        .to_string()
+        .contains("another Fridica configuration edit"));
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), original);
+    drop(guard);
+    migrate(&db, &cfg, 20.).unwrap();
+    rollback(&db, &cfg).unwrap();
+}

@@ -17,6 +17,8 @@ path = "src/bin/fridica.rs"
 
 [dependencies]
 fridica-core = "0.2"
+# Until 0.1.0 is published.
+fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "20d2f2c4c741c90de9160dc87a65e28b5fb893bd" }
 fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
@@ -44,6 +46,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
+fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "20d2f2c4c741c90de9160dc87a65e28b5fb893bd", features = ["testing"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 fridica-slack = { version = "0.2.3", features = ["testing"] }
 syn = { version = "2", features = ["full", "visit"] }

@@ -1,2 +1,0 @@
-ALTER TABLE jobs ADD COLUMN context TEXT NOT NULL DEFAULT 'fresh';
-ALTER TABLE jobs ADD COLUMN snapshot_json TEXT;

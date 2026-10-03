@@ -47,14 +47,6 @@ impl Check {
             "do not alias the crate root in {}",
             self.path.display()
         );
-        // The store is extracted into fridica-store-sqlite (#117): it may use
-        // fridica-core only, nothing else of fridica's.
-        assert!(
-            self.module != "store" || matches!(target[0].as_str(), "store" | "core"),
-            "store depends on fridica's {} in {}; it may use only core",
-            target[0],
-            self.path.display()
-        );
         assert!(
             level(&target[0]) <= level(&self.module),
             "upward dependency in {}: {} -> {}",
@@ -156,7 +148,8 @@ fn module_dependencies_only_point_downward_and_ddl_is_centralized() {
             scope,
         }
         .visit_file(&syntax);
-        if relative != Path::new("store/schema.rs") {
+        // The schema lives in fridica-store-sqlite (#117).
+        {
             for ddl in [
                 "CREATE TABLE",
                 "ALTER TABLE",
@@ -166,7 +159,7 @@ fn module_dependencies_only_point_downward_and_ddl_is_centralized() {
             ] {
                 assert!(
                     !text.contains(ddl),
-                    "DDL outside schema in {}",
+                    "DDL in fridica (the schema belongs to fridica-store-sqlite) in {}",
                     path.display()
                 );
             }
