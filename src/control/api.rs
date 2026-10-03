@@ -9,11 +9,10 @@ use crate::{
         Authority,
     },
     slack::names::Names,
-    store::outbox,
+    store::{outbox, Sqlite},
     threads::{controls::Control, runtime::Runtime},
 };
-use fridica_core::store::Store as _;
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{MessageFiles, Store as _, Views};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
 pub struct Api<P: Parent, D: Delivery> {
@@ -120,21 +119,25 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     return Response::error(400, "thread_required");
                 };
                 let slack = self.runtime.config().slack.clone();
-                let listed = store.call(move |c| {
-                    let Some(id) = Names::load(c, &slack)?.resolve(&thread) else { return Ok(None) };
-                    let rows: Vec<(String, String, String)> = c
-                        .prepare("SELECT ts,sender,attachments_json FROM messages WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL),id")?
-                        .query_map([&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                        .collect::<rusqlite::Result<_>>()?;
-                    let known: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM threads WHERE id=?)", [&id], |r| r.get(0))?;
-                    Ok(known.then_some(rows))
-                }).await;
+                let listed = store
+                    .call(move |c| {
+                        let Some(id) = Names::load(c, &slack)?.resolve(&thread) else {
+                            return Ok(None);
+                        };
+                        Sqlite(c).thread_files(&id)
+                    })
+                    .await;
                 match listed {
                     Ok(Some(rows)) => {
                         let mut out = vec![];
-                        for (ts, sender, json_text) in rows {
+                        for MessageFiles {
+                            ts,
+                            sender,
+                            attachments,
+                        } in rows
+                        {
                             let values: Vec<Value> =
-                                serde_json::from_str(&json_text).unwrap_or_default();
+                                serde_json::from_str(&attachments).unwrap_or_default();
                             for value in values {
                                 if let Ok(a) = serde_json::from_value::<Attachment>(value) {
                                     out.push(json!({"id":a.id,"name":a.name,"mimetype":a.mimetype,"size":a.size,"ts":ts,"sender":sender,"text":files::is_text(&a)}));
@@ -156,16 +159,16 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     return Response::error(400, "invalid_file");
                 }
                 let key = id.clone();
-                let found = store.call(move |c| {
-                    let rows: Vec<String> = c
-                        .prepare("SELECT attachments_json FROM messages WHERE instr(attachments_json,?)>0 ORDER BY id DESC")?
-                        .query_map([format!("\"{key}\"")], |r| r.get(0))?
-                        .collect::<rusqlite::Result<_>>()?;
-                    Ok(rows.iter()
-                        .flat_map(|j| serde_json::from_str::<Vec<Value>>(j).unwrap_or_default())
-                        .filter_map(|v| serde_json::from_value::<Attachment>(v).ok())
-                        .find(|a| a.id == key))
-                }).await;
+                let found = store
+                    .transact(move |u| {
+                        let rows = u.attachments_mentioning(&key)?;
+                        Ok(rows
+                            .iter()
+                            .flat_map(|j| serde_json::from_str::<Vec<Value>>(j).unwrap_or_default())
+                            .filter_map(|v| serde_json::from_value::<Attachment>(v).ok())
+                            .find(|a| a.id == key))
+                    })
+                    .await;
                 let attachment = match found {
                     Ok(Some(a)) => a,
                     Ok(None) => return Response::error(404, "unknown_file"),
@@ -408,14 +411,10 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                         let Some(id) = names.channel_id(&wanted) else {
                             return Ok(Err("unknown_channel"));
                         };
-                        Ok(c.query_row(
-                            "SELECT id FROM threads WHERE workspace=? AND channel=? ORDER BY updated DESC, rowid DESC LIMIT 1",
-                            params![slack.workspace, id],
-                            |r| r.get::<_, String>(0),
-                        )
-                        .optional()?
-                        .map(|thread| (names.thread(&thread), thread))
-                        .ok_or("no_thread_in_channel"))
+                        Ok(Sqlite(c)
+                            .latest_thread_in(&slack.workspace, &id)?
+                            .map(|thread| (names.thread(&thread), thread))
+                            .ok_or("no_thread_in_channel"))
                     })
                     .await;
                 let (name, thread) = match thread {
@@ -481,18 +480,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 }
                 let id = id.to_string();
                 let lookup = id.clone();
-                match store
-                    .call(move |c| {
-                        Ok(
-                            c.query_row("SELECT 1 FROM threads WHERE id=?", [lookup], |r| {
-                                r.get::<_, i64>(0)
-                            })
-                            .optional()?
-                            .is_some(),
-                        )
-                    })
-                    .await
-                {
+                match store.transact(move |u| u.thread_exists(&lookup)).await {
                     Ok(true) => {}
                     Ok(false) => return Response::error(404, "no_such_thread"),
                     Err(_) => return Response::error(500, "storage_failed"),
@@ -541,27 +529,19 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                         },
                     };
                     let actor = config.owner.slack_user.clone();
-                    let result = store.call(move |c| {
-                        let tx = c.transaction()?;
-                        let revision: i64 = tx.query_row(
-                            "SELECT COALESCE(MAX(revision),0) FROM notes WHERE session_id=?",
-                            [&id], |r| r.get(0),
-                        )?;
-                        if expected.is_some_and(|r| r != revision) {
-                            anyhow::bail!("notes revision conflict");
-                        }
-                        let next = revision.checked_add(1).ok_or_else(|| anyhow::anyhow!("revision overflow"))?;
-                        tx.execute(
-                            "INSERT INTO notes(session_id,revision,actor,data_json,source,created) VALUES(?,?,?,?,'control',?)",
-                            params![id,next,actor,json!(data).to_string(),now],
-                        )?;
-                        tx.execute(
-                            "INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'notes.write',?,?)",
-                            params![now,actor,id,json!({"revision":next}).to_string()],
-                        )?;
-                        tx.commit()?;
-                        Ok(next)
-                    }).await;
+                    let result = store
+                        .transact(move |u| {
+                            let revision = u.notes_revision(&id)?;
+                            if expected.is_some_and(|r| r != revision) {
+                                anyhow::bail!("notes revision conflict");
+                            }
+                            let next = revision
+                                .checked_add(1)
+                                .ok_or_else(|| anyhow::anyhow!("revision overflow"))?;
+                            u.write_owner_notes(&id, next, &actor, &json!(data).to_string(), now)?;
+                            Ok(next)
+                        })
+                        .await;
                     return match result {
                         Ok(revision) => Response::ok(json!({"revision":revision})),
                         Err(error) => operation_error(error),
@@ -650,18 +630,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 };
                 let id = id.to_string();
                 let lookup = id.clone();
-                match store
-                    .call(move |c| {
-                        Ok(
-                            c.query_row("SELECT 1 FROM approvals WHERE id=?", [lookup], |r| {
-                                r.get::<_, i64>(0)
-                            })
-                            .optional()?
-                            .is_some(),
-                        )
-                    })
-                    .await
-                {
+                match store.transact(move |u| u.approval_exists(&lookup)).await {
                     Ok(true) => {}
                     Ok(false) => return Response::error(404, "no_such_approval"),
                     Err(_) => return Response::error(500, "storage_failed"),
