@@ -40,6 +40,11 @@ pub fn migrate(c: &mut Connection) -> Result<()> {
     if current > VERSION {
         bail!("state database schema v{current} is newer than v{VERSION}");
     }
+    // A new database returns freed pages a little at a time (archiving, #114);
+    // this must be set before its first table.
+    if current == 0 {
+        c.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
+    }
     for (index, sql) in MIGRATIONS.iter().enumerate().skip(current) {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(sql)?;

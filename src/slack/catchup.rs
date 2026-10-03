@@ -299,6 +299,11 @@ impl<H: History> Catchup<H> {
         }
         let now = self.receiver.clock.now();
         let record = json!({"call":call,"result":result});
+        let record = if self.receiver.config.state.record == "full" {
+            record
+        } else {
+            crate::store::record::history(record)
+        };
         self.receiver.store.call(move |c| {
             let tx=c.transaction()?;
             tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('slack_history_result',?,?,?)",params![now,record.to_string(),complete])?;

@@ -339,7 +339,8 @@ impl WireRecorder for StoreWireRecorder {
             let now = self.clock.now();
             self.store.call(move|c|{
                 let tx=c.transaction()?;
-                let payload=json!({"context":context,"event":event}).to_string();
+                // Received bytes are kept as text when they are UTF-8 (#116).
+                let payload=json!({"context":context,"event":crate::store::record::wire(event.clone())}).to_string();
                 tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('backend_wire',?,?,?)",rusqlite::params![now,payload,event["incomplete"]!=true])?;
                 if event["direction"]=="notice" && event["notice"]["code"]=="claude_permission_mode_fallback" {
                     tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('claude_permission_mode_fallback',?,?)",rusqlite::params![payload,now])?;

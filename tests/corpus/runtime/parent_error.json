@@ -125,6 +125,7 @@
       "checkpoint": "duplicate_intake",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [],
         "campaign_evidence": [],
@@ -295,6 +296,7 @@
       "checkpoint": "first_pass",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [
           {
@@ -914,6 +916,7 @@
       "checkpoint": "closed",
       "state": {
         "approvals": [],
+        "archived_threads": [],
         "artifacts": [],
         "audit": [
           {

@@ -116,3 +116,6 @@ cache_seconds = 60
 
 [state]
 path = "~/.local/state/fridica/state.sqlite3"
+# archive_after_days = 7          # quiet, finished threads move to weekly archives beside the database; 0 keeps them
+# archive_events_after_hours = 24 # completed replay events move sooner; 0 keeps them
+# record = "summary"              # Slack responses kept as outcome and shape; "full" keeps whole bodies

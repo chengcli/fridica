@@ -81,7 +81,11 @@ pub fn client(
 ) -> Result<WebClient, Failure> {
     WebClient::new(
         scope(config),
-        Arc::new(StoreJournal { store, clock }),
+        Arc::new(StoreJournal {
+            store,
+            clock,
+            full: config.state.record == "full",
+        }),
         token,
         timeout,
     )

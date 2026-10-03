@@ -67,6 +67,19 @@ impl Connection {
             .transpose()?;
         Ok(Client::new(&socket, token)?)
     }
+    /// The state database the configuration names (for reading archives).
+    fn database(self) -> Result<PathBuf> {
+        if self.socket.is_some() {
+            bail!(
+                "archive search reads the configuration's state.path; pass --config, not --socket"
+            );
+        }
+        let context = crate::config::LoadContext::current()?;
+        let path = self
+            .config
+            .unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
+        Ok(crate::config::load(&path, &context)?.state.path)
+    }
 }
 #[derive(Subcommand)]
 pub enum Commands {
@@ -145,6 +158,24 @@ pub enum Commands {
         /// Directory to save into; defaults to the current directory.
         #[arg(long)]
         out: Option<PathBuf>,
+        #[command(flatten)]
+        connection: Connection,
+    },
+    /// Search archived threads, or bring one back into the live database.
+    ///
+    /// Threads that finished and stayed quiet for `state.archive_after_days`
+    /// move to weekly archive files beside the database. `search` reads those
+    /// files (no daemon needed) and prints matching threads with their IDs;
+    /// `restore` asks the daemon to bring one back. A new message in an
+    /// archived thread brings it back by itself.
+    Archive {
+        #[arg(value_parser=["search","restore"])]
+        action: String,
+        /// Text to search for, or a thread ID to restore.
+        target: String,
+        /// Most threads to list.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
         #[command(flatten)]
         connection: Connection,
     },
@@ -411,6 +442,27 @@ impl Commands {
                     .request("GET", &format!("/files/{}", segment(&target)?), None)
                     .await?;
                 return save(&file, &out.unwrap_or_else(|| PathBuf::from(".")));
+            }
+            Self::Archive {
+                action,
+                target,
+                limit,
+                connection,
+            } => {
+                if action == "search" {
+                    let db = connection.database()?;
+                    return Ok(json!(crate::store::archive::search(
+                        &db,
+                        &target,
+                        limit.max(1)
+                    )?));
+                }
+                (
+                    connection,
+                    "POST",
+                    "/archive/restore".into(),
+                    Some(json!({"thread":target})),
+                )
             }
             Self::Events {
                 since,

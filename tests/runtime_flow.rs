@@ -4758,3 +4758,247 @@ async fn no_hand_off_goes_to_a_paused_thread() {
     );
     h.runtime.close().await.unwrap();
 }
+
+/// Weekly archives (#114): a finished thread that stays quiet moves, with its
+/// rows and old completed events, into its week's archive file; a thread with
+/// an open ask stays. Search finds it by its text, and a new message brings
+/// it back with its history before the parent sees it.
+#[tokio::test]
+async fn quiet_threads_move_to_weekly_archives_and_come_back_on_a_new_message() {
+    let h = Harness::new(
+        vec![
+            json!({"reply":{"text":"The ctest baseline is 821/1014 on main.","status":"complete",
+                "answers":["obligation-0000000000000001"]},"summary":"Baseline counted."}),
+            json!({"reply":{"text":"Still 821/1014; nothing changed since.","status":"complete"}}),
+            json!({"reply":{"text":"Looking into it.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    let message = |event: &str, ts: &str, thread: Option<&str>, text: &str| Message {
+        files: vec![],
+        event_id: event.into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: ts.into(),
+        thread_ts: thread.map(str::to_owned),
+        sender: "UALICE".into(),
+        text: text.into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![],
+    };
+    h.runtime
+        .intake(message(
+            "e1",
+            "100.1",
+            None,
+            "<@UOWNER> what is the snapy ctest baseline?",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    // A second thread whose ask stays open is not archived.
+    h.runtime
+        .intake(message(
+            "e2",
+            "500.1",
+            None,
+            "<@UOWNER> unanswered question",
+        ))
+        .await
+        .unwrap();
+    h.store
+        .call(|c| {
+            c.execute(
+                "UPDATE thread_inbox SET state='done' WHERE session_id='TTEAM:CROOM:500.1'",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated)
+                 VALUES('ask-open','TTEAM:CROOM:500.1','ask','ask-open','{}','Answer this',20,30,20)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let thread = "TTEAM:CROOM:100.1";
+    h.clock.set(20. + 8. * 86400.);
+    let round = h.runtime.archive().await.unwrap();
+    assert_eq!(round.threads, 1);
+    assert!(round.events > 0);
+    for sql in [
+        "SELECT CAST(count(*) AS TEXT) FROM threads WHERE id='TTEAM:CROOM:100.1'",
+        "SELECT CAST(count(*) AS TEXT) FROM messages WHERE root_ts='100.1'",
+        "SELECT CAST(count(*) AS TEXT) FROM parent_turns WHERE session_id='TTEAM:CROOM:100.1'",
+        "SELECT CAST(count(*) AS TEXT) FROM outbox WHERE session_id='TTEAM:CROOM:100.1'",
+    ] {
+        assert_eq!(h.scalar(sql).await, "0", "{sql}");
+    }
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM threads WHERE id='TTEAM:CROOM:500.1'")
+            .await,
+        "1"
+    );
+    let archive = h.scalar("SELECT archive FROM archived_threads").await;
+    assert!(archive.ends_with("1970-W01.sqlite3"), "{archive}");
+    let hits = fridica::store::archive::search(&h.config.state.path, "CTEST baseline", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        (hits[0].thread.as_str(), hits[0].week.as_str()),
+        (thread, "1970-W01")
+    );
+    assert!(hits[0].matches[0].contains("ctest baseline"));
+
+    // SQLite gives the archived thread's freed numbers to new rows: a new
+    // thread's pending post takes its old outbox number and must survive the
+    // revival below.
+    let freed = h
+        .scalar("SELECT CAST(COALESCE(MAX(id),0)+1 AS TEXT) FROM outbox")
+        .await;
+    h.store
+        .call(|c| {
+            c.execute("INSERT INTO threads(id,workspace,channel,root_ts,created,updated) VALUES('TTEAM:CROOM:600.1','TTEAM','CROOM','600.1',1,1)", [])?;
+            c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,thread_ts,text,state,created) VALUES('new-post','TTEAM:CROOM:600.1','reply','CROOM','600.1','A new thread''s pending post','pending',1)", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let reused = h
+        .scalar("SELECT CAST(id AS TEXT) FROM outbox WHERE idem_key='new-post'")
+        .await;
+    assert_eq!(reused, freed);
+    // A reply in the archived thread brings it back before the parent runs.
+    h.runtime
+        .intake(message(
+            "e3",
+            "300.1",
+            Some("100.1"),
+            "<@UOWNER> any change?",
+        ))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    let last = calls
+        .iter()
+        .rev()
+        .find(|c| c.session["id"] == thread)
+        .unwrap();
+    assert_eq!(
+        calls.iter().filter(|c| c.session["id"] == thread).count(),
+        2
+    );
+    assert_eq!(last.session["summary"], "Baseline counted.");
+    assert!(last
+        .history
+        .iter()
+        .any(|m| m["text"] == "<@UOWNER> what is the snapy ctest baseline?"));
+    assert_eq!(
+        h.scalar("SELECT CAST(restored_at IS NOT NULL AS TEXT) FROM archived_threads")
+            .await,
+        "1"
+    );
+    assert_eq!(
+        h.scalar(
+            "SELECT text FROM outbox WHERE session_id='TTEAM:CROOM:100.1' ORDER BY id DESC LIMIT 1"
+        )
+        .await,
+        "Still 821/1014; nothing changed since."
+    );
+    // The new thread's post kept its number and text; the revived thread's
+    // posts took new numbers.
+    assert_eq!(
+        h.scalar("SELECT text||' '||session_id FROM outbox WHERE idem_key='new-post'")
+            .await,
+        "A new thread's pending post TTEAM:CROOM:600.1"
+    );
+    assert_eq!(
+        h.scalar(&format!(
+            "SELECT CAST(count(*) AS TEXT) FROM outbox WHERE id={reused}"
+        ))
+        .await,
+        "1"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE session_id='TTEAM:CROOM:100.1' AND text='The ctest baseline is 821/1014 on main.'").await,
+        "1"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+/// Archiving is housekeeping (#114): an archive that cannot be read does not
+/// block a thread's messages (the message starts it afresh and a health event
+/// says why), and one that cannot be written does not stop the daemon.
+#[tokio::test]
+async fn archive_failures_never_block_intake_or_the_daemon() {
+    let h = Harness::new(
+        vec![
+            json!({"reply":{"text":"Done.","status":"complete","answers":["obligation-0000000000000001"]}}),
+            json!({"reply":{"text":"Starting again.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    let message = |event: &str, ts: &str, thread: Option<&str>| Message {
+        files: vec![],
+        event_id: event.into(),
+        workspace: "TTEAM".into(),
+        channel: "CROOM".into(),
+        ts: ts.into(),
+        thread_ts: thread.map(str::to_owned),
+        sender: "UALICE".into(),
+        text: "<@UOWNER> hello".into(),
+        source: "socket".into(),
+        meta: None,
+        attachments: vec![],
+    };
+    h.runtime
+        .intake(message("e1", "100.1", None))
+        .await
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    h.clock.set(20. + 8. * 86400.);
+    assert_eq!(h.runtime.archive().await.unwrap().threads, 1);
+    let archive = h.scalar("SELECT archive FROM archived_threads").await;
+    std::fs::remove_file(&archive).unwrap();
+    // The archive is gone: the reply still gets through, as a new thread.
+    assert!(h
+        .runtime
+        .intake(message("e2", "300.1", Some("100.1")))
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        h.scalar("SELECT kind FROM health_events WHERE kind LIKE 'archive%'")
+            .await,
+        "archive_revive_failed"
+    );
+    h.runtime.pass().await.unwrap();
+    // An archive directory that cannot be created (a file is in its place):
+    // the round fails, the pass still succeeds.
+    let directory = std::path::Path::new(&archive).parent().unwrap().to_owned();
+    std::fs::remove_dir_all(&directory).unwrap();
+    std::fs::write(&directory, b"not a directory").unwrap();
+    h.store
+        .call(|c| {
+            c.execute("UPDATE threads SET updated=0", [])?;
+            c.execute("UPDATE thread_inbox SET state='done'", [])?;
+            c.execute("UPDATE obligations SET state='answered'", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    h.clock.set(20. + 30. * 86400.);
+    let round = h.runtime.archive().await.unwrap();
+    std::fs::remove_file(&directory).unwrap();
+    assert_eq!(round.threads, 0);
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM health_events WHERE kind='archive_failed'")
+            .await,
+        "1"
+    );
+    h.runtime.pass().await.unwrap();
+    h.runtime.close().await.unwrap();
+}

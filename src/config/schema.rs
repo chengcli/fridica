@@ -76,6 +76,44 @@ impl Egress {
 pub struct State {
     pub path: PathBuf,
     pub control_socket: PathBuf,
+    /// Days a finished thread stays quiet before it moves to its weekly
+    /// archive (#114); completed replay events older than this move too.
+    /// 0 keeps everything in the live database.
+    #[serde(
+        default = "archive_after_days",
+        skip_serializing_if = "is_archive_default"
+    )]
+    pub archive_after_days: f64,
+    /// Hours a completed replay event stays in the live database before it
+    /// moves to its week's archive. Events are the bulk of the database, so
+    /// they leave sooner than threads. 0 keeps them.
+    #[serde(
+        default = "archive_events_after_hours",
+        skip_serializing_if = "is_events_default"
+    )]
+    pub archive_events_after_hours: f64,
+    /// What the replay ledger keeps of Slack responses (#116): `summary`
+    /// (outcome and shape) or `full` (complete bodies, for debugging).
+    #[serde(default = "record_mode", skip_serializing_if = "is_record_default")]
+    pub record: String,
+}
+fn record_mode() -> String {
+    "summary".into()
+}
+fn is_record_default(mode: &String) -> bool {
+    *mode == record_mode()
+}
+fn archive_events_after_hours() -> f64 {
+    24.
+}
+fn is_events_default(hours: &f64) -> bool {
+    *hours == archive_events_after_hours()
+}
+fn archive_after_days() -> f64 {
+    7.
+}
+fn is_archive_default(days: &f64) -> bool {
+    *days == archive_after_days()
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {

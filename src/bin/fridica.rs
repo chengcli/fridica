@@ -92,6 +92,20 @@ enum Command {
         #[arg(long)]
         directory: PathBuf,
     },
+    /// Serve the control-room dashboard on 127.0.0.1 for the running daemon.
+    ///
+    /// Prints a URL with a fresh key for this run; open it in a browser on
+    /// this machine. Stops on Ctrl-C.
+    Dashboard {
+        #[arg(long, conflicts_with = "socket")]
+        config: Option<std::path::PathBuf>,
+        /// The daemon's control socket, instead of the configuration's.
+        #[arg(long)]
+        socket: Option<std::path::PathBuf>,
+        /// Port on 127.0.0.1; 0 picks a free one.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+    },
     /// Show the embedded assets used by this build.
     Assets {
         #[arg(long)]
@@ -313,6 +327,44 @@ async fn run(cli: Cli) -> Result<()> {
             let data = report::generate(&store, channel, date, timezone, SystemClock.now()).await?;
             report::export_pending(&store, directory).await?;
             println!("{}", serde_json::to_string_pretty(&data)?);
+        }
+        Command::Dashboard {
+            config,
+            socket,
+            port,
+        } => {
+            let socket = match socket {
+                Some(socket) => socket,
+                None => {
+                    let context = fridica::config::LoadContext::current()?;
+                    let path =
+                        config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
+                    fridica::config::load(&path, &context)
+                        .map_err(fridica::cli::input_error)?
+                        .state
+                        .control_socket
+                }
+            };
+            let key = fridica::dashboard::key();
+            with_shutdown(|mut stopping| {
+                let key = key.clone();
+                async move {
+                    fridica::dashboard::serve(
+                        socket,
+                        port,
+                        &key,
+                        |address| {
+                            println!("Dashboard: http://{address}/#key={key}");
+                            println!("Open it in a browser on this machine. Ctrl-C stops it.");
+                        },
+                        async move {
+                            let _ = stopping.wait_for(|stop| *stop).await;
+                        },
+                    )
+                    .await
+                }
+            })
+            .await?;
         }
         Command::Assets { list: _, export } => {
             if let Some(path) = export {
