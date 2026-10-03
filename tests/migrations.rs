@@ -450,3 +450,42 @@ fn the_ledger_backfills_recent_messages_once() {
         .unwrap();
     assert_eq!(target, "W:C:1790927185.684379");
 }
+
+/// The per-pass checks for pending controls, worker stops and configuration
+/// edits find their rows by index, not by scanning replay_events, which only
+/// grows. A hand-made index of the same name does not break the upgrade.
+#[test]
+fn per_pass_replay_lookups_use_the_kind_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = Connection::open(dir.path().join("db")).unwrap();
+    for (n, sql) in schema::MIGRATIONS[..9].iter().enumerate() {
+        c.execute_batch(sql).unwrap();
+        c.execute(
+            "INSERT OR REPLACE INTO meta VALUES('schema_version',?)",
+            [(n + 1).to_string()],
+        )
+        .unwrap();
+    }
+    c.execute_batch("CREATE INDEX replay_events_kind ON replay_events(kind, complete, seq)")
+        .unwrap();
+    schema::migrate(&mut c).unwrap();
+    for sql in [
+        "SELECT seq,payload_json FROM replay_events WHERE kind='parent_worker_control' AND complete=0 ORDER BY seq LIMIT 128",
+        "SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='parent_worker_control' AND complete=0 AND json_extract(payload_json,'$.session')='s')",
+        "SELECT seq,json_extract(payload_json,'$.worker') FROM replay_events WHERE kind='thread_worker_stop' AND complete=0 ORDER BY seq",
+        "SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='configuration_edit' AND complete=0)",
+    ] {
+        let plan: Vec<String> = c
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map([], |r| r.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|p| p.contains("USING") && p.contains("replay_events_kind"))
+                && !plan.iter().any(|p| p == "SCAN replay_events"),
+            "{sql}: {plan:?}"
+        );
+    }
+}

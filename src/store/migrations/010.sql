@@ -23,3 +23,9 @@ CREATE TABLE thread_links (
 CREATE INDEX thread_links_target ON thread_links(target);
 -- When a job stopped by the backend's usage limit may run again (#107).
 ALTER TABLE jobs ADD COLUMN retry_at REAL;
+-- The daemon checks replay_events for pending controls, worker stops and
+-- configuration edits by kind on every pass (every 250 ms). Without an index
+-- each check scanned the whole, ever-growing table: about 115 ms each at 160k
+-- rows, which kept the database thread near 70% busy. IF NOT EXISTS: owners
+-- may have created it by hand before upgrading.
+CREATE INDEX IF NOT EXISTS replay_events_kind ON replay_events(kind, complete, seq);
