@@ -1,0 +1,17 @@
+# cargo-nextest: every test runs in its own process, and tests from all test
+# binaries share one pool of threads, so a slow binary no longer holds up the
+# others. Doctests are not run by nextest; `cargo test --doc` covers them.
+
+[profile.default]
+# Many tests start real child processes and wait on real timeouts; flag a test
+# that runs past 60 s, and stop one that runs past 5 minutes.
+slow-timeout = { period = "60s", terminate-after = 5 }
+# Show every failure at the end, not only the first.
+fail-fast = false
+
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 5 }
+fail-fast = false
+# Keep timing-sensitive tests apart from runner noise; a test that only passes
+# on a retry is still reported as flaky.
+retries = 1
