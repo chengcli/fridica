@@ -5002,3 +5002,87 @@ async fn archive_failures_never_block_intake_or_the_daemon() {
     h.runtime.pass().await.unwrap();
     h.runtime.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_refused_reply_gives_the_parent_one_rewrite_turn_with_the_rule_it_broke() {
+    let h = Harness::new(
+        vec![
+            json!({"reply":{"text":"Checks passed.\n\n🤖 Generated with Claude Code","status":"complete"}}),
+            json!({"reply":{"text":"Checks passed.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    // Turn 1 replies; the gate refuses the post in the same pass.
+    h.runtime.pass().await.unwrap();
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        h.scalar("SELECT state||':'||error FROM outbox").await,
+        "failed:egress_ai_trailer"
+    );
+    // Turn 2 is the rewrite: it sees the refused post and the rule, and the
+    // session says what never reached Slack. Its reply is delivered.
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2, "{calls:#?}");
+    let second = &calls[1];
+    assert_eq!(second.trigger["kind"], "post_refused");
+    assert_eq!(second.trigger["payload"]["code"], "egress_ai_trailer");
+    assert_eq!(second.trigger["refused"]["code"], "egress_ai_trailer");
+    assert_eq!(second.trigger["refused"]["turn"], 1);
+    assert!(second.trigger["refused"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Generated with Claude Code"));
+    assert_eq!(
+        second.session["undelivered"][0]["code"],
+        "egress_ai_trailer"
+    );
+    assert_eq!(second.session["undelivered"][0]["state"], "failed");
+    assert!(second.session["undelivered"][0].get("text").is_none());
+    assert!(calls[0].session.get("undelivered").is_none());
+    let posts = h.sink.calls.lock().unwrap().clone();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].post.text, "Checks passed.");
+    assert_eq!(posts[0].post.meta.as_ref().unwrap()["turn"], 2);
+    // Nothing else is queued: the rewrite turn settled its own inbox item.
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE state='pending'")
+            .await,
+        "0"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_rewrite_that_is_refused_again_is_not_retried() {
+    let trailer = json!({"reply":{"text":"Done.\nCo-Authored-By: Claude <noreply@anthropic.com>","status":"complete"}});
+    let h = Harness::new(vec![trailer.clone(), trailer], false).await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.runtime.pass().await.unwrap();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert!(h.sink.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE state='failed'")
+            .await,
+        "2"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE kind='post_refused'")
+            .await,
+        "1"
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE state='pending'")
+            .await,
+        "0"
+    );
+    // Both refusals stay visible to later turns.
+    assert_eq!(h.scalar("SELECT status FROM threads").await, "complete");
+    h.runtime.close().await.unwrap();
+}

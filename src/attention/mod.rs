@@ -269,7 +269,9 @@ pub(crate) fn queue_answer_tx(c: &rusqlite::Connection, answer: &Answer, now: f6
         params![serde_json::to_string(&answer.obligations)?, trigger, id],
     )?;
     for obligation in &answer.obligations {
-        let changed=c.execute("UPDATE obligations SET state='awaiting_delivery',updated=? WHERE id=? AND session_id=? AND state IN ('open','deferred')",params![now,obligation,answer.session])?;
+        // Open or deferred, or awaiting a delivery that failed: a rewrite of a
+        // refused reply answers the asks the refused one did (#119).
+        let changed=c.execute("UPDATE obligations SET state='awaiting_delivery',updated=? WHERE id=? AND session_id=? AND (state IN ('open','deferred') OR (state='awaiting_delivery' AND NOT EXISTS(SELECT 1 FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id AND o.state!='failed')))",params![now,obligation,answer.session])?;
         if changed != 1 {
             bail!("obligation is not open in this thread: {obligation}");
         }

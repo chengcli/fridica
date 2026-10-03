@@ -397,6 +397,61 @@ impl Api for Gh {
         Box::pin(self.run(request))
     }
 }
+/// Whether the configured reader can read github.com right now: one
+/// `rate_limit` read with the same program, argv shape and environment the
+/// daemon uses, recording nothing. For `doctor`; an `Err` names the reason the
+/// way `Failure::message` does.
+pub async fn probe(
+    config: &Config,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    options: &Options,
+    timeout: Duration,
+) -> Result<(), Failure> {
+    if options.program.as_os_str().is_empty() || timeout.is_zero() {
+        return Err(Failure::Invalid);
+    }
+    let (env, _) = environment(inherited, &config.github.token_env);
+    let argv = vec![
+        options.program.to_string_lossy().into_owned(),
+        "api".into(),
+        "--hostname".into(),
+        "github.com".into(),
+        "--method".into(),
+        "GET".into(),
+        "--include".into(),
+        "--header".into(),
+        "Accept: application/vnd.github+json".into(),
+        "--header".into(),
+        "X-GitHub-Api-Version: 2022-11-28".into(),
+        "/rate_limit".into(),
+    ];
+    let dir = tempfile::tempdir().map_err(|_| Failure::Unavailable)?;
+    let output = process::run_once(
+        Launch {
+            argv,
+            cwd: Some(dir.path().into()),
+            env,
+        },
+        vec![],
+        timeout.min(options.timeout),
+        process::OUTPUT_LIMIT,
+    )
+    .await
+    .map_err(|_| Failure::Unavailable)?;
+    if output.returncode == 4 {
+        return Err(Failure::Authentication);
+    }
+    let (status, headers, _) = parse(&String::from_utf8_lossy(&output.stdout))?;
+    match status {
+        200 if output.returncode == 0 => Ok(()),
+        429 => Err(Failure::RateLimited {
+            after: retry_after(&headers, 0.),
+        }),
+        401 | 403 => Err(Failure::Authentication),
+        s if s >= 400 => Err(Failure::Http { status: s }),
+        _ => Err(Failure::Unavailable),
+    }
+}
 fn redact(value: &str, secrets: &[String]) -> String {
     let mut value = value.to_owned();
     let mut secrets: Vec<_> = secrets.iter().collect();

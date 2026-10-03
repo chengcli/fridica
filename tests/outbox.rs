@@ -422,3 +422,71 @@ async fn sign_off_lines_are_delivered_without_a_head_check() {
         ["registry", "two_repos", "prose"]
     );
 }
+
+#[tokio::test]
+async fn a_refused_reply_queues_one_rewrite_turn_and_its_refusal_queues_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    s.call(|c| {
+        c.execute(
+            "INSERT INTO threads(id,workspace,channel,root_ts,created,updated,control) VALUES('TTEAM:CROOM:100.1','TTEAM','CROOM','100.1',1,1,'active')",
+            [],
+        )?;
+        // The inbox items the posts answer: a message, then the rewrite turn.
+        c.execute("INSERT INTO thread_inbox(id,session_id,kind,ref,created,state) VALUES(7,'TTEAM:CROOM:100.1','message','e1',1,'done')", [])?;
+        c.execute("INSERT INTO thread_inbox(id,session_id,kind,ref,created,state) VALUES(8,'TTEAM:CROOM:100.1','post_refused','1',1,'done')", [])?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let mut reply = post("7:reply", "100.1", "");
+    reply.text = "Done.\nCo-Authored-By: Claude <noreply@anthropic.com>".into();
+    reply.meta = Some(json!({"owner":"UOWNER","kind":"reply","turn":3}));
+    let mut rewrite = post("8:reply", "100.1", "");
+    rewrite.text = "Still done.\nCo-Authored-By: Claude <noreply@anthropic.com>".into();
+    let mut upload = post("7:upload:0", "100.1", "");
+    upload.kind = "upload".into();
+    upload.filename = "notes.md".into();
+    upload.blob = Some(b"Co-Authored-By: Claude <noreply@anthropic.com>".to_vec());
+    for p in [reply, rewrite, upload] {
+        outbox::enqueue(&s, p, 1.).await.unwrap();
+    }
+    let fake = Arc::new(Fake::default());
+    let d = dispatcher(&s, fake.clone(), Arc::new(ReplayClock::new(10.)));
+    assert_eq!(d.drain_checked(10, None).await.unwrap(), 0);
+    let items: Vec<(String, String, String)> = s
+        .call(|c| {
+            Ok(c.prepare(
+                "SELECT kind,ref,payload_json FROM thread_inbox WHERE state='pending' ORDER BY id",
+            )?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+        .unwrap();
+    // One item, for the refused reply only: not for the refused rewrite (its
+    // own inbox item is a post_refused) and not for the upload.
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(
+        (items[0].0.as_str(), items[0].1.as_str()),
+        ("post_refused", "1")
+    );
+    let payload: Value = serde_json::from_str(&items[0].2).unwrap();
+    assert_eq!(
+        payload,
+        json!({"outbox_id":1,"code":"egress_ai_trailer","post_kind":"reply","turn":3,"class":"legacy"})
+    );
+    // Draining again changes nothing: the item is keyed by the post.
+    assert_eq!(d.drain_checked(10, None).await.unwrap(), 0);
+    let pending: i64 = s
+        .call(|c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM thread_inbox WHERE state='pending'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(pending, 1);
+}

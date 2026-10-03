@@ -603,6 +603,13 @@ Alice:   can you fix snowy and rerun?
   comes from someone else; after an owner resume or instruction; for worker results and
   corrections; and when the earlier post never reached Slack. A dropped repeat counts
   as a turn without progress.
+- **A refused post comes back to the parent.** Every post passes the egress gate (the
+  owner's deny list and the AI-attribution rule). A refused reply or report is not
+  silently lost: the parent gets one more turn with the refused text and the rule it
+  broke, to rewrite it or say the point cannot be posted, and its session lists the
+  thread's undelivered posts by rule code so it never claims a post it did not make.
+  A rewrite that is refused again is not retried; the `outbox` event (`fridica
+  events`) records every refusal.
 - **Progress while a job runs.** For a long job, a worker appends short notes to a
   progress file its brief names (one per job attempt, `progress-<job>-<attempt>.md`
   in its working folder) as stages finish. Fridica reads the file every

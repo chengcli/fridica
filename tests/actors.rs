@@ -1260,3 +1260,77 @@ async fn a_message_arriving_during_the_turn_reruns_it_once_with_the_message() {
         "1"
     );
 }
+
+#[tokio::test]
+async fn a_rewrite_of_a_refused_reply_answers_the_asks_the_refused_one_did() {
+    use fridica::store::outbox;
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    intake(&s, 1).await;
+    let p = Arc::new(Script::new(vec![
+        json!({"reply":{"text":"Done.\nCo-Authored-By: Claude <noreply@anthropic.com>","status":"complete","answers":["o1"]}}),
+        json!({"reply":{"text":"Done.","status":"complete","answers":["o1"]}}),
+    ]));
+    let a = actor(&s, p.clone());
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    assert_eq!(
+        scalar(&s, "SELECT state FROM obligations").await,
+        "awaiting_delivery"
+    );
+    // The gate refuses the post: the ask stays awaiting a delivery that
+    // failed, and a rewrite turn is queued.
+    let claim = outbox::claim(&s, 11.).await.unwrap().unwrap();
+    outbox::complete(
+        &s,
+        claim,
+        DeliveryOutcome::Rejected {
+            code: "egress_ai_trailer".into(),
+        },
+        "UOWNER".into(),
+        12.,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        scalar(&s, "SELECT kind FROM thread_inbox WHERE state='pending'").await,
+        "post_refused"
+    );
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Committed);
+    let obligations = p.requests.lock().unwrap()[1].obligations.clone();
+    assert_eq!(obligations[0]["state"], "awaiting_delivery");
+    assert_eq!(obligations[0]["deliveries"][0]["state"], "failed");
+    // The same ask is now answered by the rewrite as well as the refused post.
+    assert_eq!(
+        scalar(&s, "SELECT state FROM obligations").await,
+        "awaiting_delivery"
+    );
+    assert_eq!(
+        scalar(
+            &s,
+            "SELECT CAST(count(*) AS TEXT) FROM obligation_posts WHERE obligation_id='o1'"
+        )
+        .await,
+        "2"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT text FROM outbox WHERE state='pending'").await,
+        "Done."
+    );
+    // Delivering the rewrite answers the ask even though the first post failed.
+    let claim = outbox::claim(&s, 13.).await.unwrap().unwrap();
+    outbox::complete(
+        &s,
+        claim,
+        DeliveryOutcome::Sent {
+            reference: "200.9".into(),
+        },
+        "UOWNER".into(),
+        14.,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        scalar(&s, "SELECT state FROM obligations").await,
+        "answered"
+    );
+}
