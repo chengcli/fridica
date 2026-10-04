@@ -7,8 +7,7 @@ use super::{
 };
 use crate::{attention, store::Sqlite};
 use anyhow::{bail, Context, Result};
-use fridica_core::store::{Health, Ledger, Store as _};
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{Catchup as _, Health, Ledger, Store as _, Watermark};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -120,19 +119,15 @@ impl<H: History> Catchup<H> {
                     Sqlite(&tx).note_unless_noted("slack_dropped_mention",&detail.to_string(),now,&["event_id"])?;
                 }
                 let workspace = &config.slack.workspace;
-                let key = format!("catchup:{workspace}:{channel}");
-                let runs_key = format!("{key}:truncated");
-                let current: Option<f64> = tx.query_row("SELECT last_complete_pass FROM channel_watermarks WHERE workspace=? AND channel=?",params![workspace,channel],|r|r.get(0)).optional()?;
+                let current = Sqlite(&tx).catchup_mark(workspace,&channel)?;
                 // Fencing a separately constructed service prevents an older pass
                 // from overwriting another pass's committed watermark.
                 if current!=start.mark { bail!("catch-up watermark changed during pass"); }
-                let runs: Option<String> = tx.query_row("SELECT value FROM meta WHERE key=?",[&runs_key],|r|r.get(0)).optional()?;
+                let runs = Sqlite(&tx).truncated_passes(workspace,&channel)?;
                 let runs = runs.map(|s|s.parse::<u32>()).transpose()?.unwrap_or(0).saturating_add(1);
                 let mark = if complete || runs>=2 { now } else { current.unwrap_or(start.oldest+OVERLAP) };
                 let pinned = !complete && runs<2;
-                tx.execute("INSERT INTO channel_watermarks VALUES(?,?,?,?) ON CONFLICT(workspace,channel) DO UPDATE SET last_complete_pass=excluded.last_complete_pass,pinned=excluded.pinned",params![workspace,channel,mark,pinned])?;
-                tx.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,format!("{mark:.6}")])?;
-                tx.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![runs_key,if pinned {runs.to_string()} else {"0".into()}])?;
+                Sqlite(&tx).keep_watermark(&Watermark{workspace:workspace.clone(),channel:channel.clone(),mark,pinned,truncated_passes:if pinned {runs} else {0}})?;
                 if !complete && runs>=2 {
                     Sqlite(&tx).note("slack_catchup_gap",&json!({"workspace":workspace,"channel":channel,"oldest":start.oldest,"before":first_read,"passes":runs}).to_string(),now)?;
                 }
@@ -156,18 +151,26 @@ impl<H: History> Catchup<H> {
     ) -> Result<Start> {
         let workspace = self.receiver.config.slack.workspace.clone();
         let channel = channel.to_string();
-        self.receiver.store.call(move |c| {
-            let tx=c.transaction()?;
-            let mark: Option<f64> = tx.query_row("SELECT last_complete_pass FROM channel_watermarks WHERE workspace=? AND channel=?",params![workspace,channel],|r|r.get(0)).optional()?;
-            let latest: Option<f64> = tx.query_row("SELECT MAX(CAST(ts AS REAL)) FROM messages WHERE workspace=? AND channel=? AND (? IS NULL OR received_at<?)",params![workspace,channel,started,started],|r|r.get(0))?;
-            let oldest = (now-window).min(mark.or(latest).map(|s|s-OVERLAP).unwrap_or(now-window)).max(now-MAX_WINDOW);
-            if !oldest.is_finite() { bail!("invalid stored watermark"); }
-            // Match Python's updated-order limit before filtering by age.
-            let roots = tx.prepare("SELECT root_ts FROM (SELECT root_ts,updated FROM threads WHERE workspace=? AND channel=? ORDER BY updated DESC LIMIT 200) WHERE updated>=?")?
-                .query_map(params![workspace,channel,oldest-DAY],|r|r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
-            tx.commit()?;
-            Ok(Start {oldest,roots,mark})
-        }).await
+        self.receiver
+            .store
+            .transact(move |u| {
+                let mark = u.catchup_mark(&workspace, &channel)?;
+                let latest = u.latest_message_ts(&workspace, &channel, started)?;
+                let oldest = (now - window)
+                    .min(mark.or(latest).map(|s| s - OVERLAP).unwrap_or(now - window))
+                    .max(now - MAX_WINDOW);
+                if !oldest.is_finite() {
+                    bail!("invalid stored watermark");
+                }
+                // Match Python's updated-order limit before filtering by age.
+                let roots = u.recent_thread_roots(&workspace, &channel, oldest - DAY)?;
+                Ok(Start {
+                    oldest,
+                    roots,
+                    mark,
+                })
+            })
+            .await
     }
     /// Messages since `start`, whether every page was read, and the thread
     /// roots Slack refused (root, error code).

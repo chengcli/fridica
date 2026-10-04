@@ -124,11 +124,8 @@ impl ScopedJobIo {
         let wanted = job.files.clone();
         let names: Vec<(String, String)> = self
             .store
-            .call(move |c| {
-                let rows: Vec<String> = c
-                    .prepare("SELECT attachments_json FROM messages WHERE workspace||':'||channel||':'||root_ts=?")?
-                    .query_map([session], |r| r.get(0))?
-                    .collect::<rusqlite::Result<_>>()?;
+            .transact(move |u| {
+                let rows = u.session_attachments(&session)?;
                 let attachments: Vec<serde_json::Value> = rows
                     .iter()
                     .filter_map(|r| serde_json::from_str::<Vec<serde_json::Value>>(r).ok())

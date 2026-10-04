@@ -456,13 +456,9 @@ impl Supervisor {
         };
         let id = worker_id.to_owned();
         let now = self.clock.now();
-        self.store.call(move|c|{
-            let tx = c.transaction()?;
-            tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'owner','worker.interrupt',?,'{}')",rusqlite::params![now,id])?;
-            tx.execute("UPDATE approvals SET status='cancelled',decided_by='system',decided_at=? WHERE worker_id=? AND status='pending'",rusqlite::params![now,id])?;
-            tx.commit()?;
-            Ok(())
-        }).await?;
+        self.store
+            .transact(move |u| u.interrupt_worker(&id, now))
+            .await?;
         r.control.send_replace(Signal::Interrupt);
         Ok(true)
     }
@@ -766,34 +762,19 @@ async fn fork_header(t: &Task) -> Result<String, WorkerFailure> {
     Ok(text)
 }
 async fn fresh_unless_same_instructions(t: &Task, resume: String) -> Result<String, WorkerFailure> {
-    use rusqlite::OptionalExtension;
     use sha2::{Digest, Sha256};
-    let key = format!("worker_instructions:{}", t.record.id);
     let fingerprint = format!("{:x}", Sha256::digest(t.spec.instructions.as_bytes()));
     let worker = t.record.id.clone();
     t.store
-        .call(move |c| {
-            let tx = c.transaction()?;
-            let started: Option<String> = tx
-                .query_row("SELECT value FROM meta WHERE key=?", [&key], |r| r.get(0))
-                .optional()?;
+        .transact(move |u| {
+            let started = u.instructions_fingerprint(&worker)?;
             // No fingerprint means the session predates this check: keep it.
             let resume = if started.as_deref().is_none_or(|f| f == fingerprint) {
                 resume
             } else {
                 String::new()
             };
-            if resume.is_empty() {
-                tx.execute(
-                    "UPDATE workers SET backend_session_id='' WHERE id=?",
-                    [&worker],
-                )?;
-            }
-            tx.execute(
-                "INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                rusqlite::params![key, fingerprint],
-            )?;
-            tx.commit()?;
+            u.begin_instructions(&worker, &fingerprint, resume.is_empty())?;
             Ok(resume)
         })
         .await
