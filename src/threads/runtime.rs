@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use anyhow::{bail, Result};
-use fridica_core::store::Store as _;
+use fridica_core::store::{Store as _, WorkerStop};
 use std::{
     sync::{Arc, RwLock},
     time::Duration,
@@ -294,15 +294,9 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             bail!("instructions are unavailable in observe-only mode");
         }
         let lookup = session.clone();
-        let (workspace, channel): (String, String) = self
+        let (workspace, channel) = self
             .store
-            .call(move |c| {
-                Ok(c.query_row(
-                    "SELECT workspace,channel FROM threads WHERE id=?",
-                    [lookup],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?)
-            })
+            .transact(move |u| u.thread_channel(&lookup))
             .await?;
         if workspace != self.config().slack.workspace
             || !self.config().slack.channels.contains(&channel)
@@ -321,17 +315,19 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     }
     async fn stop_closed_workers(&self) -> Result<()> {
         let now = self.clock.now();
-        let pending: Vec<(i64,String)> = self.store.call(move |c| {
-            let tx = c.transaction()?;
-            let sessions: Vec<String> = tx.prepare("SELECT DISTINCT t.id FROM threads t JOIN workers w ON w.session_id=t.id WHERE t.control IN ('closed','archived','cleaned') AND w.status!='stopped'")?
-                .query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-            for session in sessions { controls::queue_stops_tx(&tx, &session, now, false)?; }
-            let pending = tx.prepare("SELECT seq,json_extract(payload_json,'$.worker') FROM replay_events WHERE kind='thread_worker_stop' AND complete=0 ORDER BY seq")?
-                .query_map([], |r| Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            tx.commit()?;
-            Ok(pending)
-        }).await?;
-        for (intent, worker) in pending {
+        let pending = self
+            .store
+            .transact(move |u| {
+                let sessions = u.closed_threads_with_live_workers()?;
+                u.queue_worker_stops(&sessions, now, false)?;
+                u.pending_worker_stops()
+            })
+            .await?;
+        for WorkerStop {
+            seq: intent,
+            worker,
+        } in pending
+        {
             self.supervisor.stop(&worker).await?;
             let now = self.clock.now();
             self.store

@@ -5,8 +5,7 @@ use crate::{
     store::{Sqlite, Store},
 };
 use anyhow::{bail, Result};
-use fridica_core::store::Ledger;
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{ControlState, Ledger, ResumePoint, ThreadControls, WorkerStops};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,14 +68,7 @@ pub async fn instruct(
     store
         .call(move |c| {
             let tx = c.transaction()?;
-            let existing: Option<(i64, String)> = tx
-                .query_row(
-                    "SELECT id,json_extract(payload_json,'$.text') FROM thread_inbox \
-             WHERE session_id=? AND kind='owner_instruction' AND ref=? ORDER BY id LIMIT 1",
-                    params![session, client_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
+            let existing = Sqlite(&tx).owner_instruction(&session, &client_id)?;
             if let Some((id, prior)) = existing {
                 if prior != text {
                     bail!("instruction ID reused with different text");
@@ -106,11 +98,8 @@ fn apply_tx(
     now: f64,
     client_id: Option<String>,
 ) -> Result<Option<i64>> {
-    let (control, details): (String, String) = tx.query_row(
-        "SELECT control,control_json FROM threads WHERE id=?",
-        [&session],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+    let mut u = Sqlite(tx);
+    let ControlState { control, details } = u.control_state(&session)?;
     let mut prior: ThreadControl = serde_json::from_str(&details).unwrap_or(ThreadControl::Active);
     if control == "paused" && !matches!(prior, ThreadControl::Paused { .. }) {
         prior = ThreadControl::Paused {
@@ -172,18 +161,11 @@ fn apply_tx(
             if actor != Authority::Owner {
                 bail!("restoration requires owner authentication");
             }
-            let stopping: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='thread_worker_stop' AND complete=0 AND json_extract(payload_json,'$.session')=?)",
-                [&session], |r| r.get(0),
-            )?;
+            let stopping = u.worker_stop_pending(&session)?;
             // Include older terminal threads which predate durable stop intents.
-            let live: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM workers WHERE session_id=? AND status!='stopped')",
-                [&session],
-                |r| r.get(0),
-            )?;
+            let live = u.has_live_workers(&session)?;
             if stopping
-                || crate::store::worker_controls::pending_tx(tx, &session)?
+                || crate::store::worker_controls::pending_tx(u.0, &session)?
                 || (matches!(control.as_str(), "closed" | "archived" | "cleaned") && live)
             {
                 bail!("thread worker cleanup is pending");
@@ -208,46 +190,32 @@ fn apply_tx(
         _ => "",
     };
     let reset_streak = state == "active" && !matches!(action, Control::Restore);
-    tx.execute(
-        "UPDATE threads SET control=?,control_json=?,pause_reason=?,version=version+1,updated=?,
-            wait_streak=CASE WHEN ? THEN 0 ELSE wait_streak END,
-            no_progress=CASE WHEN ? THEN 0 ELSE no_progress END WHERE id=?",
-        params![
-            state,
-            serde_json::to_string(&detail)?,
-            reason,
-            now,
-            reset_streak,
-            reset_streak,
-            session
-        ],
+    u.set_control(
+        &session,
+        state,
+        &serde_json::to_string(&detail)?,
+        reason,
+        now,
+        reset_streak,
     )?;
     if matches!(action, Control::Resume) {
-        tx.execute("UPDATE threads SET status=CASE WHEN status IN ('blocked','working') THEN 'complete' ELSE status END,turns=0,debriefed_turn=0 WHERE id=?",[&session])?;
+        u.restart_turns(&session)?;
     } else if matches!(action, Control::Instruct { .. }) {
-        tx.execute(
-            "UPDATE threads SET status='complete' WHERE id=? AND status='blocked'",
-            [&session],
-        )?;
+        u.unblock(&session)?;
     }
     if state == "active" {
-        tx.execute("UPDATE thread_inbox SET not_before=0 WHERE session_id=? AND kind IN ('worker_result','worker_interrupted') AND state='pending'",[&session])?;
+        u.release_worker_results(&session)?;
     }
     if matches!(action, Control::Close | Control::Archive | Control::Clean) {
-        queue_stops_tx(tx, &session, now, true)?;
+        // Persist termination intent with the control effect, before
+        // acknowledgement. Complete only after the supervisor confirms process
+        // cleanup.
+        u.queue_worker_stops(std::slice::from_ref(&session), now, true)?;
     }
     if matches!(action, Control::Clean) {
-        tx.execute("UPDATE messages SET text='',files_json='[]',attachments_json='[]' WHERE workspace||':'||channel||':'||root_ts=?", [&session])?;
-        tx.execute(
-            "UPDATE threads SET summary='',decisions_json='[]' WHERE id=?",
-            [&session],
-        )?;
-        tx.execute("UPDATE thread_inbox SET payload_json='{\"text\":\"\"}' WHERE session_id=? AND kind='owner_instruction'", [&session])?;
         // Retain IDs and history, but never execute work using wiped input or a
         // context snapshot captured before cleaning. New intake remains visible.
-        tx.execute("UPDATE thread_inbox SET state='dropped' WHERE session_id=? AND state IN ('pending','processing')", [&session])?;
-        tx.execute("UPDATE reply_reservations SET state='released' WHERE session_id=? AND state='reserved' AND outbox_id IS NULL", [&session])?;
-        tx.execute("UPDATE obligations SET state='owner_closed',state_json='{\"kind\":\"owner_closed\",\"reason\":\"Thread cleaned by owner\"}',updated=? WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery')", params![now,session])?;
+        u.wipe(&session, now)?;
     }
     let mut instruction = None;
     match &action {
@@ -255,76 +223,39 @@ fn apply_tx(
             if text.trim().is_empty() {
                 bail!("instruction must contain text");
             }
-            tx.execute("INSERT INTO thread_inbox(session_id,kind,ref,payload_json,created) VALUES(?,'owner_instruction',?,?,?)",params![session,client_id.unwrap_or_default(),json!({"text":text}).to_string(),now])?;
-            instruction = Some(tx.last_insert_rowid());
+            instruction = Some(u.queue_owner_instruction(
+                &session,
+                &client_id.unwrap_or_default(),
+                &json!({"text":text}).to_string(),
+                now,
+            )?);
         }
         Control::Resume => {
-            let latest:Option<(String,f64)>=tx.query_row("SELECT event_id,CAST(ts AS REAL) FROM messages WHERE workspace||':'||channel||':'||root_ts=?
-                    AND source!='self' AND meta_json IS NULL AND CAST(ts AS REAL)>COALESCE((SELECT MAX(CAST(ts AS REAL)) FROM messages WHERE workspace||':'||channel||':'||root_ts=? AND source='self'),0)
-                    ORDER BY CAST(ts AS REAL) DESC LIMIT 1",params![session,session],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-            let newest:f64=tx.query_row("SELECT COALESCE(MAX(CAST(ts AS REAL)),0) FROM messages WHERE workspace||':'||channel||':'||root_ts=?",[&session],|r|r.get(0))?;
+            let ResumePoint { latest, newest } = u.resume_point(&session)?;
             let boundary = latest.as_ref().map_or(newest, |(_, ts)| ts - 1e-6);
-            tx.execute(
-                "UPDATE threads SET reset_at=? WHERE id=?",
-                params![boundary, session],
-            )?;
+            u.reset_thread_at(&session, boundary)?;
             if let Some((event, _)) = latest {
                 // A delegated request already has durable work or a result to
-                // consume. Resume it without delegating the same ask again.
-                let delegated:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs j JOIN thread_inbox i ON i.id=j.inbox_id WHERE j.session_id=? AND i.kind='message' AND i.ref=? AND (j.reported=0 OR j.status IN ('queued','running')))",params![session,event],|r|r.get(0))?;
-                if !delegated {
-                    let payload =
-                        json!({"resumed":true,"owner_trigger":actor==Authority::Owner}).to_string();
-                    let existing:Option<i64>=tx.query_row("SELECT id FROM thread_inbox WHERE session_id=? AND kind='message' AND ref=? AND state IN ('pending','processing') ORDER BY id LIMIT 1",params![session,event],|r|r.get(0)).optional()?;
-                    if let Some(id) = existing {
-                        tx.execute(
-                            "UPDATE thread_inbox SET payload_json=?,not_before=0 WHERE id=?",
-                            params![payload, id],
-                        )?;
-                        tx.execute("UPDATE thread_inbox SET state='done' WHERE session_id=? AND kind='message' AND ref=? AND state='pending' AND id!=?",params![session,event,id])?;
-                    } else {
-                        tx.execute("INSERT INTO thread_inbox(session_id,kind,ref,payload_json,created) VALUES(?,'message',?,?,?)",params![session,event,payload,now])?;
-                    }
-                }
+                // consume; resume_message leaves it alone.
+                let payload =
+                    json!({"resumed":true,"owner_trigger":actor==Authority::Owner}).to_string();
+                u.resume_message(&session, &event, &payload, now)?;
             }
         }
         _ => {}
     }
-    tx.execute(
-        "INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,?,?,?)",
-        params![
-            now,
-            serde_json::to_string(&actor)?,
-            format!("thread.{name}"),
-            session,
-            serde_json::to_string(&action)?
-        ],
+    u.audit_control(
+        now,
+        &serde_json::to_string(&actor)?,
+        &format!("thread.{name}"),
+        &session,
+        &serde_json::to_string(&action)?,
     )?;
-    Sqlite(tx).record(
+    u.record(
         "thread_control",
         now,
         &json!({"session":session,"authority":actor,"control":action}).to_string(),
         true,
     )?;
     Ok(instruction)
-}
-
-/// Persist termination intent with the control effect, before acknowledgement.
-/// Complete only after the supervisor confirms process cleanup. Replay storage
-/// keeps the intent recoverable even if worker status already became `stopped`.
-pub(crate) fn queue_stops_tx(
-    c: &rusqlite::Connection,
-    session: &str,
-    now: f64,
-    include_stopped: bool,
-) -> Result<()> {
-    c.execute(
-        "INSERT INTO replay_events(kind,time,payload_json,complete)
-         SELECT 'thread_worker_stop',?,json_object('session',session_id,'worker',id),0 FROM workers w
-         WHERE session_id=? AND (status!='stopped' OR ?) AND NOT EXISTS(
-            SELECT 1 FROM replay_events e WHERE e.kind='thread_worker_stop' AND e.complete=0
-            AND json_extract(e.payload_json,'$.worker')=w.id)",
-        params![now,session,include_stopped],
-    )?;
-    Ok(())
 }
