@@ -524,7 +524,7 @@ dependencies = [
 [[package]]
 name = "fridica-core"
 version = "0.5.0"
-source = "git+https://github.com/chengcli/fridica-core?rev=aa309dde901990c4c9fc33aac71f6f4c2531ebf8#aa309dde901990c4c9fc33aac71f6f4c2531ebf8"
+source = "git+https://github.com/chengcli/fridica-core?rev=b60a236425630c2efa36480812f8606c1e18660e#b60a236425630c2efa36480812f8606c1e18660e"
 dependencies = [
  "anyhow",
  "regex",
@@ -554,7 +554,7 @@ dependencies = [
 [[package]]
 name = "fridica-store-sqlite"
 version = "0.3.0"
-source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=02916c35dfd69a6caf9137ab7ccf22fd7a41666b#02916c35dfd69a6caf9137ab7ccf22fd7a41666b"
+source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=b7267a70ed19981300f68e999be2a89d26a57fa1#b7267a70ed19981300f68e999be2a89d26a57fa1"
 dependencies = [
  "anyhow",
  "chrono",
