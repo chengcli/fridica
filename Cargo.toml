@@ -18,7 +18,7 @@ path = "src/bin/fridica.rs"
 [dependencies]
 fridica-core = "0.2"
 # Until 0.1.0 is published.
-fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "0de5fdeb7847d3fd4c4cef8519667e60b89796a5" }
+fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "1595143c61bb62261ab4c6250eb017d8235a3f7b" }
 fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
@@ -45,7 +45,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "0de5fdeb7847d3fd4c4cef8519667e60b89796a5", features = ["testing"] }
+fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "1595143c61bb62261ab4c6250eb017d8235a3f7b", features = ["testing"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 fridica-slack = { version = "0.2.3", features = ["testing"] }
 syn = { version = "2", features = ["full", "visit"] }
@@ -55,4 +55,4 @@ unsafe_code = "forbid"
 
 # The storage contract (#117) until the next fridica-core release.
 [patch.crates-io]
-fridica-core = { git = "https://github.com/chengcli/fridica-core", rev = "5baf4d6f87f739db6a4fd8c5cdc1e6fc12904e75" }
+fridica-core = { git = "https://github.com/chengcli/fridica-core", rev = "3169c9a46fea259099bc9715e8de002324aa4de7" }
