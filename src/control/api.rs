@@ -90,9 +90,12 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         let result = self
             .runtime
             .store()
-            .call(move |c| match after {
-                Some(after) => events::read(c, &Names::load(c, &slack)?, after, limit),
-                None => Ok(json!({"v":events::VERSION,"events":[],"next":events::end(c)?})),
+            .transact(move |u| match after {
+                Some(after) => {
+                    let names = Names::recorded(u, &slack)?;
+                    events::read(u, &names, after, limit)
+                }
+                None => Ok(json!({"v":events::VERSION,"events":[],"next":events::end(u)?})),
             })
             .await;
         match result {

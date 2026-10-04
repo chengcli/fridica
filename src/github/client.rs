@@ -4,10 +4,9 @@ use crate::{
     config::Config,
     core::{delivery::AdapterFuture, time::Clock},
     exec::process::{self, Launch},
-    store::{Sqlite, Store},
+    store::Store,
 };
-use fridica_core::store::Ledger;
-use rusqlite::OptionalExtension;
+use fridica_core::store::Store as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -312,31 +311,22 @@ impl Gh {
             json!({"request":request,"argv":argv,"timeout_ms":self.options.timeout.as_millis()});
         let (call, paused) = self
             .store
-            .call(move |c| {
-                let tx = c.transaction()?;
-                let until: Option<String> = tx
-                    .query_row(
-                        "SELECT value FROM meta WHERE key='github:read:pause_until'",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                let until = until
+            .transact(move |u| {
+                let until = u
+                    .github_paused_until()?
                     .and_then(|v| v.parse::<f64>().ok())
                     .filter(|v| v.is_finite())
                     .unwrap_or(0.);
                 if until > now {
-                    Sqlite(&tx).record(
+                    u.record(
                         "github_api_deferred",
                         now,
                         &json!({"request":payload,"until":until}).to_string(),
                         true,
                     )?;
-                    tx.commit()?;
                     return Ok((None, until - now));
                 }
-                let id = Sqlite(&tx).record("github_api_call", now, &payload.to_string(), false)?;
-                tx.commit()?;
+                let id = u.record("github_api_call", now, &payload.to_string(), false)?;
                 Ok((Some(id), 0.))
             })
             .await
@@ -408,8 +398,19 @@ impl Gh {
             Err(Failure::RateLimited { after }) => Some(now + after),
             _ => None,
         };
-        self.store.call(move|c|{let tx=c.transaction()?;
-            if let Some(until)=pause {tx.execute("INSERT INTO meta(key,value) VALUES('github:read:pause_until',?) ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS REAL),CAST(excluded.value AS REAL))",[until.to_string()])?;}Sqlite(&tx).record("github_api_result",now,&record.to_string(),complete)?;if complete{Sqlite(&tx).complete(call,true)?;}tx.commit()?;Ok(())}).await.map_err(|_|Failure::Recording)?;
+        self.store
+            .transact(move |u| {
+                if let Some(until) = pause {
+                    u.pause_github(until)?;
+                }
+                u.record("github_api_result", now, &record.to_string(), complete)?;
+                if complete {
+                    u.complete(call, true)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| Failure::Recording)?;
         result
     }
 }
