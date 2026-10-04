@@ -41,7 +41,7 @@ Every event has these fields:
 | `v` | schema version, `1` |
 | `cursor` | the resume point, see above |
 | `time` | when the daemon recorded it (Unix seconds) |
-| `kind` | `message`, `turn`, `thread_control`, `outbox`, `job` or `daemon` |
+| `kind` | `message`, `peer_post`, `turn`, `thread_control`, `outbox`, `job`, `job_result` or `daemon` |
 | `workspace` | Slack workspace ID, `""` for `daemon` |
 | `channel` | `{"id": "C…", "name": "ai-human-plume"}`; `name` is `null` until the daemon has recorded it |
 | `thread` | the thread's root message `ts`, or `null` when the event has no thread |
@@ -54,6 +54,12 @@ and then fields of its kind:
   `catchup`). For the owner's own posts, which carry Fridica's metadata, also
   `turn_status` (`complete`, `waiting` or `blocked`) and `turn_kind` (`reply`,
   `report`, …).
+
+**`peer_post`**, right after the `message` of a post whose Fridica metadata
+names another owner (another Fridica's reply, report or study post), with the
+same `cursor`
+: `ts`, `sender`, `owner` (the metadata's owner), `meta` (the metadata as
+  posted: `kind`, `status`, `turn`, `session`, `worker`, `v`) and `text`.
 
 **`turn`**, a parent decision committed for a thread
 : `outcome`: a sorted array of independent atoms, each saying one thing the
@@ -80,11 +86,17 @@ and then fields of its kind:
   or `instructed`; `reason` (for a pause); `actor`: `owner`, `system` or
   `desktop_read_only`.
 
-**`outbox`**, a post that did not go out (sent posts are not events; the
-message they become is)
+**`outbox`**, a post that did not go out
 : `outcome`: `rejected`, `failed` or `ambiguous`; `code` (for example
   `egress_ai_trailer`, `rate_limited`, `delivery_timeout`); `post_kind`
-  (`reply`, `report`, `upload`); `outbox_id`; `attempt`.
+  (`reply`, `report`, `upload`, and for an [external driver's
+  posts](external-driver.md) `study_claim`, `study_result`, `study_root` or
+  `driver_report`); `outbox_id`; `attempt`.
+
+  A successful delivery is no event. A client that waits for its own post
+  (an external driver, say) waits for the `message` it becomes when Slack
+  echoes it: that carries the post's text and metadata (`turn_kind`), and for
+  a new root its `ts` is the new thread.
 
 **`job`**, a worker job
 : `action`: `started`, `finished`, `failed` or `interrupted`; `job_id`,
@@ -94,6 +106,15 @@ message they become is)
   worker fork opened with the thread snapshot instead, for example
   `source_session_missing`; `null` otherwise);
   on completion `status` (the worker's own status) or `code` (the failure).
+
+**`job_result`**, right after each `job` completion, with the same `cursor`
+: `join_group`, `job_id`, `worker_id`, `role` (the worker's), `attempt`,
+  `job_status` (`finished` when the worker returned a result, whatever status
+  that result reports; `failed`; or `interrupted`, including a stopped
+  worker's), `result` (the worker's result: `status`, `summary`, `report`,
+  `stance`, …; `null` unless finished) and `code` (the failure, or `null`).
+  A driver reads results here without joining `GET /threads/<id>`. A queued job
+  cancelled before it ran has no completion, so no `job_result`.
 
 **`daemon`**
 : `action`: `started` (with `observe_only`) or `stopped` (with `failure`, or

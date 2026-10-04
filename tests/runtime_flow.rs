@@ -1510,6 +1510,7 @@ async fn the_event_feed_shows_each_event_once_in_cursor_order_and_resumes_withou
             ("turn", json!(["delegated", "replied"])),
             ("job", json!("started")),
             ("job", json!("finished")),
+            ("job_result", Value::Null),
             ("turn", json!(["replied"])),
             ("outbox", json!("rejected")),
             ("thread_control", json!("paused")),
@@ -1523,7 +1524,10 @@ async fn the_event_feed_shows_each_event_once_in_cursor_order_and_resumes_withou
         .iter()
         .map(|e| e["cursor"].as_i64().unwrap())
         .collect();
-    assert!(cursors.windows(2).all(|w| w[0] < w[1]), "{cursors:?}");
+    // Cursors only grow; an event projected beside another (the job_result
+    // of a completion) shares its cursor.
+    assert!(cursors.windows(2).all(|w| w[0] <= w[1]), "{cursors:?}");
+    assert_eq!(cursors.windows(2).filter(|w| w[0] == w[1]).count(), 1);
     assert!(cursors[0] > origin);
     for e in events {
         assert_eq!(e["v"], 1);
@@ -1533,8 +1537,11 @@ async fn the_event_feed_shows_each_event_once_in_cursor_order_and_resumes_withou
     }
     assert_eq!(events[0]["sender"], "UALICE");
     assert_eq!(events[0]["mentions_owner"], true);
-    assert_eq!(events[5]["code"], "egress_ai_trailer");
-    assert_eq!(events[6]["actor"], "owner");
+    // The job_result shares its completion's cursor and comes right after it.
+    assert_eq!(events[4]["cursor"], events[3]["cursor"]);
+    assert_eq!(events[4]["job_status"], "finished");
+    assert_eq!(events[6]["code"], "egress_ai_trailer");
+    assert_eq!(events[7]["actor"], "owner");
     // `next` passed every record scanned, including the many that project to
     // nothing, so resuming from it repeats nothing. The feed's own control
     // calls are ledger records too: the cursor moves on, the events do not.
@@ -5096,5 +5103,648 @@ async fn a_rewrite_that_is_refused_again_is_not_retried() {
     );
     // Both refusals stay visible to later turns.
     assert_eq!(h.scalar("SELECT status FROM threads").await, "complete");
+    h.runtime.close().await.unwrap();
+}
+
+/// Thread `SESSION`, opened without a message (so no parent turn is due),
+/// and driven by `driver`.
+async fn external_thread(h: &Harness) {
+    use fridica_core::store::Store as _;
+    h.store
+        .transact(|u| u.open_thread(SESSION, "TTEAM", "CROOM", "100.1", 20.))
+        .await
+        .unwrap();
+    let set = control_call(
+        h,
+        "POST",
+        &format!("/threads/{SESSION}/driver"),
+        json!({"driver":"external"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(set.status, 200, "{:?}", set.body);
+    assert_eq!(set.body, json!({"driver":"external","changed":true}));
+}
+/// The body fridica-research sends for one delegation.
+fn study_delegate(role: &str, tag: &str, worker: Option<&str>) -> Value {
+    let mut body = json!({"role":role,"brief":format!("ref: {tag}\nRun focused checks"),"context":"fresh",
+        "ephemeral":false,"backend":"same","deliverable":"report","tags":[tag]});
+    if let Some(worker) = worker {
+        body["worker_id"] = json!(worker);
+    }
+    body
+}
+
+#[tokio::test]
+async fn external_driver_routes_delegate_stop_and_set_the_driver_within_limits() {
+    let h = Harness::new(vec![], false).await;
+    let route = |tail: &str| format!("/threads/{SESSION}/{tail}");
+    // Unknown thread, body field or driver value.
+    for (target, body, status, code) in [
+        (
+            "/threads/TTEAM:CROOM:9.9/driver".to_owned(),
+            json!({"driver":"external"}),
+            404,
+            "no_such_thread",
+        ),
+        (
+            "/threads/TTEAM:CROOM:9.9/delegate".to_owned(),
+            study_delegate("general", "a", None),
+            404,
+            "no_such_thread",
+        ),
+    ] {
+        let r = control_call(&h, "POST", &target, body, Authority::Owner).await;
+        assert_eq!((r.status, r.body["error"].as_str()), (status, Some(code)));
+    }
+    external_thread(&h).await;
+    let again = control_call(
+        &h,
+        "POST",
+        &route("driver"),
+        json!({"driver":"external"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(again.body, json!({"driver":"external","changed":false}));
+    for (tail, body, code) in [
+        ("driver", json!({"driver":"robot"}), "invalid_driver"),
+        (
+            "driver",
+            json!({"driver":"parent","mode":"x"}),
+            "unknown_body_field",
+        ),
+        (
+            "delegate",
+            json!({"role":"general","brief":"x","machine":"local"}),
+            "unknown_body_field",
+        ),
+        (
+            "delegate",
+            json!({"role":"general","brief":" "}),
+            "invalid_brief",
+        ),
+        (
+            "delegate",
+            json!({"role":"general","brief":"x","context":"fork_worker"}),
+            "invalid_context",
+        ),
+        (
+            "delegate",
+            json!({"role":"general","brief":"x","tags":[1]}),
+            "invalid_tags",
+        ),
+        (
+            "delegate",
+            study_delegate("astrologer", "a", None),
+            "invalid_role",
+        ),
+    ] {
+        let r = control_call(&h, "POST", &route(tail), body.clone(), Authority::Owner).await;
+        assert_eq!(
+            (r.status, r.body["error"].as_str()),
+            (400, Some(code)),
+            "{body}"
+        );
+    }
+    // Owner only.
+    let denied = control_call(
+        &h,
+        "POST",
+        &route("delegate"),
+        study_delegate("general", "a", None),
+        Authority::DesktopReadOnly,
+    )
+    .await;
+    assert_eq!(denied.status, 403);
+    // Up to max_workers_per_thread persistent workers; then slot pressure.
+    let mut workers = vec![];
+    for n in 0..4 {
+        let tag = format!("t/g1/i1/Debate/a1/w{n}");
+        let r = control_call(
+            &h,
+            "POST",
+            &route("delegate"),
+            study_delegate("tester", &tag, None),
+            Authority::Owner,
+        )
+        .await;
+        assert_eq!(r.status, 200, "{:?}", r.body);
+        let jobs = r.body["jobs"].as_array().unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0]["role"], "tester");
+        assert!(r.body["join_group"].as_str().is_some_and(|g| !g.is_empty()));
+        workers.push(jobs[0]["worker_id"].as_str().unwrap().to_owned());
+    }
+    let full = control_call(
+        &h,
+        "POST",
+        &route("delegate"),
+        study_delegate("tester", "x", None),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (full.status, full.body.clone()),
+        (409, json!({"error":"slots"}))
+    );
+    // An unknown worker to resume is refused.
+    let unknown = control_call(
+        &h,
+        "POST",
+        &route("delegate"),
+        study_delegate("tester", "x", Some("worker-9")),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (unknown.status, unknown.body["error"].as_str()),
+        (404, Some("unknown_worker"))
+    );
+    // The tags are the job's own, echoed on the thread view with the role
+    // and the driver's job status; they selected no machine.
+    let view = control_call(
+        &h,
+        "GET",
+        &format!("/threads/{SESSION}"),
+        json!({}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(view.body["session"]["driver"], "external");
+    let jobs = view.body["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), 4);
+    assert_eq!(jobs[0]["tags"], json!(["t/g1/i1/Debate/a1/w0"]));
+    assert_eq!(
+        (
+            jobs[0]["role"].as_str(),
+            jobs[0]["job_status"].as_str(),
+            jobs[0]["status"].as_str()
+        ),
+        (Some("tester"), Some("queued"), Some("queued"))
+    );
+    assert!(jobs[0]["inbox_id"].is_null());
+    // Stop three (the driver's body), interrupt one; a foreign or unknown
+    // worker is refused.
+    for worker in &workers[1..] {
+        let r = control_call(
+            &h,
+            "POST",
+            &route(&format!("workers/{worker}/stop")),
+            json!({"actor":"owner"}),
+            Authority::Owner,
+        )
+        .await;
+        assert_eq!((r.status, r.body.clone()), (200, json!({"stopped":true})));
+    }
+    let r = control_call(
+        &h,
+        "POST",
+        &route(&format!("workers/{}/stop", workers[0])),
+        json!({"mode":"interrupt"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.body.clone()),
+        (200, json!({"interrupted":false}))
+    );
+    let r = control_call(
+        &h,
+        "POST",
+        &route("workers/worker-9/stop"),
+        json!({}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.body["error"].as_str()),
+        (404, Some("no_such_worker"))
+    );
+    let r = control_call(
+        &h,
+        "POST",
+        &route(&format!("workers/{}/stop", workers[0])),
+        json!({"mode":"pause"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(
+        (r.status, r.body["error"].as_str()),
+        (400, Some("invalid_mode"))
+    );
+    let view = control_call(
+        &h,
+        "GET",
+        &format!("/threads/{SESSION}"),
+        json!({}),
+        Authority::Owner,
+    )
+    .await;
+    let statuses: Vec<&str> = view.body["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["job_status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        statuses,
+        ["queued", "interrupted", "interrupted", "interrupted"]
+    );
+    // Slots freed: a new worker fits again, and the live one is resumed.
+    let r = control_call(
+        &h,
+        "POST",
+        &route("delegate"),
+        study_delegate("tester", "y", None),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(r.status, 200, "{:?}", r.body);
+    let r = control_call(
+        &h,
+        "POST",
+        &route("delegate"),
+        study_delegate("tester", "z", Some(&workers[0])),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(r.body["jobs"][0]["worker_id"], workers[0].as_str());
+    // A thread driven externally gives its parent no delegation.
+    let r = control_call(
+        &h,
+        "POST",
+        &route("driver"),
+        json!({"driver":"parent","actor":"owner"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(r.body, json!({"driver":"parent","changed":true}));
+    assert!(h.parent.calls.lock().unwrap().is_empty());
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn external_posts_pass_the_egress_gate_without_a_reply_reservation() {
+    let h = Harness::new(vec![], false).await;
+    external_thread(&h).await;
+    let route = format!("/threads/{SESSION}/post");
+    let claim = json!({"text":"Claim (iteration 1): spectral\napproach: spectral\nref: r1","meta":{"kind":"study_claim","status":"complete"}});
+    // A paused thread still posts: a study post reserves no reply.
+    fridica::threads::controls::apply(
+        &h.store,
+        SESSION.into(),
+        Control::Pause {
+            reason: "Owner review".into(),
+        },
+        Authority::Owner,
+        21.,
+    )
+    .await
+    .unwrap();
+    let r = control_call(&h, "POST", &route, claim.clone(), Authority::Owner).await;
+    assert_eq!(r.status, 200, "{:?}", r.body);
+    assert_eq!(
+        r.body.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["outbox_id"]
+    );
+    // With details, an upload follows the post.
+    let result = json!({"text":"Stage: Deliver (iteration 1)\nref: r2","details":"# Result\nAll of it.","meta":{"kind":"study_result","status":"complete"}});
+    assert_eq!(
+        control_call(&h, "POST", &route, result, Authority::Owner)
+            .await
+            .status,
+        200
+    );
+    // The egress gate applies: an AI trailer is refused, and the feed says so.
+    let trailer = json!({"text":"Done.\nCo-Authored-By: Claude <noreply@anthropic.com>","meta":{"kind":"study_claim"}});
+    let refused = control_call(&h, "POST", &route, trailer, Authority::Owner).await;
+    assert_eq!(refused.status, 200);
+    let refused_id = refused.body["outbox_id"].as_i64().unwrap();
+    for (body, code) in [
+        (
+            json!({"text":"x","meta":{"kind":"reply"}}),
+            "invalid_post_kind",
+        ),
+        (
+            json!({"text":"x","meta":{"kind":"report","turn":1}}),
+            "unknown_meta_field",
+        ),
+        (
+            json!({"text":"x","meta":{"kind":"report","status":"done"}}),
+            "invalid_status",
+        ),
+        (json!({"text":" ","meta":{"kind":"report"}}), "invalid_text"),
+        (
+            json!({"text":"x","meta":{"kind":"report"},"thread":"y"}),
+            "unknown_body_field",
+        ),
+        (
+            json!({"text":"x","details":"d","meta":{"kind":"study_root"}}),
+            "invalid_details",
+        ),
+    ] {
+        let r = control_call(&h, "POST", &route, body.clone(), Authority::Owner).await;
+        assert_eq!(
+            (r.status, r.body["error"].as_str()),
+            (400, Some(code)),
+            "{body}"
+        );
+    }
+    let start = control_call(&h, "GET", "/events", json!({}), Authority::Owner)
+        .await
+        .body["next"]
+        .as_i64()
+        .unwrap();
+    h.runtime.pass().await.unwrap();
+    let sent = h.sink.calls.lock().unwrap().clone();
+    assert_eq!(
+        sent.iter()
+            .map(|p| (p.post.kind.as_str(), p.post.thread_ts.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("study_claim", Some("100.1")),
+            ("study_result", Some("100.1")),
+            ("upload", Some("100.1"))
+        ]
+    );
+    let meta = sent[0].post.meta.as_ref().unwrap();
+    assert_eq!(
+        (
+            meta["kind"].as_str(),
+            meta["status"].as_str(),
+            meta["owner"].as_str()
+        ),
+        (Some("study_claim"), Some("complete"), Some("UOWNER"))
+    );
+    assert_eq!(
+        h.scalar(&format!(
+            "SELECT state||' '||error FROM outbox WHERE id={refused_id}"
+        ))
+        .await,
+        "failed egress_ai_trailer"
+    );
+    // No rewrite turn for the parent, and no parent call at all.
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox")
+            .await,
+        "0"
+    );
+    assert!(h.parent.calls.lock().unwrap().is_empty());
+    let page = control_call(
+        &h,
+        "GET",
+        &format!("/events?after={start}"),
+        json!({}),
+        Authority::Owner,
+    )
+    .await;
+    let outbox: Vec<&Value> = page.body["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "outbox")
+        .collect();
+    assert_eq!(outbox.len(), 1, "a sent post emits no event");
+    assert_eq!(
+        (
+            outbox[0]["post_kind"].as_str(),
+            outbox[0]["code"].as_str(),
+            outbox[0]["thread"].as_str()
+        ),
+        (
+            Some("study_claim"),
+            Some("egress_ai_trailer"),
+            Some("100.1")
+        )
+    );
+    // A study root from the thread starts a new root in its channel.
+    let root = json!({"text":"Next problem\n\ngeneration: 2\nref: r3","meta":{"kind":"study_root","status":"complete"}});
+    let r = control_call(&h, "POST", &route, root, Authority::Owner).await;
+    assert_eq!(
+        r.body.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["outbox_id"]
+    );
+    // A channel takes only roots, by ID or name; a repeated client_id is the
+    // same post, and once sent its answer names the thread it started.
+    let channel_root = json!({"text":"A study\n\ngeneration: 1\nref: start/CROOM/g1","meta":{"kind":"study_root","status":"complete"},"client_id":"start-croom-g1"});
+    let first = control_call(
+        &h,
+        "POST",
+        "/channels/CROOM/post",
+        channel_root.clone(),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(first.status, 200, "{:?}", first.body);
+    assert_eq!(
+        first.body.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["outbox_id"]
+    );
+    for (target, body, status, code) in [
+        (
+            "/channels/CROOM/post",
+            json!({"text":"x","meta":{"kind":"study_claim"}}),
+            400,
+            "invalid_post_kind",
+        ),
+        (
+            "/channels/COTHER/post",
+            json!({"text":"x","meta":{"kind":"study_root"}}),
+            404,
+            "unknown_channel",
+        ),
+        (
+            "/channels/CROOM/post",
+            json!({"text":"changed","meta":{"kind":"study_root"},"client_id":"start-croom-g1"}),
+            409,
+            "client_id_conflict",
+        ),
+    ] {
+        let r = control_call(&h, "POST", target, body, Authority::Owner).await;
+        assert_eq!((r.status, r.body["error"].as_str()), (status, Some(code)));
+    }
+    h.runtime.pass().await.unwrap();
+    let roots: Vec<ClaimedPost> = h
+        .sink
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p.post.kind == "study_root")
+        .cloned()
+        .collect();
+    assert_eq!(roots.len(), 2);
+    assert!(roots
+        .iter()
+        .all(|p| p.post.thread_ts.is_none() && p.post.channel == "CROOM"));
+    assert_eq!(roots[0].post.session_id, SESSION);
+    assert_eq!(roots[1].post.session_id, "TTEAM:CROOM:channel");
+    let repeat = control_call(
+        &h,
+        "POST",
+        "/channels/CROOM/post",
+        channel_root,
+        Authority::Owner,
+    )
+    .await;
+    let thread = format!("TTEAM:CROOM:200.{}", roots[1].id);
+    assert_eq!(
+        repeat.body,
+        json!({"outbox_id":first.body["outbox_id"],"thread_id":thread,"thread":thread})
+    );
+    h.runtime.close().await.unwrap();
+}
+
+/// The tape of an externally driven study step: the driver delegates, the
+/// worker finishes, and the result reaches the feed as a `job_result`; the
+/// parent is never called and nothing is posted. Replayed from its own
+/// capture, it records the same ledger.
+#[tokio::test]
+async fn an_external_delegates_result_is_emitted_and_not_replied_to() {
+    async fn run(tape: Option<&Value>) -> Value {
+        let h = Harness::new(vec![], false).await;
+        if let Some(tape) = tape {
+            for e in tape["ledger"].as_array().unwrap() {
+                if e["kind"] == "worker_completion" {
+                    let completion: work::Completion =
+                        serde_json::from_value(e["payload"]["completion"].clone()).unwrap();
+                    h.worker
+                        .outcomes
+                        .lock()
+                        .unwrap()
+                        .push_back(completion.outcome);
+                }
+            }
+        }
+        external_thread(&h).await;
+        let start = control_call(&h, "GET", "/events", json!({}), Authority::Owner)
+            .await
+            .body["next"]
+            .as_i64()
+            .unwrap();
+        let tag = "TTEAM:CROOM:100.1/g1/i1/Explore/a1/explorer";
+        let delegated = control_call(
+            &h,
+            "POST",
+            &format!("/threads/{SESSION}/delegate"),
+            study_delegate("tester", tag, None),
+            Authority::Owner,
+        )
+        .await;
+        assert_eq!(delegated.status, 200, "{:?}", delegated.body);
+        let first = h.runtime.pass().await.unwrap();
+        assert_eq!((first.turns, first.started, first.delivered), (0, 1, 0));
+        h.finish(1, 1).await;
+        // The result's inbox item is settled (a turn step), with no post.
+        let last = h.runtime.pass().await.unwrap();
+        assert_eq!((last.turns, last.started, last.delivered), (1, 0, 0));
+        assert!(h.parent.calls.lock().unwrap().is_empty(), "no parent turn");
+        assert!(h.sink.calls.lock().unwrap().is_empty(), "no reply");
+        assert_eq!(
+            h.scalar("SELECT CAST(reported AS TEXT) FROM jobs").await,
+            "1"
+        );
+        assert_eq!(h.scalar("SELECT state FROM thread_inbox").await, "done");
+        let page = control_call(
+            &h,
+            "GET",
+            &format!("/events?after={start}"),
+            json!({}),
+            Authority::Owner,
+        )
+        .await;
+        let events = page.body["events"].as_array().unwrap().clone();
+        let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["job", "job", "job_result"], "{events:#?}");
+        let result = &events[2];
+        assert_eq!(result["join_group"], delegated.body["join_group"]);
+        assert_eq!(result["job_id"], delegated.body["jobs"][0]["job_id"]);
+        assert_eq!(result["worker_id"], delegated.body["jobs"][0]["worker_id"]);
+        assert_eq!(
+            (
+                result["role"].as_str(),
+                result["job_status"].as_str(),
+                result["attempt"].as_i64()
+            ),
+            (Some("tester"), Some("finished"), Some(1))
+        );
+        assert_eq!(result["result"]["summary"], "Checks passed");
+        // After a restart the driver finds the job by its tag and reads it.
+        let view = control_call(
+            &h,
+            "GET",
+            &format!("/threads/{SESSION}"),
+            json!({}),
+            Authority::Owner,
+        )
+        .await;
+        let job = &view.body["jobs"][0];
+        assert_eq!(
+            (
+                job["tags"].clone(),
+                job["job_status"].as_str(),
+                job["result"]["summary"].as_str()
+            ),
+            (json!([tag]), Some("finished"), Some("Checks passed"))
+        );
+        let ledger:Vec<Value>=h.store.call(|c|{let rows:Vec<String>=c.prepare("SELECT json_object('kind',kind,'time',time,'payload',json(payload_json),'complete',complete) FROM replay_events ORDER BY seq")?.query_map([],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;Ok(rows.iter().map(|s|serde_json::from_str(s).unwrap()).collect())}).await.unwrap();
+        assert!(ledger.iter().any(|r| r["kind"] == "external_delegate"));
+        assert!(!ledger.iter().any(|r| matches!(
+            r["kind"].as_str(),
+            Some("parent_call" | "actor_commit" | "delivery_call")
+        )));
+        let projection = json!({"ledger":ledger,"events":events,"workers":work::snapshot(&h.store).await.unwrap()});
+        h.runtime.close().await.unwrap();
+        serde_json::from_str(
+            &projection
+                .to_string()
+                .replace(h.dir.path().to_str().unwrap(), "__ROOT__"),
+        )
+        .unwrap()
+    }
+    let captured = run(None).await;
+    assert_eq!(captured, run(Some(&captured)).await);
+}
+
+#[tokio::test]
+async fn an_externally_driven_parent_answers_but_may_not_delegate() {
+    // The parent tries to delegate anyway: refused, it repairs to a reply.
+    let h = Harness::new(
+        vec![
+            delegate(),
+            json!({"reply":{"text":"The study driver runs this thread.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    let set = control_call(
+        &h,
+        "POST",
+        &format!("/threads/{SESSION}/driver"),
+        json!({"driver":"external"}),
+        Authority::Owner,
+    )
+    .await;
+    assert_eq!(set.status, 200);
+    let progress = h.runtime.pass().await.unwrap();
+    assert_eq!(
+        (progress.turns, progress.started, progress.delivered),
+        (1, 0, 1)
+    );
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].session["driver"], "external");
+    assert_eq!(calls[1].call, "repair");
+    assert!(
+        calls[1].errors[0].contains("delegation is disabled"),
+        "{:?}",
+        calls[1].errors
+    );
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "0"
+    );
     h.runtime.close().await.unwrap();
 }

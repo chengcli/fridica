@@ -124,6 +124,19 @@ impl<P: Parent> Actor<P> {
             request.session["machines"] = json!(config.machines.payload(&busy));
         }
         let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
+        // Read after the turn's input: a driver change bumps the thread's
+        // version, so a turn that read the old driver commits nothing.
+        let lookup = session.clone();
+        let external = self
+            .store
+            .transact(move |u| u.thread_driver(&lookup))
+            .await?
+            == "external";
+        if external {
+            // Only an externally driven thread's request says so, so a
+            // parent-driven thread's recorded requests stay as they were.
+            request.session["driver"] = json!("external");
+        }
         if self.observe_only || request.session["control"] != "active" {
             let reason = if self.observe_only {
                 "observe-only mode"
@@ -144,6 +157,20 @@ impl<P: Parent> Actor<P> {
         }
         if kind == "worker_progress" {
             return super::progress::handle(self, request).await;
+        }
+        // An external driver (fridica#130) reads worker results and study
+        // posts on the event feed (`job_result`, `peer_post`) and acts on
+        // them itself: they are settled here, with no parent call and no
+        // reply. Anyone else addressing the owner still gets a parent turn,
+        // which may not delegate.
+        if external
+            && (worker_result
+                || (kind == "message"
+                    && request.trigger["message"]["meta"]["kind"]
+                        .as_str()
+                        .is_some_and(|k| k.starts_with("study_"))))
+        {
+            return settle_external(&self.store, id, &request).await;
         }
         if worker_result
             && (request.trigger["pending"] == true
@@ -902,6 +929,45 @@ async fn commit(
     }).await
 }
 
+/// Settle an externally driven thread's worker result or study post: the
+/// item finishes under the same version fence as any settlement, and the
+/// finished jobs it carries count as reported, all in one unit of work.
+async fn settle_external(store: &impl Backend, id: i64, request: &ParentRequest) -> Result<Step> {
+    let session = request.session["id"]
+        .as_str()
+        .context("missing session ID")?
+        .to_owned();
+    let settlement = Settlement {
+        id,
+        session: session.clone(),
+        version: request.session["version"]
+            .as_i64()
+            .context("missing session version")?,
+        event: request.trigger["message"]["event_id"]
+            .as_str()
+            .map(str::to_owned),
+        verdict: "observe: external driver".into(),
+        until: None,
+    };
+    let jobs: Vec<Option<String>> = request.trigger["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| !matches!(r["job_status"].as_str(), Some("queued" | "running")))
+        .map(|r| r["id"].as_str().map(str::to_owned))
+        .collect();
+    let current = store
+        .transact(move |u| {
+            let current = u.settle_turn(&settlement)?;
+            if current && !jobs.is_empty() {
+                u.mark_reported(&session, &jobs)?;
+            }
+            Ok(current)
+        })
+        .await?;
+    Ok(if current { Step::Observed } else { Step::Stale })
+}
+
 /// Startup recovery keeps unsent reservations reusable by the same inbox item.
 pub async fn recover(store: &impl Backend) -> Result<usize> {
     store.transact(|u| u.recover_turns()).await
@@ -974,8 +1040,10 @@ fn delegation_scope<'a>(
     config.map(|config| {
         let channel = request.session["channel"].as_str().unwrap_or("");
         super::delegation::Scope {
+            // An externally driven thread's work is its driver's to start.
             allowed: config.slack.channels.iter().any(|c| c == channel)
-                && config.slack.may_delegate(channel),
+                && config.slack.may_delegate(channel)
+                && request.session["driver"] != "external",
             limits: &config.limits,
             machines: &config.machines,
             roles: crate::config::roles::worker_roles(),

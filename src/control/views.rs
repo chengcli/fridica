@@ -56,6 +56,20 @@ fn rows<T: Serialize>(records: Vec<T>) -> Result<Vec<Value>> {
     }
     Ok(result)
 }
+/// Adds each job's `job_status` beside its stored `status`, as an external
+/// driver reads it (fridica#130): `finished`, `failed` or `interrupted` once
+/// the job is done, its status otherwise.
+fn jobs(mut values: Vec<Value>) -> Vec<Value> {
+    for v in &mut values {
+        let status = v["status"].as_str().unwrap_or("").to_owned();
+        v["job_status"] = json!(match status.as_str() {
+            "done" => "finished",
+            "interrupted" | "cancelled" => "interrupted",
+            other => other,
+        });
+    }
+    values
+}
 /// Adds the readable `#channel:TS` beside each thread reference.
 fn label(values: &mut [Value], names: &Names) {
     for v in values {
@@ -147,9 +161,9 @@ pub fn get(
             workers(rows(u.workers(&statuses, limit)?)?, processes)
         }
         ["jobs"] if query.get("status").is_some_and(|value| value == "all") => {
-            rows(u.all_jobs(limit)?)?
+            jobs(rows(u.all_jobs(limit)?)?)
         }
-        ["jobs"] => rows(u.active_jobs(limit)?)?,
+        ["jobs"] => jobs(rows(u.active_jobs(limit)?)?),
         ["approvals"] => {
             let statuses = filter(query.get("status").map(String::as_str), "pending");
             if statuses.is_empty() {
@@ -206,7 +220,7 @@ fn thread(
         item.as_object_mut().unwrap().remove("payload");
     }
     let workers = workers(rows(u.thread_workers(id)?)?, processes);
-    let jobs = rows(u.thread_jobs(id)?)?;
+    let jobs = jobs(rows(u.thread_jobs(id)?)?);
     let outbox = rows(u.thread_posts(id)?)?;
     Ok(Some(
         json!({"session":session,"messages":messages,"workers":workers,

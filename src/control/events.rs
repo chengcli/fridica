@@ -4,7 +4,7 @@
 //! watcher project to nothing while the cursor still moves past them.
 use crate::{core::ids::ThreadId, slack::names::Names};
 use anyhow::Result;
-use fridica_core::store::{Event, Unit};
+use fridica_core::store::{Event, FeedJob, Unit};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 
@@ -26,6 +26,8 @@ pub struct Lookup<'a> {
     /// arrival. Slack may deliver an envelope again; the ledger records each
     /// arrival, the feed one message.
     pub first: &'a dyn Fn(&str, i64, f64) -> bool,
+    /// A job's group, worker and worker role, by job ID (`job_result`).
+    pub feed_job: &'a dyn Fn(&str) -> Option<FeedJob>,
 }
 
 fn text(v: &Value) -> &str {
@@ -239,6 +241,70 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
     Some(Value::Object(out))
 }
 
+/// Every event one ledger record projects to, in order: what [`project`]
+/// makes of it, then the additive events beside it (feed `v: 1`):
+///
+/// - a `job_result` after each job completion, with the job's group, worker,
+///   role and result, so a driver needs no thread view to read it;
+/// - a `peer_post` after a `message` whose Fridica metadata names another
+///   owner.
+pub fn project_all(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) -> Vec<Value> {
+    let Some(event) = project(seq, time, kind, p, lookup) else {
+        return vec![];
+    };
+    let extra = match kind {
+        "worker_completion" => {
+            let job = text(&p["job_id"]);
+            let facts = (lookup.feed_job)(job).unwrap_or_default();
+            let c = &p["completion"];
+            // The job's own outcome, as its view's `job_status` says it: a
+            // worker that returned a result finished, whatever status the
+            // result itself reports (`partial`, `needs_input`, ...).
+            let (job_status, result) = if c["interrupted"] == true || c["stopped"] == true {
+                ("interrupted", Value::Null)
+            } else if let Some(ok) = c["outcome"].get("Ok") {
+                ("finished", ok["result"].clone())
+            } else {
+                ("failed", Value::Null)
+            };
+            Some(json!({
+                "kind":"job_result","join_group":facts.join_group,"job_id":job,
+                "worker_id":facts.worker,"role":facts.role,"attempt":p["attempt"],
+                "job_status":job_status,"result":result,"code":event["code"],
+            }))
+        }
+        "intake" => {
+            let m = &p["message"];
+            let owner = text(&m["meta"]["owner"]);
+            (m["meta"].is_object() && !owner.is_empty() && owner != text(&p["owner"])).then(|| {
+                json!({
+                    "kind":"peer_post","ts":event["ts"],"sender":event["sender"],
+                    "owner":owner,"meta":m["meta"],"text":m["text"],
+                })
+            })
+        }
+        _ => None,
+    };
+    let mut out = vec![event.clone()];
+    if let Some(extra) = extra {
+        let mut value = Map::new();
+        for key in ["v", "cursor", "time"] {
+            value.insert(key.into(), event[key].clone());
+        }
+        value.insert("kind".into(), extra["kind"].clone());
+        for key in ["workspace", "channel", "thread"] {
+            value.insert(key.into(), event[key].clone());
+        }
+        for (key, field) in extra.as_object().into_iter().flatten() {
+            if key != "kind" {
+                value.insert(key.clone(), field.clone());
+            }
+        }
+        out.push(Value::Object(value));
+    }
+    out
+}
+
 /// The feed after `after`: at most `limit` ledger records are scanned, and
 /// `next` is the last one scanned (or `after` when there was none), so a
 /// client that resumes from `next` never sees a record twice.
@@ -254,6 +320,7 @@ pub fn read(u: &mut dyn Unit, names: &Names, after: i64, limit: usize) -> Result
             .map(|p| (p.kind, p.session))
     };
     let job = |id: &str| u.borrow_mut().job_session(id).ok().flatten();
+    let feed_job = |id: &str| u.borrow_mut().feed_job(id).ok().flatten();
     // The message row keeps its first arrival time; a repeat at the very same
     // time is found among the few records just before this one.
     let first = |event: &str, seq: i64, time: f64| {
@@ -272,6 +339,7 @@ pub fn read(u: &mut dyn Unit, names: &Names, after: i64, limit: usize) -> Result
         post: &post,
         job: &job,
         first: &first,
+        feed_job: &feed_job,
     };
     let mut next = after;
     let mut events = vec![];
@@ -288,9 +356,7 @@ pub fn read(u: &mut dyn Unit, names: &Names, after: i64, limit: usize) -> Result
         let Ok(payload) = serde_json::from_str::<Value>(&payload) else {
             continue;
         };
-        if let Some(event) = project(seq, time, &kind, &payload, &lookup) {
-            events.push(event);
-        }
+        events.extend(project_all(seq, time, &kind, &payload, &lookup));
     }
     // A page that scanned fewer records than asked reached the ledger's end;
     // the feed's own control calls are records too, so `next` keeps moving.
@@ -315,11 +381,21 @@ mod tests {
         fn first(event: &str, seq: i64, _: f64) -> bool {
             event != "e1" || seq == 3
         }
+        fn feed_job(id: &str) -> Option<FeedJob> {
+            (id == "job-0000000000000005").then(|| FeedJob {
+                session: "TTEAM:CROOM:100.1".into(),
+                worker: "worker-0000000000000004".into(),
+                role: "auditor".into(),
+                join_group: "group-0000000000000003".into(),
+                ..FeedJob::default()
+            })
+        }
         Lookup {
             names,
             post: &post,
             job: &job,
             first: &first,
+            feed_job: &feed_job,
         }
     }
     fn names() -> Names {
@@ -465,6 +541,72 @@ mod tests {
             (e["action"].as_str(), e["code"].as_str()),
             (Some("failed"), Some("files_download_failed"))
         );
+        // Beside each completion, a job_result with the job's group, worker,
+        // role and result; the job event itself is unchanged.
+        let all = project_all(12, 19., "worker_completion", &done, &l);
+        assert_eq!(all.len(), 2);
+        assert_eq!(
+            all[0],
+            project(12, 19., "worker_completion", &done, &l).unwrap()
+        );
+        assert_eq!(
+            all[1],
+            json!({"v":1,"cursor":12,"time":19.0,"kind":"job_result","workspace":"TTEAM",
+                "channel":{"id":"CROOM","name":"ai-human-plume"},"thread":"100.1",
+                "join_group":"group-0000000000000003","job_id":"job-0000000000000005",
+                "worker_id":"worker-0000000000000004","role":"auditor","attempt":1,
+                "job_status":"finished","result":{"status":"done"},"code":null})
+        );
+        let all = project_all(13, 20., "worker_completion", &failed, &l);
+        assert_eq!(
+            (
+                all[1]["job_status"].as_str(),
+                all[1]["code"].as_str(),
+                &all[1]["result"]
+            ),
+            (Some("failed"), Some("files_download_failed"), &Value::Null)
+        );
+        let partial = json!({"attempt":1,"job_id":"job-0000000000000005","completion":{"interrupted":false,"outcome":{"Ok":{"result":{"status":"partial"}}}}});
+        let all = project_all(20, 27., "worker_completion", &partial, &l);
+        assert_eq!(
+            (
+                all[0]["action"].as_str(),
+                all[1]["job_status"].as_str(),
+                &all[1]["result"]
+            ),
+            (
+                Some("failed"),
+                Some("finished"),
+                &json!({"status":"partial"})
+            )
+        );
+        let stopped = json!({"attempt":2,"job_id":"job-0000000000000005","completion":{"interrupted":true,"outcome":{"Ok":{"result":{"status":"done"}}}}});
+        let all = project_all(21, 28., "worker_completion", &stopped, &l);
+        assert_eq!(
+            (
+                all[1]["job_status"].as_str(),
+                &all[1]["result"],
+                &all[1]["attempt"]
+            ),
+            (Some("interrupted"), &Value::Null, &json!(2))
+        );
+        // A message whose metadata names another owner is also a peer_post;
+        // the owner's own posts and plain messages are not.
+        let peer = json!({"owner":"UOWNER","message":{"channel":"CROOM","ts":"100.3","thread_ts":"100.1","event_id":"e7","sender":"UPEER","source":"socket","text":"Claim (iteration 1): x","meta":{"owner":"UPEER","kind":"study_claim","status":"complete","turn":0},"workspace":"TTEAM"}});
+        let all = project_all(22, 29., "intake", &peer, &l);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0]["kind"], "message");
+        assert_eq!(
+            all[1],
+            json!({"v":1,"cursor":22,"time":29.0,"kind":"peer_post","workspace":"TTEAM",
+                "channel":{"id":"CROOM","name":"ai-human-plume"},"thread":"100.1",
+                "ts":"100.3","sender":"UPEER","owner":"UPEER",
+                "meta":{"owner":"UPEER","kind":"study_claim","status":"complete","turn":0},
+                "text":"Claim (iteration 1): x"})
+        );
+        assert_eq!(project_all(4, 11., "intake", &own, &l).len(), 1);
+        assert_eq!(project_all(3, 10., "intake", &intake, &l).len(), 1);
+        assert!(project_all(16, 23., "intake", &intake, &l).is_empty());
         assert!(project(14, 21., "parent_call", &json!({"call":"decide"}), &l).is_none());
         assert!(project(15, 22., "slack_http_call", &json!({}), &l).is_none());
     }
