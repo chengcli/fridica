@@ -7,7 +7,7 @@ use crate::{
     store::Store,
 };
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{ArrivedMessage, Disposal, Mention, QueuedAnswer, Store as _, Unit};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -58,19 +58,14 @@ pub async fn intake(
     obligation_id: String,
 ) -> Result<Option<i64>> {
     store
-        .call(move |c| {
-            let tx = c.transaction()?;
-            let inbox = intake_tx(&tx, msg, &owner, now, grace, &obligation_id, None)?;
-            tx.commit()?;
-            Ok(inbox)
-        })
+        .transact(move |u| intake_tx(u, msg, &owner, now, grace, &obligation_id, None))
         .await
 }
 
 /// Shared atomic intake for direct callers, Socket Mode and catch-up. A catch-up
 /// cutoff decides history-only status against the thread in this transaction.
 pub(crate) fn intake_tx(
-    c: &rusqlite::Connection,
+    u: &mut dyn Unit,
     msg: Message,
     owner: &str,
     now: f64,
@@ -86,7 +81,7 @@ pub(crate) fn intake_tx(
         .map_err(anyhow::Error::msg)?;
     let session = msg.session_id();
     // A message in an archived thread brings the thread back first (#114).
-    crate::store::archive::revive_or_note(c, &session, now)?;
+    u.revive_or_note(&session, now)?;
     let mentioned = msg.text.contains(&format!("<@{owner}>"));
     let mut work = true;
     let mut created = now;
@@ -95,11 +90,7 @@ pub(crate) fn intake_tx(
         if !timestamp.is_finite() || !cutoff.is_finite() {
             bail!("invalid catch-up time");
         }
-        let waiting: bool = c.query_row(
-            "SELECT EXISTS(SELECT 1 FROM threads WHERE id=? AND status='waiting')",
-            [&session],
-            |r| r.get(0),
-        )?;
+        let waiting = u.thread_waiting(&session)?;
         work = timestamp >= cutoff || mentioned || waiting;
         if !work {
             created = now.min(timestamp);
@@ -110,38 +101,43 @@ pub(crate) fn intake_tx(
     if history_before.is_some() {
         record["work"] = json!(work);
     }
-    c.execute(
-        "INSERT INTO replay_events(kind,time,payload_json) VALUES('intake',?,?)",
-        params![now, record.to_string()],
-    )?;
+    u.record("intake", now, &record.to_string(), true)?;
     let root = msg.thread_ts.as_ref().unwrap_or(&msg.ts);
-    let inserted=c.execute("INSERT OR IGNORE INTO messages(event_id,workspace,channel,ts,root_ts,thread_ts,sender,text,files_json,source,meta_json,received_at,attachments_json,mentions_owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params![msg.event_id,msg.workspace,msg.channel,msg.ts,root,msg.thread_ts,msg.sender,msg.text,serde_json::to_string(&msg.files)?,msg.source,msg.meta.map(|m|m.to_string()),now,serde_json::to_string(&msg.attachments)?,mentioned])?;
-    if inserted == 0 {
+    let inserted = u.keep_message(&ArrivedMessage {
+        event_id: msg.event_id.clone(),
+        workspace: msg.workspace.clone(),
+        channel: msg.channel.clone(),
+        ts: msg.ts.clone(),
+        root_ts: root.clone(),
+        thread_ts: msg.thread_ts.clone(),
+        sender: msg.sender.clone(),
+        text: msg.text.clone(),
+        files: serde_json::to_string(&msg.files)?,
+        source: msg.source.clone(),
+        meta: msg.meta.as_ref().map(|m| m.to_string()),
+        received_at: now,
+        attachments: serde_json::to_string(&msg.attachments)?,
+        mentions_owner: mentioned,
+    })?;
+    if !inserted {
         return Ok(None);
     }
-    c.execute("INSERT OR IGNORE INTO threads(id,workspace,channel,root_ts,created,updated,control_json) VALUES(?,?,?,?,?,?,'{\"kind\":\"active\"}')",
-        params![session,msg.workspace,msg.channel,root,created,created])?;
+    u.open_thread(&session, &msg.workspace, &msg.channel, root, created)?;
     // The channel ledger (#108): what this message refers to.
-    crate::store::links::record_tx(
-        c,
-        &msg.workspace,
-        &msg.channel,
-        &session,
-        &msg.text,
-        created,
-    )?;
+    u.record_links(&msg.workspace, &msg.channel, &session, &msg.text, created)?;
     if msg.source == "self" || !work {
         return Ok(None);
     }
-    c.execute(
-        "INSERT INTO thread_inbox(session_id,kind,ref,created) VALUES(?,'message',?,?)",
-        params![session, msg.event_id, now],
-    )?;
-    let inbox = c.last_insert_rowid();
+    let inbox = u.queue_message(&session, &msg.event_id, now)?;
     if mentioned && msg.sender != owner {
-        c.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'mention',?,?,'Owner mentioned',?,?,?)",
-            params![obligation_id,session,format!("mention:{}:{}:{}",msg.workspace,msg.channel,msg.ts),json!({"event_id":msg.event_id}).to_string(),now,now+grace,now])?;
+        u.open_mention(&Mention {
+            id: obligation_id.into(),
+            session,
+            dedup_key: format!("mention:{}:{}:{}", msg.workspace, msg.channel, msg.ts),
+            source: json!({"event_id":msg.event_id}).to_string(),
+            created: now,
+            due: now + grace,
+        })?;
     }
     Ok(Some(inbox))
 }
@@ -159,54 +155,61 @@ pub async fn reserve(
     if !matches!(trigger.as_str(), "owner" | "peer" | "human") || !now.is_finite() {
         bail!("invalid reply reservation");
     }
-    store.call(move |c| {
-        let tx=c.transaction()?;
-        let active:bool=tx.query_row("SELECT control='active' FROM threads WHERE id=?",[&session],|r|r.get(0))?;
-        if !active {bail!("thread is paused or closed; reply reservation refused");}
-        let belongs:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND session_id=? AND state IN ('pending','processing'))",params![inbox,session],|r|r.get(0))?;
-        if !belongs {bail!("inbox item is not available in this session");}
-        let prior:Option<String>=tx.query_row("SELECT state FROM reply_reservations WHERE inbox_id=?",[inbox],|r|r.get(0)).optional()?;
-        if prior.as_deref()==Some("reserved") {return Ok(Capacity::Reserved);}
-        if prior.as_deref()==Some("sent") {bail!("inbox item already replied");}
-        let events:Vec<(String,f64)>=tx.prepare("SELECT r.trigger_class,CASE WHEN r.state='sent' THEN o.delivered_at ELSE MAX(r.reserved_at,?) END AS at
-             FROM reply_reservations r LEFT JOIN outbox o ON o.id=r.outbox_id
-             WHERE r.session_id=? AND r.state!='released' AND r.trigger_class!='owner'
-             AND (r.state='reserved' OR o.delivered_at>?) ORDER BY at")?
-            .query_map(params![now,session,now-3600.],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        let mut until=now;
-        if trigger!="owner" {
-            if events.len()>=limits.max_replies_per_hour {
-                until=until.max(events[events.len()-limits.max_replies_per_hour].1+3600.);
+    store
+        .transact(move |u| {
+            if !u.thread_active(&session)? {
+                bail!("thread is paused or closed; reply reservation refused");
             }
-            let peers:Vec<_>=events.iter().filter(|(class,_)|class=="peer").collect();
-            if trigger=="peer" && peers.len()>=limits.max_echo_replies_per_hour {
-                until=until.max(peers[peers.len()-limits.max_echo_replies_per_hour].1+3600.);
+            if !u.inbox_open(inbox, &session)? {
+                bail!("inbox item is not available in this session");
             }
-        }
-        if until>now {
-            tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![until,inbox])?;
-            tx.execute("UPDATE threads SET throttled_until=? WHERE id=?",params![until,session])?;
-            tx.commit()?;return Ok(Capacity::Deferred(until));
-        }
-        tx.execute("INSERT INTO reply_reservations(id,session_id,inbox_id,trigger_class,reserved_at) VALUES(?,?,?,?,?)
-            ON CONFLICT(inbox_id) DO UPDATE SET state='reserved',reserved_at=excluded.reserved_at,trigger_class=excluded.trigger_class",
-            params![id,session,inbox,trigger,now])?;
-        tx.commit()?;Ok(Capacity::Reserved)
-    }).await
+            let prior = u.reservation_state(inbox)?;
+            if prior.as_deref() == Some("reserved") {
+                return Ok(Capacity::Reserved);
+            }
+            if prior.as_deref() == Some("sent") {
+                bail!("inbox item already replied");
+            }
+            let events = u.recent_replies(&session, now)?;
+            let mut until = now;
+            if trigger != "owner" {
+                if events.len() >= limits.max_replies_per_hour {
+                    until =
+                        until.max(events[events.len() - limits.max_replies_per_hour].at + 3600.);
+                }
+                let peers: Vec<_> = events
+                    .iter()
+                    .filter(|reply| reply.trigger == "peer")
+                    .collect();
+                if trigger == "peer" && peers.len() >= limits.max_echo_replies_per_hour {
+                    until =
+                        until.max(peers[peers.len() - limits.max_echo_replies_per_hour].at + 3600.);
+                }
+            }
+            if until > now {
+                u.defer_reply(&session, inbox, until)?;
+                return Ok(Capacity::Deferred(until));
+            }
+            u.reserve_reply(&id, &session, inbox, &trigger, now)?;
+            Ok(Capacity::Reserved)
+        })
+        .await
 }
 
 pub async fn claim_due(store: &Store, session: String, now: f64) -> Result<Option<(i64, String)>> {
-    store.call(move |c| {
-        let tx=c.transaction()?;
-        // Keep the control barrier and inbox claim in the same snapshot. An
-        // actor's earlier advisory check can race another actor's commit.
-        if crate::store::worker_controls::pending_tx(&tx,&session)? {return Ok(None);}
-        let item:Option<(i64,String)>=tx.query_row("SELECT id,kind FROM thread_inbox WHERE session_id=? AND state='pending' AND not_before<=?
-            AND NOT EXISTS(SELECT 1 FROM thread_inbox busy WHERE busy.session_id=thread_inbox.session_id AND busy.state='processing') ORDER BY id LIMIT 1",
-            params![session,now],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-        if let Some((id,_))=&item {tx.execute("UPDATE thread_inbox SET state='processing' WHERE id=?",[id])?;}
-        tx.commit()?;Ok(item)
-    }).await
+    store
+        .transact(move |u| {
+            // Keep the control barrier and inbox claim in the same snapshot. An
+            // actor's earlier advisory check can race another actor's commit.
+            if u.worker_control_pending(&session)? {
+                return Ok(None);
+            }
+            let item = u
+                .claim_next(&session, now)?
+                .map(|item| (item.id, item.kind));
+            Ok(item)
+        })
+        .await
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -225,30 +228,22 @@ pub async fn queue_answer(store: &Store, answer: Answer, now: f64) -> Result<i64
         bail!("an answer must contain text");
     }
     store
-        .call(move |c| {
-            let tx = c.transaction()?;
-            let id = queue_answer_tx(&tx, &answer, now)?;
-            tx.commit()?;
-            Ok(id)
-        })
+        .transact(move |u| queue_answer_tx(u, &answer, now))
         .await
 }
 
-pub(crate) fn queue_answer_tx(c: &rusqlite::Connection, answer: &Answer, now: f64) -> Result<i64> {
+pub(crate) fn queue_answer_tx(u: &mut dyn Unit, answer: &Answer, now: f64) -> Result<i64> {
     if answer.text.trim().is_empty() {
         bail!("an answer must contain text");
     }
-    let (trigger,prior):(String,Option<i64>)=c.query_row("SELECT trigger_class,outbox_id FROM reply_reservations WHERE inbox_id=? AND session_id=? AND state='reserved'",
-        params![answer.inbox,answer.session],|r|Ok((r.get(0)?,r.get(1)?))).context("missing reply reservation")?;
-    if let Some(id) = prior {
+    let reserved = u
+        .reserved_reply(answer.inbox, &answer.session)
+        .context("missing reply reservation")?;
+    if let Some(id) = reserved.post {
         return Ok(id);
     }
-    let route: (String, String) = c.query_row(
-        "SELECT channel,root_ts FROM threads WHERE id=?",
-        [&answer.session],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    if route != (answer.channel.clone(), answer.thread_ts.clone()) {
+    let route = u.thread_route(&answer.session)?;
+    if (route.channel, route.root_ts) != (answer.channel.clone(), answer.thread_ts.clone()) {
         bail!("answer route differs from its thread");
     }
     let post = crate::core::delivery::Post {
@@ -263,42 +258,25 @@ pub(crate) fn queue_answer_tx(c: &rusqlite::Connection, answer: &Answer, now: f6
         blob: None,
         after: String::new(),
     };
-    let id = crate::store::outbox::enqueue_tx(c, &post, now)?;
-    c.execute(
-        "UPDATE outbox SET answers_json=?,trigger_class=? WHERE id=?",
-        params![serde_json::to_string(&answer.obligations)?, trigger, id],
-    )?;
-    for obligation in &answer.obligations {
-        // Open or deferred, or awaiting a delivery that failed: a rewrite of a
-        // refused reply answers the asks the refused one did (#119).
-        let changed=c.execute("UPDATE obligations SET state='awaiting_delivery',updated=? WHERE id=? AND session_id=? AND (state IN ('open','deferred') OR (state='awaiting_delivery' AND NOT EXISTS(SELECT 1 FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id AND o.state!='failed')))",params![now,obligation,answer.session])?;
-        if changed != 1 {
-            bail!("obligation is not open in this thread: {obligation}");
-        }
-        c.execute(
-            "INSERT OR IGNORE INTO obligation_posts VALUES(?,?)",
-            params![obligation, id],
-        )?;
+    let id = u.queue_post(&post, now)?;
+    let queued = QueuedAnswer {
+        post: id,
+        session: answer.session.clone(),
+        inbox: answer.inbox,
+        trigger: reserved.trigger,
+        obligations: answer.obligations.clone(),
+        answers: serde_json::to_string(&answer.obligations)?,
+        time: now,
+    };
+    if let Some(obligation) = u.answer_queued(&queued)? {
+        bail!("obligation is not open in this thread: {obligation}");
     }
-    c.execute(
-        "UPDATE reply_reservations SET outbox_id=? WHERE inbox_id=?",
-        params![id, answer.inbox],
-    )?;
-    c.execute(
-        "UPDATE thread_inbox SET state='done' WHERE id=?",
-        [answer.inbox],
-    )?;
     Ok(id)
 }
 
 pub async fn delivered(store: &Store, post: i64, slack_ts: String, now: f64) -> Result<()> {
     store
-        .call(move |c| {
-            let tx = c.transaction()?;
-            crate::store::outbox::confirm_tx(&tx, post, &slack_ts, now)?;
-            tx.commit()?;
-            Ok(())
-        })
+        .transact(move |u| u.confirm_post(post, &slack_ts, now))
         .await
 }
 
@@ -339,26 +317,30 @@ pub async fn disposition(
     if matches!(actor, Authority::DesktopReadOnly) {
         bail!("read-only capability");
     }
-    store.call(move |c| {
-        let tx = c.transaction()?;
-        let current: String = tx.query_row("SELECT state FROM obligations WHERE id=?", [&id], |r| r.get(0))?;
-        if current == "awaiting_delivery" && state != "owner_closed" {
-            bail!("resolve the existing delivery before changing its obligation");
-        }
-        if tx.execute("UPDATE obligations SET state=?,state_json=?,due=COALESCE(?,due),updated=? WHERE id=? AND state IN ('open','deferred','awaiting_delivery')",
-            params![state,serde_json::to_string(&change)?,due,now,id])?!=1 {bail!("obligation is already closed or missing");}
-        tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'obligation.disposition',?,?)", params![now,serde_json::to_string(&actor)?,id,serde_json::to_string(&change)?])?;
-        tx.commit()?;
-        Ok(())
-    }).await
+    let disposal = Disposal {
+        id,
+        state: state.into(),
+        details: serde_json::to_string(&change)?,
+        due,
+        actor: serde_json::to_string(&actor)?,
+        time: now,
+    };
+    store
+        .transact(move |u| {
+            let current = u.obligation_state(&disposal.id)?;
+            if current == "awaiting_delivery" && disposal.state != "owner_closed" {
+                bail!("resolve the existing delivery before changing its obligation");
+            }
+            if !u.dispose(&disposal)? {
+                bail!("obligation is already closed or missing");
+            }
+            Ok(())
+        })
+        .await
 }
 
 pub async fn sweep(store: &Store, now: f64) -> Result<usize> {
-    store.call(move |c| {
-        Ok(c.execute("INSERT OR IGNORE INTO thread_inbox(session_id,kind,ref,payload_json,created,dedup_key)
-            SELECT session_id,'obligation_due',id,'{}',?, 'due:'||id||':'||due FROM obligations
-            WHERE state IN ('open','deferred') AND due<=?",params![now,now])?)
-    }).await
+    store.transact(move |u| u.queue_due(now)).await
 }
 
 pub async fn signal_streak(
@@ -371,12 +353,9 @@ pub async fn signal_streak(
     if threshold == 0 || streak < threshold {
         return Ok(false);
     }
-    store.call(move |c| {
-        let changed=c.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated)
-            VALUES(?,?,'signal',?,'{}','Conversation needs attention',?,?,?)",
-            params![format!("streak:{session}:{streak}"),session,format!("streak:{session}:{streak}"),now,now,now])?;
-        Ok(changed==1)
-    }).await
+    store
+        .transact(move |u| u.open_signal(&format!("streak:{session}:{streak}"), &session, now))
+        .await
 }
 
 pub use crate::core::worker::{retry_same_session, Failure};

@@ -608,8 +608,22 @@ async fn owner_pause_blocks_admission_and_restart_recovery_is_idempotent() {
         .await
         .unwrap();
     let (a, b) = tokio::join!(
-        work::claim(&h.store, "a-0".into(), 1, h.config.clone(), 20.),
-        work::claim(&h.store, "a-0".into(), 1, h.config.clone(), 20.)
+        work::claim(
+            &h.store,
+            "a-0".into(),
+            1,
+            h.config.machines.clone(),
+            h.config.limits.clone(),
+            20.
+        ),
+        work::claim(
+            &h.store,
+            "a-0".into(),
+            1,
+            h.config.machines.clone(),
+            h.config.limits.clone(),
+            20.
+        )
     );
     assert_eq!(
         usize::from(a.unwrap().is_some()) + usize::from(b.unwrap().is_some()),
@@ -781,10 +795,17 @@ async fn expired_session_is_not_resurrected_by_a_startup_failure() {
 async fn completion_storage_failure_rolls_back_result_artifacts_and_inbox() {
     let h = Harness::new().await;
     h.add("a", "gpu", 0, false, 1).await;
-    work::claim(&h.store, "a-0".into(), 1, h.config.clone(), 20.)
-        .await
-        .unwrap()
-        .unwrap();
+    work::claim(
+        &h.store,
+        "a-0".into(),
+        1,
+        h.config.machines.clone(),
+        h.config.limits.clone(),
+        20.,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     h.store.call(|c|{c.execute("INSERT INTO artifacts(id,job_id,session_id,machine,path,kind) VALUES('artifact:a-0:0','a-0',?,'gpu','prior','md')",[SESSION])?;Ok(())}).await.unwrap();
     let completion = Completion {
         outcome: Ok(result()),

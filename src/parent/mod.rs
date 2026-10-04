@@ -14,7 +14,7 @@ use crate::{
     store::Store,
 };
 pub use fridica_core::parent::{context, schema};
-use rusqlite::params;
+use fridica_core::store::Store as _;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap, ffi::OsString, io::Write, path::PathBuf, sync::Arc, time::Duration,
@@ -128,7 +128,11 @@ impl CliParent {
         );
         let now = self.clock.now();
         let intent = json!({"backend":backend,"argv":argv,"prompt":prompt,"schema":schema,"model":model,"timeout":timeout.as_secs_f64()});
-        let seq=self.store.call(move|c|{c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_transport_call',?,?,0)",params![now,intent.to_string()])?;Ok(c.last_insert_rowid())}).await.map_err(|_|failure("parent_recording_failed"))?;
+        let seq = self
+            .store
+            .transact(move |u| u.record("parent_transport_call", now, &intent.to_string(), false))
+            .await
+            .map_err(|_| failure("parent_recording_failed"))?;
         let completed = cli::execute(argv, directory.path(), environment, prompt, timeout).await;
         let (result, output, complete) = match completed {
             Ok(output) => {
@@ -149,11 +153,19 @@ impl CliParent {
         };
         let now = self.clock.now();
         let record = json!({"call_id":seq,"output":output,"result":result});
-        self.store.call(move|c|{let tx=c.transaction()?;
-            tx.execute("UPDATE replay_events SET complete=? WHERE seq=?",params![complete,seq])?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_transport_result',?,?,?)",params![now,record.to_string(),complete])?;
-            tx.commit()?;Ok(())
-        }).await.map_err(|_|failure("parent_recording_failed"))?;
+        self.store
+            .transact(move |u| {
+                u.complete(seq, complete)?;
+                u.record(
+                    "parent_transport_result",
+                    now,
+                    &record.to_string(),
+                    complete,
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| failure("parent_recording_failed"))?;
         result
     }
 }

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::attention;
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{Store as _, Watermark};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -103,40 +103,34 @@ impl<H: History> Catchup<H> {
             let config = self.receiver.config.clone();
             let channel = channel.clone();
             let incomplete_channel = channel.clone();
-            let added = self.receiver.store.call(move |c| {
-                let tx = c.transaction()?;
+            let added = self.receiver.store.transact(move |u| {
                 let mut added = 0;
                 for (message,id) in prepared {
-                    if attention::intake_tx(&tx,message,&config.owner.slack_user,now,config.attention.mention_grace,&id,Some(now-DAY))?.is_some() { added+=1; }
+                    if attention::intake_tx(u,message,&config.owner.slack_user,now,config.attention.mention_grace,&id,Some(now-DAY))?.is_some() { added+=1; }
                 }
                 // A root Slack refuses (e.g. deleted) is skipped, once per root,
                 // so it cannot stall the watermark.
                 for (root, code) in gaps {
                     let detail = json!({"workspace":config.slack.workspace,"channel":channel,"root":root,"code":code});
-                    tx.execute("INSERT INTO health_events(kind,details_json,created) SELECT 'slack_catchup_skipped_thread',?,? WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='slack_catchup_skipped_thread' AND json_extract(details_json,'$.channel')=? AND json_extract(details_json,'$.root')=?)",params![detail.to_string(),now,channel,root])?;
+                    u.note_unless_noted("slack_catchup_skipped_thread",&detail.to_string(),now,&["channel","root"])?;
                 }
                 for detail in dropped {
-                    tx.execute("INSERT INTO health_events(kind,details_json,created) SELECT 'slack_dropped_mention',?,? WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='slack_dropped_mention' AND json_extract(details_json,'$.event_id')=?)",params![detail.to_string(),now,detail["event_id"].as_str()])?;
+                    u.note_unless_noted("slack_dropped_mention",&detail.to_string(),now,&["event_id"])?;
                 }
                 let workspace = &config.slack.workspace;
-                let key = format!("catchup:{workspace}:{channel}");
-                let runs_key = format!("{key}:truncated");
-                let current: Option<f64> = tx.query_row("SELECT last_complete_pass FROM channel_watermarks WHERE workspace=? AND channel=?",params![workspace,channel],|r|r.get(0)).optional()?;
+                let current = u.catchup_mark(workspace,&channel)?;
                 // Fencing a separately constructed service prevents an older pass
                 // from overwriting another pass's committed watermark.
                 if current!=start.mark { bail!("catch-up watermark changed during pass"); }
-                let runs: Option<String> = tx.query_row("SELECT value FROM meta WHERE key=?",[&runs_key],|r|r.get(0)).optional()?;
+                let runs = u.truncated_passes(workspace,&channel)?;
                 let runs = runs.map(|s|s.parse::<u32>()).transpose()?.unwrap_or(0).saturating_add(1);
                 let mark = if complete || runs>=2 { now } else { current.unwrap_or(start.oldest+OVERLAP) };
                 let pinned = !complete && runs<2;
-                tx.execute("INSERT INTO channel_watermarks VALUES(?,?,?,?) ON CONFLICT(workspace,channel) DO UPDATE SET last_complete_pass=excluded.last_complete_pass,pinned=excluded.pinned",params![workspace,channel,mark,pinned])?;
-                tx.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,format!("{mark:.6}")])?;
-                tx.execute("INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![runs_key,if pinned {runs.to_string()} else {"0".into()}])?;
+                u.keep_watermark(&Watermark{workspace:workspace.clone(),channel:channel.clone(),mark,pinned,truncated_passes:if pinned {runs} else {0}})?;
                 if !complete && runs>=2 {
-                    tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('slack_catchup_gap',?,?)",params![json!({"workspace":workspace,"channel":channel,"oldest":start.oldest,"before":first_read,"passes":runs}).to_string(),now])?;
+                    u.note("slack_catchup_gap",&json!({"workspace":workspace,"channel":channel,"oldest":start.oldest,"before":first_read,"passes":runs}).to_string(),now)?;
                 }
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('slack_catchup_commit',?,?)",params![now,json!({"workspace":workspace,"channel":channel,"oldest":start.oldest,"complete":complete,"mark":mark,"pinned":pinned,"added":added}).to_string()])?;
-                tx.commit()?;
+                u.record("slack_catchup_commit",now,&json!({"workspace":workspace,"channel":channel,"oldest":start.oldest,"complete":complete,"mark":mark,"pinned":pinned,"added":added}).to_string(),true)?;
                 Ok(added)
             }).await?;
             progress.added += added;
@@ -155,18 +149,26 @@ impl<H: History> Catchup<H> {
     ) -> Result<Start> {
         let workspace = self.receiver.config.slack.workspace.clone();
         let channel = channel.to_string();
-        self.receiver.store.call(move |c| {
-            let tx=c.transaction()?;
-            let mark: Option<f64> = tx.query_row("SELECT last_complete_pass FROM channel_watermarks WHERE workspace=? AND channel=?",params![workspace,channel],|r|r.get(0)).optional()?;
-            let latest: Option<f64> = tx.query_row("SELECT MAX(CAST(ts AS REAL)) FROM messages WHERE workspace=? AND channel=? AND (? IS NULL OR received_at<?)",params![workspace,channel,started,started],|r|r.get(0))?;
-            let oldest = (now-window).min(mark.or(latest).map(|s|s-OVERLAP).unwrap_or(now-window)).max(now-MAX_WINDOW);
-            if !oldest.is_finite() { bail!("invalid stored watermark"); }
-            // Match Python's updated-order limit before filtering by age.
-            let roots = tx.prepare("SELECT root_ts FROM (SELECT root_ts,updated FROM threads WHERE workspace=? AND channel=? ORDER BY updated DESC LIMIT 200) WHERE updated>=?")?
-                .query_map(params![workspace,channel,oldest-DAY],|r|r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
-            tx.commit()?;
-            Ok(Start {oldest,roots,mark})
-        }).await
+        self.receiver
+            .store
+            .transact(move |u| {
+                let mark = u.catchup_mark(&workspace, &channel)?;
+                let latest = u.latest_message_ts(&workspace, &channel, started)?;
+                let oldest = (now - window)
+                    .min(mark.or(latest).map(|s| s - OVERLAP).unwrap_or(now - window))
+                    .max(now - MAX_WINDOW);
+                if !oldest.is_finite() {
+                    bail!("invalid stored watermark");
+                }
+                // Match Python's updated-order limit before filtering by age.
+                let roots = u.recent_thread_roots(&workspace, &channel, oldest - DAY)?;
+                Ok(Start {
+                    oldest,
+                    roots,
+                    mark,
+                })
+            })
+            .await
     }
     /// Messages since `start`, whether every page was read, and the thread
     /// roots Slack refused (root, error code).
@@ -282,10 +284,11 @@ impl<H: History> Catchup<H> {
     async fn page(&self, request: PageRequest) -> Result<std::result::Result<Value, String>> {
         let now = self.receiver.clock.now();
         let record = serde_json::to_string(&request)?;
-        let call=self.receiver.store.call(move |c| {
-            c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('slack_history_call',?,?,0)",params![now,record])?;
-            Ok(c.last_insert_rowid())
-        }).await?;
+        let call = self
+            .receiver
+            .store
+            .transact(move |u| u.record("slack_history_call", now, &record, false))
+            .await?;
         let mut result = tokio::time::timeout(self.timeout, self.history.page(request))
             .await
             .unwrap_or(Err(HistoryFailure::Timeout));
@@ -304,12 +307,13 @@ impl<H: History> Catchup<H> {
         } else {
             crate::store::record::history(record)
         };
-        self.receiver.store.call(move |c| {
-            let tx=c.transaction()?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('slack_history_result',?,?,?)",params![now,record.to_string(),complete])?;
-            tx.execute("UPDATE replay_events SET complete=? WHERE seq=?",params![complete,call])?;
-            tx.commit()?; Ok(())
-        }).await?;
+        self.receiver
+            .store
+            .transact(move |u| {
+                u.record("slack_history_result", now, &record.to_string(), complete)?;
+                u.complete(call, complete)
+            })
+            .await?;
         let response = match result {
             Ok(response) => response,
             Err(HistoryFailure::Rejected { code }) => return Ok(Err(code)),

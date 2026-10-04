@@ -16,15 +16,14 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = "0.2"
+fridica-core = "0.3"
+fridica-store-sqlite = "0.1"
 fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
 clap = { version = "4", features = ["derive"] }
 fs2 = "0.4"
-rusqlite = { version = "0.38", features = ["bundled", "backup", "serde_json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -44,8 +43,11 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
+fridica-store-sqlite = { version = "0.1", features = ["testing"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 fridica-slack = { version = "0.2.3", features = ["testing"] }
+# Tests inspect databases with SQL.
+rusqlite = { version = "0.38", features = ["bundled", "backup", "serde_json"] }
 syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]

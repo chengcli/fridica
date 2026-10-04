@@ -2,8 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use fridica::{
     core::time::{Clock, SystemClock},
-    report,
-    store::{migration, Store},
+    store::Store,
 };
 use std::path::{Path, PathBuf};
 
@@ -77,20 +76,6 @@ enum Command {
         dry_run: bool,
         #[arg(long)]
         rollback: bool,
-    },
-    /// Generate and atomically export a report from an offline database
-    /// (the configuration's state.path unless --database says otherwise).
-    Report {
-        #[arg(long)]
-        database: Option<PathBuf>,
-        #[arg(long)]
-        channel: String,
-        #[arg(long)]
-        date: chrono::NaiveDate,
-        #[arg(long)]
-        timezone: chrono_tz::Tz,
-        #[arg(long)]
-        directory: PathBuf,
     },
     /// Serve the control-room dashboard on 127.0.0.1 for the running daemon.
     ///
@@ -304,29 +289,16 @@ async fn run(cli: Cli) -> Result<()> {
             let config = config_path(config)?;
             let database = database_path(database, &config)?;
             if rollback {
-                migration::rollback(&database, &config)?;
+                fridica::cli::migrate::rollback(&database, &config)?;
                 println!("Restored migration backups.");
             } else {
                 let plan = if dry_run {
-                    migration::dry_run(&database, &config)?
+                    fridica::cli::migrate::dry_run(&database, &config)?
                 } else {
-                    migration::migrate(&database, &config, SystemClock.now())?
+                    fridica::cli::migrate::migrate(&database, &config, SystemClock.now())?
                 };
                 println!("{}", serde_json::to_string_pretty(&plan)?);
             }
-        }
-        Command::Report {
-            database,
-            channel,
-            date,
-            timezone,
-            directory,
-        } => {
-            let database = database_path(database, &config_path(None)?)?;
-            let store = Store::open(database).await?;
-            let data = report::generate(&store, channel, date, timezone, SystemClock.now()).await?;
-            report::export_pending(&store, directory).await?;
-            println!("{}", serde_json::to_string_pretty(&data)?);
         }
         Command::Dashboard {
             config,

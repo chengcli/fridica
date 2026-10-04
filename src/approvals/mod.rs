@@ -8,14 +8,12 @@ use crate::{
         worker::*,
         Authority,
     },
-    store::{
-        approvals::{self, NewRequest, Settlement, Started},
-        Store,
-    },
+    store::Store,
     workers::protocol::ApprovalHandler,
 };
 use anyhow::{bail, Result};
 pub use fridica_core::approvals as rules;
+use fridica_core::store::{ApprovalSettlement, ApprovalStart, NewApproval, Store as _};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, Semaphore};
 
@@ -59,16 +57,27 @@ impl Broker {
             bail!("approval decisions require owner authentication");
         }
         let config = self.config.lock().await;
-        let changed = approvals::settle(
-            &self.store,
-            id,
-            Settlement::Decide(decision),
-            config.owner.slack_user.clone(),
-            self.clock.now(),
-        )
-        .await?;
+        let changed = self
+            .settle(
+                id,
+                ApprovalSettlement::Decide(decision),
+                config.owner.slack_user.clone(),
+            )
+            .await?;
         self.changed.notify_waiters();
         Ok(changed)
+    }
+    /// Settle request `id` as `actor`, now.
+    async fn settle(
+        &self,
+        id: String,
+        settlement: ApprovalSettlement,
+        actor: String,
+    ) -> Result<bool> {
+        let now = self.clock.now();
+        self.store
+            .transact(move |u| u.settle_approval(&id, settlement, &actor, now))
+            .await
     }
     async fn run(
         &self,
@@ -101,21 +110,21 @@ impl Broker {
         } else {
             rules::decide(policy, &request)
         };
-        let started = approvals::begin(
-            &self.store,
-            NewRequest {
-                id: id.clone(),
-                worker,
-                job,
-                request,
-                automatic,
-                now,
-                expires_at: now + policy.approval_timeout,
-            },
-        )
-        .await?;
+        let approval = NewApproval {
+            id: id.clone(),
+            worker,
+            job,
+            request,
+            automatic,
+            now,
+            expires_at: now + policy.approval_timeout,
+        };
+        let started = self
+            .store
+            .transact(move |u| u.begin_approval(&approval))
+            .await?;
         drop(config);
-        if let Started::Immediate(decision) = started {
+        if let ApprovalStart::Immediate(decision) = started {
             let _ = reply.send(decision);
             return Ok(());
         }
@@ -124,17 +133,12 @@ impl Broker {
         }
         loop {
             if reply.is_closed() {
-                approvals::settle(
-                    &self.store,
-                    id,
-                    Settlement::Cancel,
-                    "interrupted".into(),
-                    self.clock.now(),
-                )
-                .await?;
+                self.settle(id, ApprovalSettlement::Cancel, "interrupted".into())
+                    .await?;
                 return Ok(());
             }
-            let Some(a) = approvals::get(&self.store, id.clone()).await? else {
+            let lookup = id.clone();
+            let Some(a) = self.store.transact(move |u| u.approval(&lookup)).await? else {
                 return Ok(());
             };
             if a.status != "pending" {
@@ -151,14 +155,8 @@ impl Broker {
                 return Ok(());
             }
             if self.clock.now() >= a.expires_at || tokio::time::Instant::now() >= deadline {
-                approvals::settle(
-                    &self.store,
-                    id.clone(),
-                    Settlement::Expire,
-                    "timeout".into(),
-                    self.clock.now(),
-                )
-                .await?;
+                self.settle(id.clone(), ApprovalSettlement::Expire, "timeout".into())
+                    .await?;
                 // A control may already have committed a decision before the
                 // timer fired. Read that committed result on the next pass.
                 continue;
@@ -178,7 +176,10 @@ impl ApprovalHandler for Broker {
     fn reconfigure(&self, config: Arc<Config>) -> AdapterFuture<'_, Result<()>> {
         Box::pin(async move {
             let mut current = self.config.lock().await;
-            approvals::cancel_all(&self.store, self.clock.now()).await?;
+            let now = self.clock.now();
+            self.store
+                .transact(move |u| u.cancel_pending_approvals(now))
+                .await?;
             *current = config;
             self.changed.notify_waiters();
             Ok(())
@@ -208,7 +209,11 @@ impl ApprovalHandler for Broker {
     }
     fn cancel(&self, worker_id: String) -> AdapterFuture<'_, ()> {
         Box::pin(async move {
-            let _ = approvals::cancel_worker(&self.store, worker_id, self.clock.now()).await;
+            let now = self.clock.now();
+            let _ = self
+                .store
+                .transact(move |u| u.cancel_worker_approvals(&worker_id, now))
+                .await;
             self.changed.notify_waiters();
         })
     }

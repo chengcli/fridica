@@ -56,10 +56,17 @@ impl Harness {
         )
         .unwrap();
         work::enqueue(&store, job, 1.).await.unwrap();
-        let (job, worker) = work::claim(&store, "j1".into(), 1, config.clone(), 20.)
-            .await
-            .unwrap()
-            .unwrap();
+        let (job, worker) = work::claim(
+            &store,
+            "j1".into(),
+            1,
+            config.machines.clone(),
+            config.limits.clone(),
+            20.,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let clock = Arc::new(ReplayClock::new(20.));
         let (sender, notifications) = mpsc::channel(1);
         let broker = Arc::new(Broker::new(

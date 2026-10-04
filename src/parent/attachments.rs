@@ -13,7 +13,7 @@ use crate::{
     },
     store::Store,
 };
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::Store as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
@@ -98,7 +98,11 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
         let input = json!({"session":request.session["id"],"version":request.session["version"],"inbox":request.inbox_id,"messages":messages,"links":self.links.is_some(),"context_version":3,"github":github_enabled,"github_cache_seconds":self.config.github.cache_seconds,"scope":{"workspace":self.config.slack.workspace,"channels":self.config.slack.channels,"owner":self.config.owner.slack_user}});
         let key = format!("{:x}", Sha256::digest(input.to_string().as_bytes()));
         let context = if request.call == "repair" {
-            let raw=self.store.call(move|c|Ok(c.query_row("SELECT json_extract(payload_json,'$.context') FROM replay_events WHERE kind='parent_attachment_result' AND complete=1 AND json_extract(payload_json,'$.key')=? ORDER BY seq DESC LIMIT 1",[key],|r|r.get::<_,String>(0)).optional()?)).await.map_err(|_|failure("parent_context_recording_failed"))?;
+            let raw = self
+                .store
+                .transact(move |u| u.attachment_context(&key))
+                .await
+                .map_err(|_| failure("parent_context_recording_failed"))?;
             serde_json::from_str::<Value>(
                 &raw.ok_or_else(|| failure("parent_context_snapshot_missing"))?,
             )
@@ -121,15 +125,23 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             }
             let call_key = key.clone();
             // Own-file classification and intent share a database snapshot.
-            let (call,own)=self.store.call(move|c|{
-                let tx=c.transaction()?;let mut own=BTreeSet::new();
-                for (id,name) in candidates {
-                    let ours:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM outbox WHERE kind='upload' AND (sent_ts=? OR ((sent_ts IS NULL OR sent_ts='') AND channel=? AND thread_ts=? AND filename=?)))",params![id,channel,root,name],|r|r.get(0))?;
-                    if ours{own.insert(id);}
-                }
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_attachment_call',?,?,0)",params![now,json!({"key":call_key,"source":input,"own":own}).to_string()])?;
-                let call=tx.last_insert_rowid();tx.commit()?;Ok((call,own))
-            }).await.map_err(|_|failure("parent_context_recording_failed"))?;
+            let (call, own) = self
+                .store
+                .transact(move |u| {
+                    let own: BTreeSet<String> = u
+                        .own_uploads(&channel, &root, &candidates)?
+                        .into_iter()
+                        .collect();
+                    let call = u.record(
+                        "parent_attachment_call",
+                        now,
+                        &json!({"key":call_key,"source":input,"own":own}).to_string(),
+                        false,
+                    )?;
+                    Ok((call, own))
+                })
+                .await
+                .map_err(|_| failure("parent_context_recording_failed"))?;
             // Independent reads share the actor's 30-second allowance, so neither
             // consumes the model deadline nor doubles the preparation budget.
             let linked = async {
@@ -206,10 +218,13 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
             let context = json!({"trigger":trigger,"history":history,"linked":linked,"github_state":github_state,"github_status":github_status});
             let record = json!({"call":call,"key":key,"context":context});
             let now = self.clock.now();
-            self.store.call(move|c|{let tx=c.transaction()?;
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('parent_attachment_result',?,?)",params![now,record.to_string()])?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?",[call])?;tx.commit()?;Ok(())
-            }).await.map_err(|_|failure("parent_context_recording_failed"))?;
+            self.store
+                .transact(move |u| {
+                    u.record("parent_attachment_result", now, &record.to_string(), true)?;
+                    u.complete(call, true)
+                })
+                .await
+                .map_err(|_| failure("parent_context_recording_failed"))?;
             context
         };
         request.trigger = context["trigger"].clone();

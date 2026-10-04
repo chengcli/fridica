@@ -11,10 +11,13 @@ use crate::{
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
-    store::{work, Store},
+    store::Store,
 };
 use anyhow::{bail, Context, Result};
-use rusqlite::params;
+use fridica_core::store::{
+    Arrival, Fence, NewAsk, ObligationChange, ParentTurn, QueuedHandoff, Settlement, Store as _,
+    TriageSettlement, TurnClose, TurnFailure, TurnInput, TurnRetry,
+};
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
@@ -72,7 +75,7 @@ impl<P: Parent> Actor<P> {
             let pending_session = session.clone();
             if self
                 .store
-                .call(move |c| crate::store::worker_controls::pending_tx(c, &pending_session))
+                .transact(move |u| u.worker_control_pending(&pending_session))
                 .await?
             {
                 return Ok(Step::Deferred);
@@ -87,20 +90,28 @@ impl<P: Parent> Actor<P> {
             Ok(step) => Ok(step),
             Err(_error) => {
                 let now = self.clock.now();
-                let recorded = self.store.call(move|c| {
-                    let tx=c.transaction()?;
-                    let (attempts,state):(i64,String)=tx.query_row("SELECT attempts,state FROM thread_inbox WHERE id=?",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
-                    // Cleaning may discard this turn while an external call is
-                    // failing. Its late error must not create fresh signal work.
-                    if state != "processing" { return Ok(false); }
-                    tx.execute("UPDATE thread_inbox SET attempts=attempts+1,state=?,not_before=? WHERE id=? AND state='processing'",params![if attempts>=2{"dropped"}else{"pending"},now+30.,id])?;
-                    tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-                    tx.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated)
-                        SELECT ?,?,'signal',?,?,'An inbox turn failed; review required',?,?,?
-                        WHERE NOT EXISTS(SELECT 1 FROM thread_inbox i JOIN obligations o ON i.ref=o.id WHERE i.id=? AND i.kind='obligation_due' AND o.kind='signal')",params![format!("inbox-failed:{id}"),session,format!("inbox-failed:{id}"),json!({"inbox_id":id}).to_string(),now,now,now,id])?;
-                    tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','inbox.failed',?,?)",params![now,session,json!({"inbox_id":id,"attempt":attempts+1}).to_string()])?;
-                    tx.commit()?;Ok(true)
-                }).await?;
+                let recorded = self
+                    .store
+                    .transact(move |u| {
+                        let (attempts, state) = u.inbox_attempts(id)?;
+                        // Cleaning may discard this turn while an external call is
+                        // failing. Its late error must not create fresh signal work.
+                        if state != "processing" {
+                            return Ok(false);
+                        }
+                        u.fail_turn(&TurnFailure {
+                            id,
+                            session,
+                            state: if attempts >= 2 { "dropped" } else { "pending" }.into(),
+                            not_before: now + 30.,
+                            signal: format!("inbox-failed:{id}"),
+                            source: json!({"inbox_id":id}).to_string(),
+                            details: json!({"inbox_id":id,"attempt":attempts+1}).to_string(),
+                            now,
+                        })?;
+                        Ok(true)
+                    })
+                    .await?;
                 Ok(if recorded { Step::Failed } else { Step::Stale })
             }
         }
@@ -429,37 +440,55 @@ impl<P: Parent> Actor<P> {
         calls: Vec<Value>,
     ) -> Result<Step> {
         let now = self.clock.now();
-        self.store.call(move|c|{
-            let tx=c.transaction()?;
-            let current:bool=tx.query_row("SELECT version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![request.session["version"].as_i64(),id,session],|r|r.get(0))?;
-            // The whole turn is redone later, so only the refused call and any
-            // triage are kept: an earlier decide that failed validation must not
-            // read as a later, successful one (it would clear owner review).
-            for call in calls.iter().filter(|c| c["failure"]["code"]==super::failure::RATE_LIMITED || c["request"]["call"]=="triage") {
-                let mut context=call["request"].clone();
-                if let Some(code)=call["failure"]["code"].as_str() {context["failure"]=json!(code);}
-                let error=if call["failure"]["code"]==super::failure::RATE_LIMITED {super::failure::RATE_LIMITED} else {""};
-                tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,'{}',?,?,?,?)",
-                    params![session,id,call["request"]["call"].as_str(),call["response"].to_string(),context.to_string(),error,call["created"].as_f64()])?;
-            }
-            if current {
-                tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![now+super::failure::RATE_LIMIT_RETRY,id])?;
-                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.rate_limited',?,?)",params![now,session,json!({"inbox_id":id,"retry_at":now+super::failure::RATE_LIMIT_RETRY}).to_string()])?;
-            } else {
-                tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
-            }
-            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-            tx.commit()?;
-            Ok(if current {Step::Deferred} else {Step::Stale})
-        }).await
+        // The whole turn is redone later, so only the refused call and any
+        // triage are kept: an earlier decide that failed validation must not
+        // read as a later, successful one (it would clear owner review).
+        let calls = calls
+            .iter()
+            .filter(|c| {
+                c["failure"]["code"] == super::failure::RATE_LIMITED
+                    || c["request"]["call"] == "triage"
+            })
+            .map(|call| {
+                let mut context = call["request"].clone();
+                if let Some(code) = call["failure"]["code"].as_str() {
+                    context["failure"] = json!(code);
+                }
+                let error = if call["failure"]["code"] == super::failure::RATE_LIMITED {
+                    super::failure::RATE_LIMITED
+                } else {
+                    ""
+                };
+                ParentTurn {
+                    call: call["request"]["call"].as_str().map(str::to_owned),
+                    response: call["response"].to_string(),
+                    context: context.to_string(),
+                    error: error.into(),
+                    created: call["created"].as_f64(),
+                    blocked: None,
+                }
+            })
+            .collect();
+        let retry = TurnRetry {
+            id,
+            session,
+            version: request.session["version"].as_i64(),
+            calls,
+            retry_at: now + super::failure::RATE_LIMIT_RETRY,
+            details: json!({"inbox_id":id,"retry_at":now+super::failure::RATE_LIMIT_RETRY})
+                .to_string(),
+            now,
+        };
+        let current = self.store.transact(move |u| u.retry_turn(&retry)).await?;
+        Ok(if current { Step::Deferred } else { Step::Stale })
     }
     pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
         let started = self.clock.now();
         let encoded = serde_json::to_string(request)?;
-        let call_id=self.store.call(move|c| {
-            c.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('parent_call',?,?,0)",params![started,encoded])?;
-            Ok(c.last_insert_rowid())
-        }).await?;
+        let call_id = self
+            .store
+            .transact(move |u| u.record("parent_call", started, &encoded, false))
+            .await?;
         let timeout = self.parent_timeout.saturating_add(
             self.parent
                 .preparation_timeout(request)
@@ -474,14 +503,9 @@ impl<P: Parent> Actor<P> {
         let now = self.clock.now();
         let outcome = json!({"call_id":call_id,"response":raw,"error":error,"failure":failure});
         self.store
-            .call(move |c| {
-                let tx = c.transaction()?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [call_id])?;
-                tx.execute(
-                    "INSERT INTO replay_events(kind,time,payload_json) VALUES('parent_result',?,?)",
-                    params![now, outcome.to_string()],
-                )?;
-                tx.commit()?;
+            .transact(move |u| {
+                u.complete(call_id, true)?;
+                u.record("parent_result", now, &outcome.to_string(), true)?;
                 Ok(())
             })
             .await?;
@@ -515,65 +539,53 @@ fn rate_limited(calls: &[Value]) -> bool {
 }
 
 async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> {
-    store.call(move|c| {
-        let tx=c.transaction()?;
-        let data:String=tx.query_row("SELECT json_object('id',id,'workspace',workspace,'channel',channel,'root_ts',root_ts,'control',control,'status',status,'version',version,'turns',turns,'wait_streak',wait_streak,'no_progress',no_progress,'summary',summary,'last_reply_hash',last_reply_hash,'reset_at',reset_at,'context',json(context_json)) FROM threads WHERE id=?",[&session],|r|r.get(0))?;
-        let (kind,reference,payload):(String,String,String)=tx.query_row("SELECT kind,ref,payload_json FROM thread_inbox WHERE id=? AND state='processing'",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    store.transact(move|u| {
+        let TurnInput{thread:data,kind,reference,payload,message,from_peer,history,obligations,review_required:review}=u.turn_input(&session,id)?;
         let mut trigger=json!({"kind":kind,"ref":reference,"payload":serde_json::from_str::<Value>(&payload)?});
-        let message_sql="SELECT json_object('event_id',event_id,'ts',ts,'sender',sender,'text',text,'files',json(files_json),'meta',json(meta_json),'attachments',json(attachments_json)) FROM messages";
-        if kind=="message" {
-            let raw:String=tx.query_row(&format!("{message_sql} WHERE event_id=?"),[&reference],|r|r.get(0))?;
+        if let Some(raw)=message {
             trigger["message"]=serde_json::from_str(&raw)?;
         }
         if kind=="post_refused" {
             // The refused text itself: it never became a message, so the
             // history does not have it.
-            let raw:Option<String>=tx.query_row("SELECT json_object('outbox_id',id,'post_kind',kind,'state',state,'code',error,'text',text,'trigger_event',trigger_event,'turn',json_extract(meta_json,'$.turn')) FROM outbox WHERE id=? AND session_id=?",params![reference.parse::<i64>().unwrap_or(0),&session],|r|r.get(0)).ok();
+            let raw=u.refused_post(&session,reference.parse::<i64>().unwrap_or(0))?;
             trigger["refused"]=raw.map(|r:String|serde_json::from_str::<Value>(&r)).transpose()?.unwrap_or(Value::Null);
         }
-        if kind=="obligation_due" {
-            let peer:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM obligations o JOIN messages m ON m.event_id=json_extract(o.source_json,'$.event_id') WHERE o.id=? AND m.meta_json IS NOT NULL)",[&reference],|r|r.get(0))?;
+        if let Some(peer)=from_peer {
             trigger["source_peer"]=json!(peer);
         }
-        let history:Vec<String>=tx.prepare(&format!("{message_sql} WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL) DESC LIMIT 60"))?
-            .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        let obligations:Vec<String>=tx.prepare("SELECT json_object('id',id,'kind',kind,'summary',summary,'due',due,'state',state,'disposition',json(state_json),'source',json(source_json),'deliveries',json((SELECT COALESCE(json_group_array(json_object('id',p.outbox_id,'state',o.state,'error',o.error)), '[]') FROM obligation_posts p JOIN outbox o ON o.id=p.outbox_id WHERE p.obligation_id=obligations.id))) FROM obligations WHERE session_id=? AND state IN ('open','deferred','awaiting_delivery') ORDER BY created,id")?
-            .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
         let mut session_data:Value=serde_json::from_str(&data)?;
-        let review:bool=tx.query_row("SELECT COALESCE((SELECT error IN ('parent_unavailable','parent_invalid_after_repair') FROM parent_turns WHERE session_id=? AND call IN ('decide','repair') AND error!='parent_rate_limited' ORDER BY id DESC LIMIT 1),0)",[&session],|r|r.get(0))?;
         session_data["parent_review_required"]=json!(review);
         if session_data["turns"] == 0 {
-            let recent:Vec<String>=tx.prepare("SELECT json_object('event_id',event_id,'ts',ts,'sender',sender,'text',text,'files',json(files_json),'from_agent',json(meta_json)) FROM messages WHERE workspace=? AND channel=? AND ts=root_ts AND CAST(ts AS REAL)<CAST(? AS REAL) ORDER BY CAST(ts AS REAL) DESC,id DESC LIMIT 10")?
-                .query_map(params![session_data["workspace"].as_str(),session_data["channel"].as_str(),session_data["root_ts"].as_str()],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            let recent=u.earlier_roots(session_data["workspace"].as_str(),session_data["channel"].as_str(),session_data["root_ts"].as_str())?;
             let recent:Vec<Value>=recent.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?;
             session_data["channel_context"]=json!(crate::parent::context::bounded(&recent,4000));
         }
-        let (revision, notes)=super::effects::notes(&tx,&session)?;
+        let (revision, notes)=super::effects::notes(u,&session)?;
         session_data["notes"]=json!({"revision":revision,"data":notes});
-        let (decisions,debriefed):(String,i64)=tx.query_row("SELECT decisions_json,debriefed_turn FROM threads WHERE id=?",[&session],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        let (decisions,debriefed)=u.turn_decisions(&session)?;
         session_data["decisions"]=serde_json::from_str(&decisions)?;
         session_data["debriefed_turn"]=json!(debriefed);
-        session_data["work"]=work::context_tx(&tx,&session)?;
-        let linked=super::linked::views(&tx,&session)?;
+        session_data["work"]=u.work_context(&session)?;
+        let linked=super::linked::views(u,&session)?;
         if !linked.is_empty() {session_data["linked_threads"]=json!(linked);}
-        let files=work::files_tx(&tx,&session)?;
+        let files=u.delegable_files(&session)?;
         if !files.is_empty() {session_data["files"]=json!(files);}
         // Posts of this thread that did not reach Slack: refused by the egress
         // gate (failed, with the rule's code) or of unknown fate (ambiguous).
         // Codes only, never the text, so the term does not spread (#119).
-        let undelivered:Vec<String>=tx.prepare("SELECT json_object('outbox_id',id,'kind',kind,'state',state,'code',error,'turn',json_extract(meta_json,'$.turn')) FROM outbox WHERE session_id=? AND state IN ('failed','ambiguous') AND kind IN ('reply','report') ORDER BY id DESC LIMIT 3")?
-            .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let undelivered=u.undelivered_posts(&session)?;
         if !undelivered.is_empty() {session_data["undelivered"]=undelivered.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<Vec<Value>,_>>()?.into();}
-        let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![session_data["workspace"].as_str(),session_data["channel"].as_str()],|r|r.get(0))?;
+        let last=u.last_unsolicited(session_data["workspace"].as_str(),session_data["channel"].as_str())?;
         session_data["last_unsolicited"]=json!(last);
         if matches!(kind.as_str(),"worker_result"|"worker_interrupted") {
-            let snapshot=super::results::load(&tx,&session,&reference)?;
+            let snapshot=super::results::load(u,&session,&reference)?;
             for (key,value) in snapshot.as_object().context("invalid result snapshot")? {trigger[key]=value.clone();}
         }
         let result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
-        tx.commit()?;Ok(result)
+        Ok(result)
     }).await
 }
 
@@ -726,29 +738,16 @@ pub(super) async fn settle(
     let event = request.trigger["message"]["event_id"]
         .as_str()
         .map(str::to_owned);
-    store.call(move |c| {
-        let tx = c.transaction()?;
-        let current: bool = tx.query_row(
-            "SELECT version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",
-            params![version,id,session], |r| r.get(0),
-        )?;
-        let outcome = if !current {
-            tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'", [id])?;
-            Step::Stale
-        } else if let Some(until) = until {
-            tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?", params![until,id])?;
-            Step::Observed
-        } else {
-            if let Some(event) = event {
-                tx.execute("UPDATE messages SET verdict=? WHERE event_id=?", params![verdict,event])?;
-            }
-            tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?", [id])?;
-            Step::Observed
-        };
-        tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL", [id])?;
-        tx.commit()?;
-        Ok(outcome)
-    }).await
+    let settlement = Settlement {
+        id,
+        session,
+        version,
+        event,
+        verdict,
+        until,
+    };
+    let current = store.transact(move |u| u.settle_turn(&settlement)).await?;
+    Ok(if current { Step::Observed } else { Step::Stale })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,34 +769,26 @@ async fn commit(
 ) -> Result<Step> {
     let owner = owner.to_owned();
     let sql_turn = i64::try_from(turn).context("turn counter exceeds supported range")?;
-    store.call(move|c| {
-        let tx=c.transaction()?;
-        let version:i64=tx.query_row("SELECT version FROM threads WHERE id=?",[&session],|r|r.get(0))?;
-        let active:bool=tx.query_row("SELECT control='active' AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![id,session],|r|r.get(0))?;
+    store.transact(move|u| {
+        let Fence{version,active}=u.fence_turn(&session,id)?;
         let is_result=matches!(request.trigger["kind"].as_str(),Some("worker_result"|"worker_interrupted"));
-        let result_stale=if is_result {super::results::load(&tx,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
-        let notes_changed=super::effects::notes(&tx,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
-        let controls_current=crate::store::worker_controls::current_tx(&tx,&request,&decision.worker_control)?;
+        let result_stale=if is_result {super::results::load(u,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
+        let notes_changed=super::effects::notes(u,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
+        let controls_current=u.worker_controls_current(&request,&decision.worker_control)?;
         // A message that arrived while the parent was deciding (not one of our
         // own echoes) makes the turn stale once, so it reruns and sees it.
         let seen=request.history.iter().chain(std::iter::once(&request.trigger["message"]))
             .filter_map(|m| m["ts"].as_str()?.parse::<f64>().ok()).fold(f64::NEG_INFINITY,f64::max);
-        let arrived:bool=seen.is_finite() && tx.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE workspace||':'||channel||':'||root_ts=? AND CAST(ts AS REAL)>? AND NOT (sender=? AND meta_json IS NOT NULL))",params![session,seen,owner],|r|r.get(0))?;
-        let reread:bool=tx.query_row("SELECT COALESCE(json_extract(payload_json,'$.reread'),0) FROM thread_inbox WHERE id=?",[id],|r|r.get(0))?;
-        if arrived && !reread {
-            tx.execute("UPDATE thread_inbox SET payload_json=json_set(payload_json,'$.reread',1) WHERE id=?",[id])?;
-        }
+        let Arrival{arrived,reread}=u.arrival(&session,id,seen.is_finite().then_some(seen),&owner)?;
         if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed || !controls_current || (arrived && !reread) {
-            tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
-            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-            tx.commit()?;return Ok(Step::Stale);
+            u.return_turn(id)?;
+            return Ok(Step::Stale);
         }
         if let Some(cooldown)=cooldown.filter(|_|decision.reply.is_some()) {
-            let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![request.session["workspace"].as_str(),request.session["channel"].as_str()],|r|r.get(0))?;
+            let last=u.last_unsolicited(request.session["workspace"].as_str(),request.session["channel"].as_str())?;
             if let Some(last)=last.filter(|last|now-last<cooldown) {
-                tx.execute("UPDATE thread_inbox SET state='pending',not_before=? WHERE id=?",params![last+cooldown,id])?;
-                tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-                tx.commit()?;return Ok(Step::Deferred);
+                u.defer_turn(id,last+cooldown)?;
+                return Ok(Step::Deferred);
             }
         }
         let mut waiting=request.session["wait_streak"].as_i64().unwrap_or(0);
@@ -805,11 +796,11 @@ async fn commit(
         let mut status=request.session["status"].as_str().unwrap_or("new").to_string();
         if decision.reopen_blocked && status=="blocked" {status="complete".into();}
         let mut hash=request.session["last_reply_hash"].as_str().unwrap_or("").to_owned();
-        let repeat=super::replies::repeat_evidence(&tx,&request,&owner)?;
+        let repeat=super::replies::repeat_evidence(u,&request,&owner)?;
         // Only the stand-in for a failed parent turn reaches here unsent: it
         // settles the thread's status without posting anything.
         if let Some(reply)=decision.reply.as_ref().filter(|r|!r.send) {status=reply.status.as_str().into();}
-        if let Some(reply)=decision.reply.as_mut().filter(|r|r.send) {super::replies::render(&tx,&request,&owner,reply,reply_limit)?;}
+        if let Some(reply)=decision.reply.as_mut().filter(|r|r.send) {super::replies::render(u,&request,&owner,reply,reply_limit)?;}
         if let Some(reply)=decision.reply.as_ref().filter(|r|r.send) {
             let candidate=crate::core::policy::reply_hash(&reply.text);
             let explicit=repeat["allowed"]==true;
@@ -817,17 +808,14 @@ async fn commit(
             if !duplicate {
                 let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
                     thread_ts:request.session["root_ts"].as_str().context("missing root timestamp")?.into(),text:reply.text.clone(),obligations:reply.answers.clone(),inbox:id};
-                let post=attention::queue_answer_tx(&tx,&answer,now)?;
+                let post=attention::queue_answer_tx(u,&answer,now)?;
                 // A post a hand-off asked for settles the source thread's asks
                 // it names once delivered (#108).
                 // A blocked notice settles nothing, here or there.
                 if request.trigger["kind"]=="handoff" && !matches!(reply.status,ReplyStatus::Blocked) {
                     let from=request.trigger["payload"]["from_session"].as_str().unwrap_or("");
-                    for obligation in request.trigger["payload"]["answers"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-                        if tx.execute("UPDATE obligations SET state='awaiting_delivery',updated=? WHERE id=? AND session_id=? AND state IN ('open','deferred')",params![now,obligation,from])?==1 {
-                            tx.execute("INSERT OR IGNORE INTO obligation_posts VALUES(?,?)",params![obligation,post])?;
-                        }
-                    }
+                    let answers:Vec<String>=request.trigger["payload"]["answers"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+                    u.answer_for_handoff(from,&answers,post,now)?;
                 }
                 // A report names the worker(s) it reports on, failed ones first.
                 let worker=if is_result {
@@ -838,38 +826,36 @@ async fn commit(
                     ids.join(",").chars().take(64).collect::<String>()
                 } else {String::new()};
                 let meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":worker,"v":2});
-                tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).or_else(||request.trigger["refused"]["trigger_event"].as_str()).unwrap_or(""),post])?;
-                if is_result {tx.execute("UPDATE outbox SET kind='report' WHERE id=?",[post])?;}
-                super::results::attachments(&tx, &request, reply, &session, id, now)?;
+                u.label_post(post,&meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).or_else(||request.trigger["refused"]["trigger_event"].as_str()).unwrap_or(""),is_result)?;
+                super::results::attachments(u, &request, reply, &session, id, now)?;
                 if cooldown.is_some() {
-                    tx.execute("INSERT OR REPLACE INTO cooldowns(workspace,channel,last_unsolicited) VALUES(?,?,?)",params![request.session["workspace"].as_str(),request.session["channel"].as_str(),now])?;
+                    u.mark_unsolicited(request.session["workspace"].as_str(),request.session["channel"].as_str(),now)?;
                 }
                 quiet=if candidate==hash || decision.note.kind==NoteKind::Ack {quiet}else{0};hash=candidate;
                 waiting=if matches!(reply.status,ReplyStatus::Waiting) {waiting+1}else{0};
                 status=reply.status.as_str().into();
             }
         }
-        for w in &work.workers {work::add_worker_tx(&tx,w,now)?;}
-        for j in &work.jobs {work::enqueue_tx(&tx,j,now)?;}
-        crate::store::worker_controls::enqueue_tx(&tx,&request,&decision.worker_control,now)?;
+        u.add_workers(&work.workers,now)?;
+        u.queue_jobs(&work.jobs,now)?;
+        u.queue_worker_controls(&request,&decision.worker_control,now)?;
         if is_result {
-            for r in request.trigger["results"].as_array().context("missing results")? {
-                tx.execute("UPDATE jobs SET reported=1 WHERE id=? AND session_id=?",params![r["id"].as_str(),session])?;
-            }
+            let jobs:Vec<Option<String>>=request.trigger["results"].as_array().context("missing results")?.iter().map(|r|r["id"].as_str().map(str::to_owned)).collect();
+            u.mark_reported(&session,&jobs)?;
         }
-        let working:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE session_id=? AND status IN ('queued','running'))",[&session],|r|r.get(0))?;
+        let working=u.jobs_running(&session)?;
         if working && status!="blocked" {status="working".into();}
         if !work.jobs.is_empty() {if decision.note.kind!=NoteKind::Ack {quiet=0;}waiting=0;}
         if !work.context.is_null() {
-            tx.execute("UPDATE threads SET context_json=json_patch(context_json,?) WHERE id=?",params![work.context.to_string(),session])?;
+            u.patch_context(&session,&work.context.to_string())?;
         }
-        super::effects::commit(&tx,&decision,&session,id,now)?;
+        super::effects::commit(u,&decision,&session,id,now)?;
         // Hand-offs (#108): the target thread's own turn acts on each, with
         // this thread's state as of this turn attached as a fork bundle.
         if !decision.handoffs.is_empty() {
-            let class:String=tx.query_row("SELECT COALESCE((SELECT trigger_class FROM reply_reservations WHERE inbox_id=?),'peer')",[id],|r|r.get(0))?;
+            let class=u.handoff_class(id)?;
             let (workspace,channel)=(request.session["workspace"].as_str().unwrap_or(""),request.session["channel"].as_str().unwrap_or(""));
-            for (index,handoff) in decision.handoffs.iter().enumerate() {
+            let handoffs:Vec<QueuedHandoff>=decision.handoffs.iter().enumerate().map(|(index,handoff)| {
                 let target=format!("{workspace}:{channel}:{}",handoff.thread);
                 // This thread's state for the target, without the target's own.
                 let mut source=request.clone();
@@ -877,71 +863,56 @@ async fn commit(
                 let bundle=crate::core::fork::render(&crate::core::fork::snapshot(&source,&decision,HANDOFF_CONTEXT));
                 let payload=json!({"from":request.session["root_ts"],"from_session":session,"kind":handoff.kind,"note":handoff.note.trim(),
                     "answers":handoff.answers,"class":class,"hop":handoff_hop(&request)+1,"context":bundle});
-                let queued=tx.execute("INSERT OR IGNORE INTO thread_inbox(session_id,kind,ref,payload_json,created,dedup_key)
-                    SELECT ?,'handoff',?,?,?,? WHERE EXISTS(SELECT 1 FROM threads WHERE id=? AND control='active')",
-                    params![target,session,payload.to_string(),now,format!("handoff:{id}:{index}"),target])?;
-                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'parent','thread.handoff',?,?)",
-                    params![now,target,json!({"from":session,"inbox_id":id,"kind":handoff.kind,"queued":queued==1}).to_string()])?;
-            }
+                let details=|queued:bool| json!({"from":session,"inbox_id":id,"kind":handoff.kind,"queued":queued}).to_string();
+                QueuedHandoff{target,from:session.clone(),payload:payload.to_string(),dedup_key:format!("handoff:{id}:{index}"),queued:details(true),skipped:details(false)}
+            }).collect();
+            u.queue_handoffs(&handoffs,now)?;
         }
-        for disposition in &decision.dispositions {
+        let changes=decision.dispositions.iter().map(|disposition| {
             let (state,due)=match disposition {Disposition::Declined{..}=>("declined",None),Disposition::Deferred{until,..}=>("deferred",Some(*until))};
-            if tx.execute("UPDATE obligations SET state=?,state_json=?,due=COALESCE(?,due),updated=? WHERE id=? AND session_id=? AND state IN ('open','deferred')",
-                params![state,serde_json::to_string(disposition)?,due,now,disposition.id(),session])?!=1 {bail!("obligation changed before actor commit");}
-        }
-        for (index,ask) in decision.asks.iter().enumerate() {
-            let key=format!("ask:{id}:{index}");
-            tx.execute("INSERT INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'ask',?,?,?,?,?,?)",
-                params![key,session,key,json!({"inbox_id":id,"event_id":request.trigger["message"]["event_id"]}).to_string(),ask.summary,now,ask.due,now])?;
-        }
+            Ok(ObligationChange{id:disposition.id().into(),state:state.into(),details:serde_json::to_string(disposition)?,due})
+        }).collect::<Result<Vec<_>>>()?;
+        if !u.change_obligations(&session,&changes,now)? {bail!("obligation changed before actor commit");}
+        let asks:Vec<NewAsk>=decision.asks.iter().enumerate().map(|(index,ask)| NewAsk{id:format!("ask:{id}:{index}"),
+            source:json!({"inbox_id":id,"event_id":request.trigger["message"]["event_id"]}).to_string(),summary:ask.summary.clone(),due:ask.due}).collect();
+        u.open_asks(&session,&asks,now)?;
         if waiting==signal as i64 || quiet==signal as i64 {
             let key=format!("streak:{session}:{id}");
-            tx.execute("INSERT OR IGNORE INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,updated) VALUES(?,?,'signal',?,?,'Conversation needs attention',?,?,?)",
-                params![key,session,key,json!({"inbox_id":id}).to_string(),now,now,now])?;
+            u.open_streak_signal(&key,&session,&json!({"inbox_id":id}).to_string(),now)?;
         }
-        for call in calls {
+        let action=serde_json::to_string(&decision)?;
+        let calls:Vec<ParentTurn>=calls.into_iter().map(|call| {
             let error=call["settlement_error"].as_str().unwrap_or("");
             let mut context=call["request"].clone();
             if let Some(validation)=call.get("validation_error") {context["validation_error"]=validation.clone();}
             // The parent's own failure code (e.g. parent_timeout), never its output.
             if let Some(code)=call["failure"]["code"].as_str() {context["failure"]=json!(code);}
-            tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,error,created) VALUES(?,?,'adapter',?,?,?,?,?,?)",
-                params![session,id,call["request"]["call"].as_str(),serde_json::to_string(&decision)?,call["response"].to_string(),context.to_string(),error,call["created"].as_f64()])?;
             // A failed turn posts nothing and blocks the thread, which puts it in
             // the owner's attention view; the audit keeps the cause.
-            if !error.is_empty() {
-                tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','parent.blocked',?,?)",params![now,session,json!({"inbox_id":id,"reason":error,"failure":call["failure"]["code"],"validation_error":call["validation_error"]}).to_string()])?;
-            }
-
-        }
-        tx.execute("UPDATE threads SET status=?,turns=CASE WHEN EXISTS(SELECT 1 FROM outbox WHERE idem_key=?) THEN MAX(turns,?) ELSE turns END,
-            wait_streak=?,no_progress=?,last_reply_hash=?,summary=CASE WHEN ?='' THEN summary ELSE ? END,updated=?,version=version+1 WHERE id=?",
-            params![status,format!("{id}:reply"),sql_turn,waiting,quiet,hash,decision.summary,decision.summary,now,session])?;
-        super::debrief::enqueue(&tx,&decision,&session,id,now)?;
-        if let Some(event)=request.trigger["message"]["event_id"].as_str() {tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,event])?;}
-        tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
-        tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('actor_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string()])?;
-        tx.commit()?;Ok(Step::Committed)
+            let blocked=(!error.is_empty()).then(|| json!({"inbox_id":id,"reason":error,"failure":call["failure"]["code"],"validation_error":call["validation_error"]}).to_string());
+            ParentTurn{call:call["request"]["call"].as_str().map(str::to_owned),response:call["response"].to_string(),context:context.to_string(),
+                error:error.into(),created:call["created"].as_f64(),blocked}
+        }).collect();
+        u.record_parent_calls(&session,id,&action,&calls,now)?;
+        u.close_turn(&TurnClose{session:session.clone(),status,reply_key:format!("{id}:reply"),turn:sql_turn,waiting,quiet,hash,summary:decision.summary.clone(),now})?;
+        super::debrief::enqueue(u,&decision,&session,id,now)?;
+        u.finish_turn(id,request.trigger["message"]["event_id"].as_str(),&verdict)?;
+        u.record("actor_commit",now,&json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string(),true)?;
+        Ok(Step::Committed)
     }).await
 }
 
 /// Startup recovery keeps unsent reservations reusable by the same inbox item.
 pub async fn recover(store: &Store) -> Result<usize> {
-    store
-        .call(|c| {
-            Ok(c.execute(
-                "UPDATE thread_inbox SET state='pending' WHERE state='processing'",
-                [],
-            )?)
-        })
-        .await
+    store.transact(|u| u.recover_turns()).await
 }
 
 async fn current(store: &Store, id: i64, session: &str, request: &ParentRequest) -> Result<bool> {
     let session = session.to_owned();
     let version = request.session["version"].as_i64();
-    store.call(move|c|Ok(c.query_row("SELECT control='active' AND version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![version,id,session],|r|r.get(0))?)).await
+    store
+        .transact(move |u| u.turn_live(&session, version, id))
+        .await
 }
 async fn settle_triage(
     store: &Store,
@@ -952,24 +923,41 @@ async fn settle_triage(
     calls: Vec<Value>,
     now: f64,
 ) -> Result<Step> {
-    store.call(move|c|{
-        let tx=c.transaction()?;
-        let current:bool=tx.query_row("SELECT control='active' AND version=? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![request.session["version"].as_i64(),id,session],|r|r.get(0))?;
-        if !current {
-            tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
-            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-            tx.commit()?;return Ok(Step::Stale);
-        }
-        for call in calls {
-            tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,created) VALUES(?,?,'adapter','triage','{}',?,?,?)",params![session,id,call["response"].to_string(),call["request"].to_string(),call["created"].as_f64()])?;
-        }
-        tx.execute("UPDATE messages SET verdict=? WHERE event_id=?",params![verdict,request.trigger["message"]["event_id"].as_str()])?;
-        tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
-        tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-        tx.execute("UPDATE threads SET version=version+1,updated=? WHERE id=?",params![now,session])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('triage_commit',?,?)",params![now,json!({"inbox_id":id,"verdict":verdict}).to_string()])?;
-        tx.commit()?;Ok(Step::Observed)
-    }).await
+    let triage = TriageSettlement {
+        id,
+        session,
+        version: request.session["version"].as_i64(),
+        calls: calls
+            .into_iter()
+            .map(|call| ParentTurn {
+                call: Some("triage".into()),
+                response: call["response"].to_string(),
+                context: call["request"].to_string(),
+                error: String::new(),
+                created: call["created"].as_f64(),
+                blocked: None,
+            })
+            .collect(),
+        event: request.trigger["message"]["event_id"]
+            .as_str()
+            .map(str::to_owned),
+        verdict,
+        now,
+    };
+    store
+        .transact(move |u| {
+            if !u.settle_triage(&triage)? {
+                return Ok(Step::Stale);
+            }
+            u.record(
+                "triage_commit",
+                now,
+                &json!({"inbox_id":id,"verdict":triage.verdict}).to_string(),
+                true,
+            )?;
+            Ok(Step::Observed)
+        })
+        .await
 }
 
 /// What this thread's turn may delegate to: a channel must be configured and
@@ -996,6 +984,7 @@ mod lifecycle_tests {
         core::Authority,
         threads::controls::{self, Control},
     };
+    use fridica_core::store::InboxEntry;
 
     #[tokio::test]
     async fn stale_observation_or_deferral_cannot_consume_resume_or_undo_clean() {
@@ -1057,26 +1046,25 @@ mod lifecycle_tests {
                     .unwrap(),
                 Step::Stale
             );
-            let state: (String, f64, String) = store
-                .call(move |c| {
-                    Ok(c.query_row(
-                        "SELECT state,not_before,payload_json FROM thread_inbox WHERE id=?",
-                        [id],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                    )?)
+            let inbox = session.clone();
+            let (state, InboxEntry { payload, .. }) = store
+                .transact(move |u| {
+                    let (_, state) = u.inbox_attempts(id)?;
+                    Ok((state, u.inbox_entry(id, &inbox)?.context("inbox item")?))
                 })
                 .await
                 .unwrap();
-            assert_eq!(state.0, "pending");
-            assert_eq!(state.1, 0.);
+            assert_eq!(state, "pending");
             assert_eq!(
-                serde_json::from_str::<Value>(&state.2).unwrap()["owner_trigger"],
+                serde_json::from_str::<Value>(&payload).unwrap()["owner_trigger"],
                 true
             );
-            attention::claim_due(&store, session.clone(), 21.)
+            // Claimable at time 0: the stale settlement deferred nothing.
+            let claimed = attention::claim_due(&store, session.clone(), 0.)
                 .await
                 .unwrap()
                 .unwrap();
+            assert_eq!(claimed.0, id);
             let before_clean = load(&store, id, session.clone()).await.unwrap();
             controls::apply(
                 &store,
@@ -1102,16 +1090,7 @@ mod lifecycle_tests {
                 .unwrap(),
                 Step::Stale
             );
-            let state: String = store
-                .call(move |c| {
-                    Ok(
-                        c.query_row("SELECT state FROM thread_inbox WHERE id=?", [id], |r| {
-                            r.get(0)
-                        })?,
-                    )
-                })
-                .await
-                .unwrap();
+            let (_, state) = store.transact(move |u| u.inbox_attempts(id)).await.unwrap();
             assert_eq!(state, "dropped");
         }
     }

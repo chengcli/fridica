@@ -3,12 +3,9 @@
 //! outbox's egress checks and per-thread ordering apply as to any post, so
 //! notes precede the job's final report.
 use super::actor::{Actor, Step};
-use crate::{
-    core::{delivery::Post, parent::Parent, parent::ParentRequest},
-    store::outbox,
-};
+use crate::core::{delivery::Post, parent::Parent, parent::ParentRequest};
 use anyhow::{Context, Result};
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{ProgressNote, ProgressState, Store as _};
 use serde_json::json;
 
 pub(super) async fn handle<P: Parent>(actor: &Actor<P>, request: ParentRequest) -> Result<Step> {
@@ -30,26 +27,19 @@ pub(super) async fn handle<P: Parent>(actor: &Actor<P>, request: ParentRequest) 
     let seq = request.trigger["payload"]["seq"].as_i64().unwrap_or(0);
     let owner = actor.owner.clone();
     let now = actor.clock.now();
-    actor.store.call(move |c| {
-        let tx = c.transaction()?;
-        let (processing, active): (bool, bool) = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing'),control='active' FROM threads WHERE id=?",
-            params![id, session], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    actor.store.transact(move |u| {
+        let ProgressState { processing, active } = u.progress_state(id, &session)?;
         if !processing {
-            tx.commit()?;
             return Ok(Step::Stale);
         }
         // Only a note of the attempt still running is news; once the job ended
         // its result is reported instead.
-        let note: Option<(String, String)> = if active {
-            tx.query_row(
-                "SELECT p.text,j.worker_id FROM job_progress p JOIN jobs j ON j.id=p.job_id AND j.attempt=p.attempt
-                 WHERE p.job_id=? AND p.attempt=? AND p.seq=? AND j.session_id=? AND j.status='running'",
-                params![job, attempt, seq, session], |r| Ok((r.get(0)?, r.get(1)?))).optional()?
+        let note = if active {
+            u.running_progress_note(&job, attempt, seq, &session)?
         } else {
             None
         };
-        let step = if let Some((text, worker)) = note {
+        let step = if let Some(ProgressNote { text, worker }) = note {
             let post = Post {
                 idem_key: format!("{id}:progress"),
                 session_id: session.clone(),
@@ -62,13 +52,12 @@ pub(super) async fn handle<P: Parent>(actor: &Actor<P>, request: ParentRequest) 
                 blob: None,
                 after: String::new(),
             };
-            outbox::enqueue_tx(&tx, &post, now)?;
+            u.queue_post(&post, now)?;
             Step::Committed
         } else {
             Step::Observed
         };
-        tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?", [id])?;
-        tx.commit()?;
+        u.inbox_done(id)?;
         Ok(step)
     }).await
 }

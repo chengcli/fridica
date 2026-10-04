@@ -6,7 +6,7 @@ use crate::{
     exec::process::{self, Launch},
     store::Store,
 };
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::Store as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -309,17 +309,28 @@ impl Gh {
         ];
         let payload =
             json!({"request":request,"argv":argv,"timeout_ms":self.options.timeout.as_millis()});
-        let (call,paused)=self.store.call(move|c|{
-            let tx=c.transaction()?;
-            let until:Option<String>=tx.query_row("SELECT value FROM meta WHERE key='github:read:pause_until'",[],|r|r.get(0)).optional()?;
-            let until=until.and_then(|v|v.parse::<f64>().ok()).filter(|v|v.is_finite()).unwrap_or(0.);
-            if until>now {
-                tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('github_api_deferred',?,?)",params![now,json!({"request":payload,"until":until}).to_string()])?;
-                tx.commit()?;return Ok((None,until-now));
-            }
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('github_api_call',?,?,0)",params![now,payload.to_string()])?;
-            let id=tx.last_insert_rowid();tx.commit()?;Ok((Some(id),0.))
-        }).await.map_err(|_|Failure::Recording)?;
+        let (call, paused) = self
+            .store
+            .transact(move |u| {
+                let until = u
+                    .github_paused_until()?
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.);
+                if until > now {
+                    u.record(
+                        "github_api_deferred",
+                        now,
+                        &json!({"request":payload,"until":until}).to_string(),
+                        true,
+                    )?;
+                    return Ok((None, until - now));
+                }
+                let id = u.record("github_api_call", now, &payload.to_string(), false)?;
+                Ok((Some(id), 0.))
+            })
+            .await
+            .map_err(|_| Failure::Recording)?;
         let Some(call) = call else {
             return Err(Failure::RateLimited { after: paused });
         };
@@ -387,8 +398,19 @@ impl Gh {
             Err(Failure::RateLimited { after }) => Some(now + after),
             _ => None,
         };
-        self.store.call(move|c|{let tx=c.transaction()?;
-            if let Some(until)=pause {tx.execute("INSERT INTO meta(key,value) VALUES('github:read:pause_until',?) ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS REAL),CAST(excluded.value AS REAL))",[until.to_string()])?;}tx.execute("INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('github_api_result',?,?,?)",params![now,record.to_string(),complete])?;if complete{tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?",[call])?;}tx.commit()?;Ok(())}).await.map_err(|_|Failure::Recording)?;
+        self.store
+            .transact(move |u| {
+                if let Some(until) = pause {
+                    u.pause_github(until)?;
+                }
+                u.record("github_api_result", now, &record.to_string(), complete)?;
+                if complete {
+                    u.complete(call, true)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| Failure::Recording)?;
         result
     }
 }

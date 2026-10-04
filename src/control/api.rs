@@ -9,10 +9,9 @@ use crate::{
         Authority,
     },
     slack::names::Names,
-    store::outbox,
     threads::{controls::Control, runtime::Runtime},
 };
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{MessageFiles, Store as _};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
 pub struct Api<P: Parent, D: Delivery> {
@@ -35,7 +34,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             let reference = parts[1].clone();
             let slack = self.runtime.config().slack.clone();
             match store
-                .call(move |c| Ok(Names::load(c, &slack)?.resolve(&reference)))
+                .transact(move |u| Ok(Names::recorded(u, &slack)?.resolve(&reference)))
                 .await
             {
                 Ok(Some(id)) => parts[1] = id,
@@ -48,13 +47,10 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             return Response::error(500, "invalid_control_clock");
         }
         let record = json!({"method":request.method,"target":request.target,"body":request.body,"authority":authority});
-        let call = match store.call(move |c| {
-            c.execute(
-                "INSERT INTO replay_events(kind,time,payload_json,complete) VALUES('control_request',?,?,0)",
-                params![now,record.to_string()],
-            )?;
-            Ok(c.last_insert_rowid())
-        }).await {
+        let call = match store
+            .transact(move |u| u.record("control_request", now, &record.to_string(), false))
+            .await
+        {
             Ok(id) => id,
             Err(_) => return Response::error(500, "control_recording_failed"),
         };
@@ -62,15 +58,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         let now = self.runtime.now();
         let record = json!({"call":call,"status":response.status,"body":response.body});
         let recorded = store
-            .call(move |c| {
-                let tx = c.transaction()?;
-                tx.execute(
-                "INSERT INTO replay_events(kind,time,payload_json) VALUES('control_response',?,?)",
-                params![now,record.to_string()],
-            )?;
-                tx.execute("UPDATE replay_events SET complete=1 WHERE seq=?", [call])?;
-                tx.commit()?;
-                Ok(())
+            .transact(move |u| {
+                u.record("control_response", now, &record.to_string(), true)?;
+                u.complete(call, true)
             })
             .await;
         if recorded.is_err() {
@@ -99,9 +89,12 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         let result = self
             .runtime
             .store()
-            .call(move |c| match after {
-                Some(after) => events::read(c, &Names::load(c, &slack)?, after, limit),
-                None => Ok(json!({"v":events::VERSION,"events":[],"next":events::end(c)?})),
+            .transact(move |u| match after {
+                Some(after) => {
+                    let names = Names::recorded(u, &slack)?;
+                    events::read(u, &names, after, limit)
+                }
+                None => Ok(json!({"v":events::VERSION,"events":[],"next":events::end(u)?})),
             })
             .await;
         match result {
@@ -128,21 +121,25 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     return Response::error(400, "thread_required");
                 };
                 let slack = self.runtime.config().slack.clone();
-                let listed = store.call(move |c| {
-                    let Some(id) = Names::load(c, &slack)?.resolve(&thread) else { return Ok(None) };
-                    let rows: Vec<(String, String, String)> = c
-                        .prepare("SELECT ts,sender,attachments_json FROM messages WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL),id")?
-                        .query_map([&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                        .collect::<rusqlite::Result<_>>()?;
-                    let known: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM threads WHERE id=?)", [&id], |r| r.get(0))?;
-                    Ok(known.then_some(rows))
-                }).await;
+                let listed = store
+                    .transact(move |u| {
+                        let Some(id) = Names::recorded(u, &slack)?.resolve(&thread) else {
+                            return Ok(None);
+                        };
+                        u.thread_files(&id)
+                    })
+                    .await;
                 match listed {
                     Ok(Some(rows)) => {
                         let mut out = vec![];
-                        for (ts, sender, json_text) in rows {
+                        for MessageFiles {
+                            ts,
+                            sender,
+                            attachments,
+                        } in rows
+                        {
                             let values: Vec<Value> =
-                                serde_json::from_str(&json_text).unwrap_or_default();
+                                serde_json::from_str(&attachments).unwrap_or_default();
                             for value in values {
                                 if let Ok(a) = serde_json::from_value::<Attachment>(value) {
                                     out.push(json!({"id":a.id,"name":a.name,"mimetype":a.mimetype,"size":a.size,"ts":ts,"sender":sender,"text":files::is_text(&a)}));
@@ -164,16 +161,16 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     return Response::error(400, "invalid_file");
                 }
                 let key = id.clone();
-                let found = store.call(move |c| {
-                    let rows: Vec<String> = c
-                        .prepare("SELECT attachments_json FROM messages WHERE instr(attachments_json,?)>0 ORDER BY id DESC")?
-                        .query_map([format!("\"{key}\"")], |r| r.get(0))?
-                        .collect::<rusqlite::Result<_>>()?;
-                    Ok(rows.iter()
-                        .flat_map(|j| serde_json::from_str::<Vec<Value>>(j).unwrap_or_default())
-                        .filter_map(|v| serde_json::from_value::<Attachment>(v).ok())
-                        .find(|a| a.id == key))
-                }).await;
+                let found = store
+                    .transact(move |u| {
+                        let rows = u.attachments_mentioning(&key)?;
+                        Ok(rows
+                            .iter()
+                            .flat_map(|j| serde_json::from_str::<Vec<Value>>(j).unwrap_or_default())
+                            .filter_map(|v| serde_json::from_value::<Attachment>(v).ok())
+                            .find(|a| a.id == key))
+                    })
+                    .await;
                 let attachment = match found {
                     Ok(Some(a)) => a,
                     Ok(None) => return Response::error(404, "unknown_file"),
@@ -259,13 +256,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             let parts = parts.to_vec();
             let observe_only = self.runtime.observe_only();
             return match store
-                .call(move |c| {
-                    let tx = c.transaction()?;
-                    let result =
-                        views::get(&tx, &config, &parts, &query, &processes, observe_only)?;
-                    tx.commit()?;
-                    Ok(result)
-                })
+                .transact(move |u| views::get(u, &config, &parts, &query, &processes, observe_only))
                 .await
             {
                 Ok(Some(value)) => Response::ok(value),
@@ -362,15 +353,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     return Response::error(400, "unknown_body_field");
                 }
                 let id = thread.clone();
-                match store
-                    .call(move |c| {
-                        let tx = c.transaction()?;
-                        let restored = crate::store::archive::revive_tx(&tx, &id, now)?;
-                        tx.commit()?;
-                        Ok(restored)
-                    })
-                    .await
-                {
+                match store.transact(move |u| u.revive_thread(&id, now)).await {
                     Ok(true) => Response::ok(json!({"thread":thread,"restored":true})),
                     Ok(false) => Response::error(404, "not_archived"),
                     Err(_) => Response::error(409, "restore_failed"),
@@ -411,19 +394,14 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 let wanted = channel.to_string();
                 let slack = config.slack.clone();
                 let thread = store
-                    .call(move |c| {
-                        let names = Names::load(c, &slack)?;
+                    .transact(move |u| {
+                        let names = Names::recorded(u, &slack)?;
                         let Some(id) = names.channel_id(&wanted) else {
                             return Ok(Err("unknown_channel"));
                         };
-                        Ok(c.query_row(
-                            "SELECT id FROM threads WHERE workspace=? AND channel=? ORDER BY updated DESC, rowid DESC LIMIT 1",
-                            params![slack.workspace, id],
-                            |r| r.get::<_, String>(0),
-                        )
-                        .optional()?
-                        .map(|thread| (names.thread(&thread), thread))
-                        .ok_or("no_thread_in_channel"))
+                        Ok(u.latest_thread_in(&slack.workspace, &id)?
+                            .map(|thread| (names.thread(&thread), thread))
+                            .ok_or("no_thread_in_channel"))
                     })
                     .await;
                 let (name, thread) = match thread {
@@ -489,18 +467,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 }
                 let id = id.to_string();
                 let lookup = id.clone();
-                match store
-                    .call(move |c| {
-                        Ok(
-                            c.query_row("SELECT 1 FROM threads WHERE id=?", [lookup], |r| {
-                                r.get::<_, i64>(0)
-                            })
-                            .optional()?
-                            .is_some(),
-                        )
-                    })
-                    .await
-                {
+                match store.transact(move |u| u.thread_exists(&lookup)).await {
                     Ok(true) => {}
                     Ok(false) => return Response::error(404, "no_such_thread"),
                     Err(_) => return Response::error(500, "storage_failed"),
@@ -522,7 +489,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     let slack = config.slack.clone();
                     let key = id.clone();
                     let name = store
-                        .call(move |c| Ok(Names::load(c, &slack)?.thread(&key)))
+                        .transact(move |u| Ok(Names::recorded(u, &slack)?.thread(&key)))
                         .await
                         .unwrap_or_else(|_| id.clone());
                     return match self
@@ -549,27 +516,19 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                         },
                     };
                     let actor = config.owner.slack_user.clone();
-                    let result = store.call(move |c| {
-                        let tx = c.transaction()?;
-                        let revision: i64 = tx.query_row(
-                            "SELECT COALESCE(MAX(revision),0) FROM notes WHERE session_id=?",
-                            [&id], |r| r.get(0),
-                        )?;
-                        if expected.is_some_and(|r| r != revision) {
-                            anyhow::bail!("notes revision conflict");
-                        }
-                        let next = revision.checked_add(1).ok_or_else(|| anyhow::anyhow!("revision overflow"))?;
-                        tx.execute(
-                            "INSERT INTO notes(session_id,revision,actor,data_json,source,created) VALUES(?,?,?,?,'control',?)",
-                            params![id,next,actor,json!(data).to_string(),now],
-                        )?;
-                        tx.execute(
-                            "INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'notes.write',?,?)",
-                            params![now,actor,id,json!({"revision":next}).to_string()],
-                        )?;
-                        tx.commit()?;
-                        Ok(next)
-                    }).await;
+                    let result = store
+                        .transact(move |u| {
+                            let revision = u.notes_revision(&id)?;
+                            if expected.is_some_and(|r| r != revision) {
+                                anyhow::bail!("notes revision conflict");
+                            }
+                            let next = revision
+                                .checked_add(1)
+                                .ok_or_else(|| anyhow::anyhow!("revision overflow"))?;
+                            u.write_owner_notes(&id, next, &actor, &json!(data).to_string(), now)?;
+                            Ok(next)
+                        })
+                        .await;
                     return match result {
                         Ok(revision) => Response::ok(json!({"revision":revision})),
                         Err(error) => operation_error(error),
@@ -615,11 +574,9 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 if !only_actor(&body) {
                     return Response::error(400, "unknown_body_field");
                 }
-                if let Err(error) = crate::store::work::get_worker(&store, id.to_string()).await {
-                    return if error
-                        .downcast_ref::<rusqlite::Error>()
-                        .is_some_and(|e| matches!(e, rusqlite::Error::QueryReturnedNoRows))
-                    {
+                let worker = id.to_string();
+                if let Err(error) = store.transact(move |u| u.worker_record(&worker)).await {
+                    return if crate::store::not_found(&error) {
                         Response::error(404, "no_such_worker")
                     } else {
                         operation_error(error)
@@ -658,18 +615,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 };
                 let id = id.to_string();
                 let lookup = id.clone();
-                match store
-                    .call(move |c| {
-                        Ok(
-                            c.query_row("SELECT 1 FROM approvals WHERE id=?", [lookup], |r| {
-                                r.get::<_, i64>(0)
-                            })
-                            .optional()?
-                            .is_some(),
-                        )
-                    })
-                    .await
-                {
+                match store.transact(move |u| u.approval_exists(&lookup)).await {
                     Ok(true) => {}
                     Ok(false) => return Response::error(404, "no_such_approval"),
                     Err(_) => return Response::error(500, "storage_failed"),
@@ -690,7 +636,10 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                 let Ok(id) = id.parse::<i64>() else {
                     return Response::error(400, "invalid_outbox_id");
                 };
-                match outbox::requeue(&store, id, authority, now).await {
+                match store
+                    .transact(move |u| u.retry_post(id, authority, now))
+                    .await
+                {
                     Ok(true) => Response::ok(json!({"requeued":true})),
                     Ok(false) => Response::error(409, "post_not_retryable"),
                     Err(error) => operation_error(error),
@@ -705,7 +654,7 @@ fn only_actor(body: &Value) -> bool {
         .is_some_and(|v| v.keys().all(|k| k == "actor"))
 }
 fn operation_error(error: anyhow::Error) -> Response {
-    if error.downcast_ref::<rusqlite::Error>().is_some() {
+    if crate::store::storage_failure(&error) {
         Response::error(500, "storage_failed")
     } else if error.to_string().contains("owner") || error.to_string().contains("authentication") {
         Response::error(403, "owner_required")

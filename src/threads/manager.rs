@@ -3,6 +3,7 @@
 use super::actor::{Actor, Step};
 use crate::core::parent::Parent;
 use anyhow::{bail, Result};
+use fridica_core::store::Store as _;
 use std::sync::Arc;
 use tokio::{sync::Mutex, task::JoinSet};
 
@@ -25,18 +26,11 @@ impl<P: Parent + 'static> Manager<P> {
     pub async fn sweep(&self) -> Result<usize> {
         let _pass = self.pass.lock().await;
         let now = self.actor.clock.now();
-        let limit = self.max_actors as i64;
-        let sessions: Vec<String> = self
+        let limit = self.max_actors;
+        let sessions = self
             .actor
             .store
-            .call(move |c| {
-                Ok(c.prepare(
-                    "SELECT session_id FROM thread_inbox WHERE state='pending' AND not_before<=?
-                GROUP BY session_id ORDER BY MIN(id) LIMIT ?",
-                )?
-                .query_map(rusqlite::params![now, limit], |r| r.get(0))?
-                .collect::<rusqlite::Result<_>>()?)
-            })
+            .transact(move |u| u.ready_threads(now, limit))
             .await?;
         let mut tasks = JoinSet::new();
         for session in sessions {

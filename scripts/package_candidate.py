@@ -39,7 +39,6 @@ def sources():
     paths.add(ROOT / "tests/test_candidate_packaging.py")
     paths.update(ROOT.glob("src/**/*.rs"))
     paths.update(ROOT.glob("src/exec/*.py"))
-    paths.update(ROOT.glob("src/store/migrations/*.sql"))
     paths.update(ROOT.glob("assets/**/*"))
     paths.update(ROOT.glob("packaging/*.py"))
     paths.update(ROOT.glob("packaging/*.md"))

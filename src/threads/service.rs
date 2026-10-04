@@ -13,7 +13,7 @@ use crate::{
         socket::{self, SocketMode, Status},
     },
 };
-use rusqlite::params;
+use fridica_core::store::{RuntimeStart, Store as _};
 use serde::Serialize;
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -266,10 +266,7 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
             .unwrap_or_default();
         self.receiver
             .store
-            .call(move |c| {
-                c.execute("UPDATE runtime SET control_socket=? WHERE id=1", [endpoint])?;
-                Ok(())
-            })
+            .transact(move |u| u.advertise_control(&endpoint))
             .await
             .map_err(|_| Failure::Storage)
     }
@@ -339,10 +336,7 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
             }
             self.receiver
                 .store
-                .call(move |c| {
-                    c.execute("UPDATE runtime SET heartbeat_at=? WHERE id=1", [now])?;
-                    Ok(())
-                })
+                .transact(move |u| u.heartbeat(now))
                 .await
                 .map_err(|_| Failure::Storage)?;
         }
@@ -353,49 +347,73 @@ impl<P: Parent + 'static, D: Delivery + 'static, H: History + 'static, C: Connec
         }
         let fingerprint = self.runtime.config().fingerprint.clone();
         let observe = self.runtime.observe_only();
-        self.receiver.store.call(move|c| {
-            let tx=c.transaction()?;
-            let previous:Option<String>=tx.query_row("SELECT (SELECT slack_status FROM runtime WHERE id=1)",[],|r|r.get(0))?;
-            if previous.as_deref().is_some_and(|s|s!="stopped") {
-                tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('service_interrupted',?,?)",params![json!({"previous":previous}).to_string(),started])?;
-            }
-            // No control endpoint is advertised before a control server exists.
-            tx.execute("INSERT INTO runtime(id,pid,started_at,heartbeat_at,slack_status,observe_only,control_socket,config_fingerprint) VALUES(1,?,?,?,'starting',?,'',?) ON CONFLICT(id) DO UPDATE SET pid=excluded.pid,started_at=excluded.started_at,heartbeat_at=excluded.heartbeat_at,slack_status=excluded.slack_status,observe_only=excluded.observe_only,control_socket='',config_fingerprint=excluded.config_fingerprint",params![std::process::id(),started,started,observe,fingerprint])?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('service_start',?,?)",params![started,json!({"observe_only":observe}).to_string()])?;
-            tx.commit()?;Ok(())
-        }).await.map_err(|_|Failure::Storage)
+        self.receiver
+            .store
+            .transact(move |u| {
+                let previous = u.previous_slack_status()?;
+                if previous.as_deref().is_some_and(|s| s != "stopped") {
+                    u.note(
+                        "service_interrupted",
+                        &json!({"previous":previous}).to_string(),
+                        started,
+                    )?;
+                }
+                // No control endpoint is advertised before a control server exists.
+                u.start_runtime(&RuntimeStart {
+                    pid: std::process::id(),
+                    started_at: started,
+                    observe_only: observe,
+                    config_fingerprint: fingerprint,
+                })?;
+                u.record(
+                    "service_start",
+                    started,
+                    &json!({"observe_only":observe}).to_string(),
+                    true,
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| Failure::Storage)
     }
     async fn end(&self, failure: Option<&Failure>) -> Result<(), Failure> {
         let now = self.receiver.clock.now();
         let detail = json!({"failure":failure});
         let failed = failure.is_some();
-        self.receiver.store.call(move|c| {
-            let tx=c.transaction()?;
-            tx.execute("UPDATE runtime SET slack_status='stopped',heartbeat_at=? WHERE id=1",[now])?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('service_stop',?,?)",params![now,detail.to_string()])?;
-            if failed { tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('service_failed',?,?)",params![detail.to_string(),now])?; }
-            tx.commit()?;Ok(())
-        }).await.map_err(|_|Failure::Storage)
+        self.receiver
+            .store
+            .transact(move |u| {
+                u.stop_runtime(now)?;
+                u.record("service_stop", now, &detail.to_string(), true)?;
+                if failed {
+                    u.note("service_failed", &detail.to_string(), now)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| Failure::Storage)
     }
     async fn history_result(&self, detail: serde_json::Value, failed: bool) -> Result<(), Failure> {
         let now = self.receiver.clock.now();
-        self.receiver.store.call(move|c| {
-            let tx=c.transaction()?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('service_catchup',?,?)",params![now,detail.to_string()])?;
-            if failed { tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('service_catchup_failed',?,?)",params![detail.to_string(),now])?; }
-            tx.commit()?;Ok(())
-        }).await.map_err(|_|Failure::Storage)
+        self.receiver
+            .store
+            .transact(move |u| {
+                u.record("service_catchup", now, &detail.to_string(), true)?;
+                if failed {
+                    u.note("service_catchup_failed", &detail.to_string(), now)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| Failure::Storage)
     }
     async fn health(&self, kind: &'static str, failure: &Failure) -> Result<(), Failure> {
         let detail = serde_json::to_string(failure).map_err(|_| Failure::Storage)?;
         let now = self.receiver.clock.now();
         self.receiver
             .store
-            .call(move |c| {
-                c.execute(
-                    "INSERT INTO health_events(kind,details_json,created) VALUES(?,?,?)",
-                    params![kind, detail, now],
-                )?;
+            .transact(move |u| {
+                u.note(kind, &detail, now)?;
                 Ok(())
             })
             .await

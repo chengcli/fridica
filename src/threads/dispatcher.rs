@@ -5,14 +5,14 @@ use crate::{
         delivery::{Delivery, DeliveryOutcome},
         time::Clock,
     },
-    store::{outbox, Store},
+    store::Store,
 };
-use anyhow::Result;
+use anyhow::{bail, Result};
 use fridica_core::{
     delivery::ClaimedPost,
     egress::{self, DenyList},
+    store::{PostOutcome, Store as _},
 };
-use rusqlite::params;
 use std::{path::Path, sync::Arc, time::Duration};
 
 pub struct Dispatcher<D: Delivery> {
@@ -43,24 +43,33 @@ impl<D: Delivery> Dispatcher<D> {
             Ok(rules) => rules.unwrap_or_default(),
             Err(_) => {
                 let now = self.clock.now();
-                self.store.call(move |c| {
-                    c.execute("INSERT INTO health_events(kind,details_json,created) SELECT 'egress_deny_list_unavailable','{}',? WHERE NOT EXISTS(SELECT 1 FROM health_events WHERE kind='egress_deny_list_unavailable' AND created>?)",params![now,now-3600.])?;
-                    Ok(())
-                }).await?;
+                self.store
+                    .transact(move |u| {
+                        u.note_unless_since("egress_deny_list_unavailable", "{}", now, now - 3600.)
+                    })
+                    .await?;
                 return Ok(0);
             }
         };
         let mut sent = 0;
         let mut attempted = 0;
         while attempted < limit {
-            let batch =
-                outbox::ready(&self.store, self.clock.now(), (limit - attempted).min(20)).await?;
+            let (now, batch) = (self.clock.now(), (limit - attempted).min(20));
+            let batch = self
+                .store
+                .transact(move |u| u.ready_posts(now, batch))
+                .await?;
             if batch.is_empty() {
                 break;
             }
             let mut progressed = false;
             for id in batch {
-                let Some(post) = outbox::claim_id(&self.store, self.clock.now(), id).await? else {
+                let now = self.clock.now();
+                let Some(post) = self
+                    .store
+                    .transact(move |u| u.claim_post(now, Some(id)))
+                    .await?
+                else {
                     continue;
                 };
                 attempted += 1;
@@ -82,15 +91,16 @@ impl<D: Delivery> Dispatcher<D> {
                             code: "delivery_timeout".into(),
                         })
                 };
-                if outbox::complete(
-                    &self.store,
-                    post,
-                    result,
-                    self.owner.clone(),
-                    self.clock.now(),
-                )
-                .await?
-                {
+                let (owner, now) = (self.owner.clone(), self.clock.now());
+                // A stale attempt's late result commits before it is reported.
+                let outcome = self
+                    .store
+                    .transact(move |u| u.finish_delivery(&post, &result, &owner, now))
+                    .await?;
+                if outcome == PostOutcome::Stale {
+                    bail!("stale delivery attempt or changed payload");
+                }
+                if outcome == PostOutcome::Sent {
                     sent += 1;
                     progressed = true;
                 }

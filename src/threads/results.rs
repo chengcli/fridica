@@ -2,27 +2,17 @@
 //! up: durable job rows determine group readiness and whether a result was used.
 use crate::core::parent::{Decision, ParentRequest};
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension};
+use fridica_core::store::{InboxEntry, Unit};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
-pub(super) fn load(c: &Connection, session: &str, reference: &str) -> Result<Value> {
-    let group: Option<String> = c
-        .query_row(
-            "SELECT join_group FROM jobs WHERE id=? AND session_id=?",
-            [reference, session],
-            |r| r.get(0),
-        )
-        .optional()?;
+pub(super) fn load(u: &mut dyn Unit, session: &str, reference: &str) -> Result<Value> {
+    let group = u.job_group(reference, session)?;
     let Some(group) = group else {
         return Ok(json!({"results":[],"pending":false}));
     };
     // A job stopped by a usage limit carries the limit's reset time (#107).
-    let rows: Vec<String> = c.prepare("SELECT json_patch(json_object('id',j.id,'worker_id',j.worker_id,'machine',w.machine,'workspace',w.workspace,'role',w.role,
-        'brief',j.brief,'job_status',j.status,'error',j.error,'result',json(j.result_json),'inbox_id',j.inbox_id,'reported',j.reported,'attempt',j.attempt),
-        CASE WHEN j.retry_at IS NULL THEN '{}' ELSE json_object('rate_limit_resets_at',j.retry_at) END)
-        FROM jobs j JOIN workers w ON w.id=j.worker_id WHERE j.session_id=? AND ((?!='' AND j.join_group=?) OR (?='' AND j.id=?)) ORDER BY j.queued_at,j.rowid")?
-        .query_map([session,&group,&group,&group,reference], |r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let rows = u.group_results(session, &group, reference)?;
     let rows: Vec<Value> = rows
         .iter()
         .map(|s| serde_json::from_str(s))
@@ -39,14 +29,12 @@ pub(super) fn load(c: &Connection, session: &str, reference: &str) -> Result<Val
         if !visited.insert(id) {
             break;
         }
-        let item: Option<(String, String, String)> = c
-            .query_row(
-                "SELECT kind,ref,payload_json FROM thread_inbox WHERE id=? AND session_id=?",
-                rusqlite::params![id, session],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()?;
-        let Some((kind, reference, payload)) = item else {
+        let Some(InboxEntry {
+            kind,
+            reference,
+            payload,
+        }) = u.inbox_entry(id, session)?
+        else {
             break;
         };
         let payload: Value = serde_json::from_str(&payload)?;
@@ -55,14 +43,7 @@ pub(super) fn load(c: &Connection, session: &str, reference: &str) -> Result<Val
             break;
         }
         if kind == "message" {
-            let data: Option<(String, bool)> = c
-                .query_row(
-                    "SELECT event_id,meta_json IS NOT NULL FROM messages WHERE event_id=?",
-                    [&reference],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            if let Some((event, peer)) = data {
+            if let Some((event, peer)) = u.message_origin(&reference)? {
                 origin = json!({"event_id":event,"class":if peer {"peer"} else {"human"}});
             }
             break;
@@ -70,14 +51,7 @@ pub(super) fn load(c: &Connection, session: &str, reference: &str) -> Result<Val
         if !matches!(kind.as_str(), "worker_result" | "worker_interrupted") {
             break;
         }
-        inbox = c
-            .query_row(
-                "SELECT inbox_id FROM jobs WHERE id=? AND session_id=?",
-                [reference, session.into()],
-                |r| r.get(0),
-            )
-            .optional()?
-            .flatten();
+        inbox = u.job_inbox(&reference, session)?;
     }
     Ok(json!({"results":rows,"pending":pending,"group_size":total,"origin":origin}))
 }
@@ -135,14 +109,14 @@ pub(super) fn direct(
 }
 
 pub(super) fn attachments(
-    c: &Connection,
+    u: &mut dyn Unit,
     request: &ParentRequest,
     reply: &crate::core::parent::Reply,
     session: &str,
     inbox: i64,
     now: f64,
 ) -> Result<()> {
-    use crate::{core::delivery::Post, store::outbox};
+    use crate::core::delivery::Post;
     let mut uploads = Vec::new();
     if !reply.details.is_empty() {
         uploads.push((
@@ -153,22 +127,21 @@ pub(super) fn attachments(
     // Only a file deliverable posts files; a report's result is its text, and
     // files a worker kept along the way stay in its workspace.
     if let Some(results) = request.trigger["results"].as_array() {
-        for r in results {
-            let artifacts: Vec<(String,Vec<u8>)> = c.prepare("SELECT a.path,a.blob FROM artifacts a JOIN jobs j ON j.id=a.job_id WHERE a.job_id=? AND a.session_id=? AND a.status='ready' AND a.blob IS NOT NULL AND j.deliverable IN ('markdown','figures_pdf') ORDER BY a.id")?
-                .query_map(rusqlite::params![r["id"].as_str(),session], |r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            for (path, blob) in artifacts {
-                let name = std::path::Path::new(&path)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("artifact")
-                    .to_owned();
-                uploads.push((name, blob));
-            }
+        let jobs: Vec<Option<String>> = results
+            .iter()
+            .map(|r| r["id"].as_str().map(str::to_owned))
+            .collect();
+        for (path, blob) in u.deliverable_files(session, &jobs)? {
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("artifact")
+                .to_owned();
+            uploads.push((name, blob));
         }
     }
     for (index, (filename, blob)) in uploads.into_iter().enumerate() {
-        let id = outbox::enqueue_tx(
-            c,
+        let id = u.queue_post(
             &Post {
                 idem_key: format!("{inbox}:upload:{index}"),
                 session_id: session.into(),
@@ -183,12 +156,7 @@ pub(super) fn attachments(
             },
             now,
         )?;
-        for obligation in &reply.answers {
-            c.execute(
-                "INSERT INTO obligation_posts VALUES(?,?)",
-                rusqlite::params![obligation, id],
-            )?;
-        }
+        u.link_answers(id, &reply.answers)?;
     }
     Ok(())
 }

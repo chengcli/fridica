@@ -11,8 +11,8 @@ pub mod exec;
 pub mod github;
 pub mod machines;
 pub mod parent;
-pub mod report;
 pub mod slack;
-pub mod store;
+/// Fridica's state, kept by [fridica-store-sqlite](https://github.com/chengcli/fridica-store-sqlite).
+pub use fridica_store_sqlite as store;
 pub mod threads;
 pub mod workers;

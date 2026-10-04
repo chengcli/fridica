@@ -1,1 +1,0 @@
-ALTER TABLE jobs ADD COLUMN files_json TEXT NOT NULL DEFAULT '[]';

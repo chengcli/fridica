@@ -59,12 +59,12 @@ fn migration_is_additive_idempotent_and_conservative_about_pauses() {
     }
     drop(c);
     let original = std::fs::read(&cfg).unwrap();
-    let plan = migration::dry_run(&db, &cfg).unwrap();
+    let plan = fridica::cli::migrate::dry_run(&db, &cfg).unwrap();
     assert_eq!(plan.from, 5);
     assert_eq!(plan.automatic_pauses, 1);
     assert_eq!(std::fs::read(&cfg).unwrap(), original);
-    migration::migrate(&db, &cfg, 10.).unwrap();
-    migration::migrate(&db, &cfg, 11.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 10.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 11.).unwrap();
     let c = Connection::open(&db).unwrap();
     assert_eq!(schema::version(&c).unwrap(), schema::VERSION);
     let paused: i64 = c
@@ -90,7 +90,7 @@ fn migration_is_additive_idempotent_and_conservative_about_pauses() {
         0
     );
     drop(c);
-    migration::rollback(&db, &cfg).unwrap();
+    fridica::cli::migrate::rollback(&db, &cfg).unwrap();
     assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 5);
     assert_eq!(std::fs::read(&cfg).unwrap(), original);
 }
@@ -102,7 +102,7 @@ fn rollback_refuses_mutations_without_audit_rows() {
     let cfg = dir.path().join("config.toml");
     drop(v5(&db));
     config_file(&cfg);
-    migration::migrate(&db, &cfg, 1.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 1.).unwrap();
     let c = Connection::open(&db).unwrap();
     c.execute(
         "INSERT INTO health_events(kind,details_json,created) VALUES('disconnect','{}',2)",
@@ -110,7 +110,7 @@ fn rollback_refuses_mutations_without_audit_rows() {
     )
     .unwrap();
     c.execute("DELETE FROM health_events", []).unwrap();
-    assert!(migration::rollback(&db, &cfg)
+    assert!(fridica::cli::migrate::rollback(&db, &cfg)
         .unwrap_err()
         .to_string()
         .contains("durable mutations"));
@@ -154,7 +154,7 @@ fn interrupted_config_export_resumes_without_duplicate_events() {
     drop(v5(&db));
     config_file(&cfg);
     let original = std::fs::read(&cfg).unwrap();
-    migration::migrate(&db, &cfg, 1.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 1.).unwrap();
     let path = dir.path().join("state.sqlite3.migration.json");
     let mut journal: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -163,9 +163,9 @@ fn interrupted_config_export_resumes_without_duplicate_events() {
     std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
     std::fs::write(&cfg, original).unwrap();
     assert!(migration::check_ready(&db).is_err());
-    migration::migrate(&db, &cfg, 2.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 2.).unwrap();
     migration::check_ready(&db).unwrap();
-    migration::rollback(&db, &cfg).unwrap();
+    fridica::cli::migrate::rollback(&db, &cfg).unwrap();
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn migration_preflight_rejects_invalid_policy_and_mismatched_database_without_ba
         format!("{original}\n[policy]\nfetch_repos=['owner/repo']\n"),
     )
     .unwrap();
-    assert!(migration::migrate(&db, &cfg, 1.)
+    assert!(fridica::cli::migrate::migrate(&db, &cfg, 1.)
         .unwrap_err()
         .to_string()
         .contains("fetch_repos"));
@@ -191,7 +191,7 @@ fn migration_preflight_rejects_invalid_policy_and_mismatched_database_without_ba
     assert!(!dir.path().join(format!("config.toml{suffix}")).exists());
     assert!(!dir.path().join("state.sqlite3.migration.json").exists());
     std::fs::write(&cfg, original.replace("state.sqlite3", "other.sqlite3")).unwrap();
-    assert!(migration::dry_run(&db, &cfg)
+    assert!(fridica::cli::migrate::dry_run(&db, &cfg)
         .unwrap_err()
         .to_string()
         .contains("differs"));
@@ -246,10 +246,10 @@ async fn used_database_upgrades_and_rolls_back(version: usize) {
     let cfg = dir.path().join("config.toml");
     config_file(&cfg);
     drop(used_at(&db, version));
-    let plan = migration::dry_run(&db, &cfg).unwrap();
+    let plan = fridica::cli::migrate::dry_run(&db, &cfg).unwrap();
     assert_eq!((plan.from, plan.to), (version, schema::VERSION));
-    migration::migrate(&db, &cfg, 10.).unwrap();
-    migration::migrate(&db, &cfg, 11.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 10.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 11.).unwrap();
     let journal: serde_json::Value = serde_json::from_slice(
         &std::fs::read(dir.path().join("state.sqlite3.migration.json")).unwrap(),
     )
@@ -292,7 +292,7 @@ async fn used_database_upgrades_and_rolls_back(version: usize) {
     let store = Store::open(db.clone()).await.unwrap();
     store.close().await.unwrap();
     assert!(store.call(|_| Ok(())).await.is_err());
-    migration::rollback(&db, &cfg).unwrap();
+    fridica::cli::migrate::rollback(&db, &cfg).unwrap();
     assert_eq!(
         schema::version(&Connection::open(&db).unwrap()).unwrap(),
         version
@@ -305,12 +305,14 @@ fn rollback_after_a_used_v6_upgrade_refuses_once_the_daemon_wrote() {
     let cfg = dir.path().join("config.toml");
     config_file(&cfg);
     drop(used_at(&db, 6));
-    migration::migrate(&db, &cfg, 10.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 10.).unwrap();
     Connection::open(&db)
         .unwrap()
         .execute("INSERT INTO meta VALUES('post_migration_write','1')", [])
         .unwrap();
-    let error = migration::rollback(&db, &cfg).unwrap_err().to_string();
+    let error = fridica::cli::migrate::rollback(&db, &cfg)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("durable mutations"), "{error}");
 }
 
@@ -337,7 +339,7 @@ async fn a_completed_journal_from_an_earlier_upgrade_does_not_block_the_next() {
         "generation": 1
     });
     std::fs::write(&journal, serde_json::to_vec(&earlier).unwrap()).unwrap();
-    migration::migrate(&db, &cfg, 10.).unwrap();
+    fridica::cli::migrate::migrate(&db, &cfg, 10.).unwrap();
     assert_eq!(
         schema::version(&Connection::open(&db).unwrap()).unwrap(),
         schema::VERSION
@@ -353,7 +355,7 @@ async fn a_completed_journal_from_an_earlier_upgrade_does_not_block_the_next() {
         (current["phase"].as_str(), current["from"].as_u64()),
         (Some("complete"), Some(7))
     );
-    migration::rollback(&db, &cfg).unwrap();
+    fridica::cli::migrate::rollback(&db, &cfg).unwrap();
     assert_eq!(schema::version(&Connection::open(&db).unwrap()).unwrap(), 7);
 
     // An archive in the way is preserved, never overwritten.
@@ -371,7 +373,7 @@ async fn a_completed_journal_from_an_earlier_upgrade_does_not_block_the_next() {
     )
     .unwrap();
     std::fs::write(dir.path().join("state.sqlite3.migration.v7.json"), b"keep").unwrap();
-    assert!(migration::migrate(&db, &cfg, 10.).is_err());
+    assert!(fridica::cli::migrate::migrate(&db, &cfg, 10.).is_err());
     assert_eq!(
         std::fs::read(dir.path().join("state.sqlite3.migration.v7.json")).unwrap(),
         b"keep"
@@ -488,4 +490,68 @@ fn per_pass_replay_lookups_use_the_kind_index() {
             "{sql}: {plan:?}"
         );
     }
+}
+
+// The migration engine lives in fridica-store-sqlite (#117) and is tested
+// there; these two exercise Fridica's own configuration file as its companion.
+
+#[test]
+fn concurrent_configuration_edit_is_preserved_and_migration_can_be_reconciled() {
+    use fridica::cli::migrate::{migrate, rollback, ConfigFile};
+    let dir = tempfile::tempdir().unwrap();
+    let (db, cfg) = (
+        dir.path().join("state.sqlite3"),
+        dir.path().join("config.toml"),
+    );
+    drop(v5(&db));
+    config_file(&cfg);
+    let original = std::fs::read_to_string(&cfg).unwrap();
+    let edited = format!("{original}\n# edited concurrently\n");
+    let error = migration::testing::migrate_with_checkpoint(&db, &cfg, 10., &ConfigFile, |phase| {
+        if phase == "conversion" {
+            std::fs::write(&cfg, &edited)?;
+        }
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("configuration changed before replacement"));
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), edited);
+    assert!(migration::check_ready(&db).is_err());
+    assert!(migrate(&db, &cfg, 20.).is_err());
+    std::fs::write(&cfg, &original).unwrap();
+    migrate(&db, &cfg, 30.).unwrap();
+    rollback(&db, &cfg).unwrap();
+}
+
+#[test]
+fn migration_respects_the_shared_configuration_writer_lock() {
+    use fridica::cli::migrate::{migrate, rollback};
+    use fs2::FileExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (db, cfg) = (
+        dir.path().join("state.sqlite3"),
+        dir.path().join("config.toml"),
+    );
+    drop(v5(&db));
+    config_file(&cfg);
+    let original = std::fs::read_to_string(&cfg).unwrap();
+    let guard = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(cfg.with_file_name(".config.toml.edit.lock"))
+        .unwrap();
+    guard.try_lock_exclusive().unwrap();
+    assert!(migrate(&db, &cfg, 10.)
+        .unwrap_err()
+        .to_string()
+        .contains("another Fridica configuration edit"));
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), original);
+    drop(guard);
+    migrate(&db, &cfg, 20.).unwrap();
+    rollback(&db, &cfg).unwrap();
 }
