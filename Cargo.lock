@@ -523,9 +523,8 @@ dependencies = [
 
 [[package]]
 name = "fridica-core"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea3e88e85d895f414eaf5258e1733d5f052ba2507a004933a3b22758b29f2c5a"
+version = "0.5.0"
+source = "git+https://github.com/chengcli/fridica-core?rev=aa309dde901990c4c9fc33aac71f6f4c2531ebf8#aa309dde901990c4c9fc33aac71f6f4c2531ebf8"
 dependencies = [
  "anyhow",
  "regex",
@@ -554,9 +553,8 @@ dependencies = [
 
 [[package]]
 name = "fridica-store-sqlite"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f27d33729d8d650a9dc08f8a2078c4aa5d0e8c6bb92501bf02c0554062ca68f"
+version = "0.3.0"
+source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=02916c35dfd69a6caf9137ab7ccf22fd7a41666b#02916c35dfd69a6caf9137ab7ccf22fd7a41666b"
 dependencies = [
  "anyhow",
  "chrono",

@@ -978,6 +978,7 @@ fn delegation_scope<'a>(
                 && config.slack.may_delegate(channel),
             limits: &config.limits,
             machines: &config.machines,
+            roles: crate::config::roles::worker_roles(),
         }
     })
 }

@@ -25,7 +25,10 @@ pub fn build(
         ),
         "decide" | "repair" => (
             format!("{}\n\n{ACTION}\n", rules.parent()),
-            super::schema::decision(&super::schema::Choices::from_session(&request.session)),
+            super::schema::decision(&super::schema::Choices {
+                roles: crate::config::roles::worker_roles().to_vec(),
+                ..super::schema::Choices::from_session(&request.session)
+            }),
             &config.parent.model,
         ),
         "debrief" => (

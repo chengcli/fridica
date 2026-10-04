@@ -16,8 +16,8 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = "0.4"
-fridica-store-sqlite = "0.2"
+fridica-core = "0.5"
+fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "02916c35dfd69a6caf9137ab7ccf22fd7a41666b" }
 fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
@@ -43,7 +43,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-fridica-store-sqlite = { version = "0.2", features = ["testing"] }
+fridica-store-sqlite = { git = "https://github.com/chengcli/fridica-store-sqlite", rev = "02916c35dfd69a6caf9137ab7ccf22fd7a41666b", features = ["testing"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 fridica-slack = { version = "0.2.3", features = ["testing"] }
 # Tests inspect databases with SQL.
@@ -52,3 +52,7 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# fridica-core 0.5 and fridica-store-sqlite 0.3 (#131) until they are published.
+[patch.crates-io]
+fridica-core = { git = "https://github.com/chengcli/fridica-core", rev = "aa309dde901990c4c9fc33aac71f6f4c2531ebf8" }

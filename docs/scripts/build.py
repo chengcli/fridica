@@ -209,10 +209,12 @@ def tables(s: dict) -> None:
     job_rows = [[machine, *[number(counts.get(status, 0)) for status in statuses], number(sum(counts.values())),
                  number(n["peak_by_machine"].get(machine, 0))] for machine, counts in sorted(n["jobs_by_machine_status"].items())]
     write("t6_jobs.rst", list_table("Jobs by machine", ["Machine", *statuses, "Total", "Peak concurrent"], job_rows))
-    role_rows = [[machine, *[number(roles.get(role, 0)) for role in ("implementer", "tester", "reviewer", "general")],
-                  number(sum(roles.values()))] for machine, roles in sorted(n["workers_by_machine_role"].items())]
-    write("t6b_workers.rst", list_table("Workers by machine and role", ["Machine", "implementer", "tester", "reviewer",
-                                                                         "general", "Total"], role_rows))
+    # Roles come from the data: the delegation scope's list can grow (#131).
+    role_names = sorted({role for roles in n["workers_by_machine_role"].values() for role in roles},
+                        key=lambda role: (role == "general", role))
+    role_rows = [[machine, *[number(roles.get(role, 0)) for role in role_names], number(sum(roles.values()))]
+                 for machine, roles in sorted(n["workers_by_machine_role"].items())]
+    write("t6b_workers.rst", list_table("Workers by machine and role", ["Machine", *role_names, "Total"], role_rows))
     result_rows = [[status, number(count), f"{100 * count / max(1, sum(n['result_status'].values())):.0f}%"]
                    for status, count in n["result_status"].items()]
     write("t7_results.rst", list_table("WorkerResult status", ["Status", "Jobs", "Share"], result_rows, [40, 30, 30]))
