@@ -25,7 +25,7 @@ pub(super) fn repeat_evidence(
     let kind = request.trigger["kind"].as_str().unwrap_or("");
     let (allowed, reason) = if matches!(
         kind,
-        "owner_instruction" | "worker_result" | "worker_interrupted"
+        "owner_instruction" | "worker_result" | "worker_interrupted" | "post_refused"
     ) {
         (true, "owner instruction or worker result")
     } else if kind != "message" {

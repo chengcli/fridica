@@ -157,6 +157,7 @@ impl<P: Parent> Actor<P> {
                 | "worker_result"
                 | "worker_interrupted"
                 | "handoff"
+                | "post_refused"
         ) {
             let outcome = settle(
                 &self.store,
@@ -213,8 +214,9 @@ impl<P: Parent> Actor<P> {
                 .unwrap_or("human")
         } else if kind == "owner_instruction" {
             "owner"
-        } else if kind == "handoff" {
-            // The class of the turn that handed off, so reply limits still hold.
+        } else if matches!(kind, "handoff" | "post_refused") {
+            // The class of the turn that handed off or whose post was refused,
+            // so reply limits still hold.
             match request.trigger["payload"]["class"].as_str() {
                 Some("owner") => "owner",
                 Some("human") => "human",
@@ -523,6 +525,12 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
             let raw:String=tx.query_row(&format!("{message_sql} WHERE event_id=?"),[&reference],|r|r.get(0))?;
             trigger["message"]=serde_json::from_str(&raw)?;
         }
+        if kind=="post_refused" {
+            // The refused text itself: it never became a message, so the
+            // history does not have it.
+            let raw:Option<String>=tx.query_row("SELECT json_object('outbox_id',id,'post_kind',kind,'state',state,'code',error,'text',text,'trigger_event',trigger_event,'turn',json_extract(meta_json,'$.turn')) FROM outbox WHERE id=? AND session_id=?",params![reference.parse::<i64>().unwrap_or(0),&session],|r|r.get(0)).ok();
+            trigger["refused"]=raw.map(|r:String|serde_json::from_str::<Value>(&r)).transpose()?.unwrap_or(Value::Null);
+        }
         if kind=="obligation_due" {
             let peer:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM obligations o JOIN messages m ON m.event_id=json_extract(o.source_json,'$.event_id') WHERE o.id=? AND m.meta_json IS NOT NULL)",[&reference],|r|r.get(0))?;
             trigger["source_peer"]=json!(peer);
@@ -550,6 +558,12 @@ async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> 
         if !linked.is_empty() {session_data["linked_threads"]=json!(linked);}
         let files=work::files_tx(&tx,&session)?;
         if !files.is_empty() {session_data["files"]=json!(files);}
+        // Posts of this thread that did not reach Slack: refused by the egress
+        // gate (failed, with the rule's code) or of unknown fate (ambiguous).
+        // Codes only, never the text, so the term does not spread (#119).
+        let undelivered:Vec<String>=tx.prepare("SELECT json_object('outbox_id',id,'kind',kind,'state',state,'code',error,'turn',json_extract(meta_json,'$.turn')) FROM outbox WHERE session_id=? AND state IN ('failed','ambiguous') AND kind IN ('reply','report') ORDER BY id DESC LIMIT 3")?
+            .query_map([&session],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        if !undelivered.is_empty() {session_data["undelivered"]=undelivered.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<Vec<Value>,_>>()?.into();}
         let last:Option<f64>=tx.query_row("SELECT (SELECT last_unsolicited FROM cooldowns WHERE workspace=? AND channel=?)",params![session_data["workspace"].as_str(),session_data["channel"].as_str()],|r|r.get(0))?;
         session_data["last_unsolicited"]=json!(last);
         if matches!(kind.as_str(),"worker_result"|"worker_interrupted") {
@@ -597,7 +611,13 @@ fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> 
     let known: HashSet<&str> = request
         .obligations
         .iter()
-        .filter(|o| matches!(o["state"].as_str(), Some("open" | "deferred")))
+        .filter(|o| {
+            matches!(o["state"].as_str(), Some("open" | "deferred"))
+                || (o["state"] == "awaiting_delivery"
+                    && o["deliveries"]
+                        .as_array()
+                        .is_some_and(|d| !d.is_empty() && d.iter().all(|p| p["state"] == "failed")))
+        })
         .filter_map(|o| o["id"].as_str())
         .collect();
     if let Some(reply) = &decision.reply {
@@ -818,7 +838,7 @@ async fn commit(
                     ids.join(",").chars().take(64).collect::<String>()
                 } else {String::new()};
                 let meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":worker,"v":2});
-                tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).unwrap_or(""),post])?;
+                tx.execute("UPDATE outbox SET meta_json=?,trigger_event=? WHERE id=?",params![meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).or_else(||request.trigger["refused"]["trigger_event"].as_str()).unwrap_or(""),post])?;
                 if is_result {tx.execute("UPDATE outbox SET kind='report' WHERE id=?",[post])?;}
                 super::results::attachments(&tx, &request, reply, &session, id, now)?;
                 if cooldown.is_some() {

@@ -55,6 +55,19 @@ if name == 'codex':
 if name in ('bwrap','socat'): sys.exit(0)
 sys.exit(92)
 "#;
+/// A `gh` that answers the reader probe: authenticated when a token reached
+/// it, exit 4 (gh's "not logged in") otherwise, down when asked.
+const GH: &str = r#"#!/usr/bin/python3
+import os, sys
+assert not any('SLACK' in k or k == 'SECRET_GITHUB' for k in os.environ)
+assert sys.argv[1:4] == ['api', '--hostname', 'github.com'] and sys.argv[-1] == '/rate_limit'
+if os.path.exists(os.path.join(os.environ['HOME'], 'gh-down')):
+    sys.exit(1)
+if 'GH_TOKEN' not in os.environ:
+    sys.stderr.write('To get started with GitHub CLI, please run:  gh auth login\n')
+    sys.exit(4)
+sys.stdout.write('HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n{"resources":{"core":{"limit":5000}}}')
+"#;
 struct Fixture {
     dir: tempfile::TempDir,
     path: PathBuf,
@@ -124,6 +137,7 @@ token_env="SECRET_GITHUB"
         for name in ["claude", "codex", "bwrap", "socat"] {
             fixture.executable(name, BACKEND);
         }
+        fixture.executable("gh", GH);
         fixture
     }
     fn executable(&self, name: &str, source: &str) {
@@ -241,6 +255,38 @@ os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
     let text = serde_json::to_string(&report).unwrap();
     assert!(!text.contains("private-secret"));
     assert!(!text.contains(fixture.dir.path().to_str().unwrap()));
+    fixture.pristine();
+}
+
+#[tokio::test]
+async fn github_reader_is_probed_without_recording_and_warns_when_it_cannot_read() {
+    let fixture = Fixture::new();
+    assert_eq!(status(&fixture.run().await, "GitHub reader"), Status::Pass);
+    // No token reaches gh: it is not logged in, so repository context is off.
+    let mut unauthenticated = Fixture::new();
+    unauthenticated.env.remove(&OsString::from("SECRET_GITHUB"));
+    let report = unauthenticated.run().await;
+    assert_eq!(status(&report, "GitHub reader"), Status::Warn);
+    let check = report
+        .checks
+        .iter()
+        .find(|c| c.name == "GitHub reader")
+        .unwrap();
+    assert!(check.detail.contains("gh auth status"), "{}", check.detail);
+    assert!(report.passed(), "{}", report.text());
+    // gh itself fails (not installed, no network): still only a warning.
+    let down = Fixture::new();
+    std::fs::create_dir_all(down.dir.path().join("home")).unwrap();
+    std::fs::write(down.dir.path().join("home/gh-down"), "").unwrap();
+    assert_eq!(status(&down.run().await, "GitHub reader"), Status::Warn);
+    let disabled = Fixture::new();
+    let config = std::fs::read_to_string(&disabled.path).unwrap();
+    std::fs::write(
+        &disabled.path,
+        config.replace("[github]\n", "[github]\nenabled=false\n"),
+    )
+    .unwrap();
+    assert_eq!(status(&disabled.run().await, "GitHub reader"), Status::Skip);
     fixture.pristine();
 }
 

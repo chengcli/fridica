@@ -220,6 +220,25 @@ pub async fn run_with(
             "set the configured token environment variable to the expected token type",
         );
     }
+    // GitHub reads feed the parent's repository context; a reader that cannot
+    // read degrades that context, so it is a warning, not a failure.
+    if config.github.enabled {
+        let options = crate::github::client::Options::default();
+        match crate::github::client::probe(&config, environment.clone(), &options, timeout).await {
+            Ok(()) => report.add(Status::Pass, "GitHub reader", ""),
+            Err(error) => report.add(
+                Status::Warn,
+                "GitHub reader",
+                format!(
+                    "{}; repository context will be unavailable until {} can read github.com",
+                    error.message(),
+                    options.program.display()
+                ),
+            ),
+        }
+    } else {
+        report.add(Status::Skip, "GitHub reader", "github.enabled is off");
+    }
     let scopes = crate::store::diagnostics::slack_scopes(&config.state.path).await;
     match scopes.as_deref() {
         None | Some("unknown") => report.add(Status::Skip,"Slack files:read","scope information is unavailable until recorded by a daemon start"),
