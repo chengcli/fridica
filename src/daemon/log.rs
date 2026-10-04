@@ -5,7 +5,7 @@
 use crate::{
     config::schema::Slack,
     slack::names::{self, Names, UserNames},
-    store::Store,
+    store::Shared,
 };
 use fridica_core::store::{Event, Store as _, Unit};
 use serde_json::Value;
@@ -33,7 +33,7 @@ pub fn line(level: &str, name: &str, message: &str) {
 /// With `lookup`, senders are shown by name: each unknown ID is looked up
 /// once (again after ten minutes if that failed) and the name is recorded.
 pub async fn follow(
-    store: Store,
+    store: Shared,
     slack: Slack,
     lookup: Option<Arc<dyn UserNames>>,
     mut finished: watch::Receiver<bool>,

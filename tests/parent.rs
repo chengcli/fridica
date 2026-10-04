@@ -144,7 +144,7 @@ impl Harness {
         };
         let parent = Arc::new(CliParent::new(
             config.clone(),
-            store.clone(),
+            Arc::new(store.clone()),
             clock.clone(),
             options,
         ));
@@ -159,7 +159,7 @@ impl Harness {
     fn actor(&self) -> Actor<CliParent> {
         Actor {
             config: Some(self.config.clone()),
-            store: self.store.clone(),
+            store: Arc::new(self.store.clone()),
             parent: self.parent.clone(),
             clock: self.clock.clone(),
             ids: Arc::new(SequenceIds::default()),
@@ -626,7 +626,7 @@ async fn missing_owner_context_fails_before_spawning_and_disabling_general_messa
     config.owner.contract = Some(h.dir.path().join("private-missing-contract"));
     let p = CliParent::new(
         Arc::new(config),
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.clock.clone(),
         Options::default(),
     );
@@ -774,7 +774,7 @@ fn attachment_parent(
         h.parent.clone(),
         d,
         h.config.clone(),
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.clock.clone(),
     )
 }
@@ -1093,7 +1093,7 @@ async fn slow_optional_files_do_not_consume_the_models_response_deadline() {
         Arc::new(QuickParent),
         Arc::new(SlowFile),
         h.config.clone(),
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.clock.clone(),
     ));
     let actor = Actor {
@@ -1177,7 +1177,7 @@ async fn linked_context_and_attachments_share_snapshot_reused_after_adapter_rest
         h.parent.clone(),
         downloads,
         Arc::new(changed_config),
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.clock.clone(),
     )
     .with_links(reader);
@@ -1340,7 +1340,7 @@ async fn github_disabled_skips_reads_and_worker_results_use_history_without_slac
         h.parent.clone(),
         downloads.clone(),
         Arc::new(config),
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.clock.clone(),
     )
     .with_github(reader.clone());

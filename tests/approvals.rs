@@ -70,7 +70,7 @@ impl Harness {
         let clock = Arc::new(ReplayClock::new(20.));
         let (sender, notifications) = mpsc::channel(1);
         let broker = Arc::new(Broker::new(
-            store.clone(),
+            Arc::new(store.clone()),
             config.clone(),
             clock.clone(),
             Arc::new(SequenceIds::default()),
@@ -402,7 +402,7 @@ async fn cancellation_during_sqlite_admission_still_settles_the_insert() {
     let h = Harness::new(10.).await;
     let started = Arc::new(tokio::sync::Semaphore::new(0));
     let broker = Arc::new(Broker::new(
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.config.clone(),
         h.clock.clone(),
         Arc::new(SignalledIds(started.clone())),

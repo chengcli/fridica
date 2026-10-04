@@ -431,7 +431,7 @@ async fn intent_precedes_fetch_and_control_changes_fence_context_delivery() {
             invalid: mode == "invalid",
         });
         let io = ScopedJobIo {
-            store: store.clone(),
+            store: Arc::new(store.clone()),
             fetcher: gate.clone(),
             artifacts: Arc::new(NoJobIo),
             clock: Arc::new(ReplayClock::new(20.)),
@@ -595,19 +595,19 @@ async fn supervisor_fetches_before_both_backends_and_records_the_exact_commit() 
             ids: Arc::new(SequenceIds::default()),
             options: Options::default(),
             recorder: Arc::new(StoreWireRecorder {
-                store: store.clone(),
+                store: Arc::new(store.clone()),
                 clock: clock.clone(),
             }),
         });
         let io = Arc::new(ScopedJobIo {
-            store: store.clone(),
+            store: Arc::new(store.clone()),
             fetcher: Arc::new(h.fetcher),
             artifacts: Arc::new(LocalJobIo { home: root.clone() }),
             clock: clock.clone(),
             files: None,
         });
         let supervisor = Supervisor::new(
-            store.clone(),
+            Arc::new(store.clone()),
             Arc::new(config),
             factory,
             Arc::new(DenyApprovals),
@@ -702,7 +702,7 @@ async fn storage_failures_never_release_context_or_run_without_durable_intent() 
             invalid: false,
         });
         let io = ScopedJobIo {
-            store: store.clone(),
+            store: Arc::new(store.clone()),
             fetcher: gate.clone(),
             artifacts: Arc::new(NoJobIo),
             clock: Arc::new(ReplayClock::new(20.)),
@@ -807,7 +807,7 @@ async fn attached_files_are_placed_in_the_workspace_before_the_job_starts() {
         Ok(())
     }).await.unwrap();
     let io = ScopedJobIo {
-        store: store.clone(),
+        store: Arc::new(store.clone()),
         fetcher: Arc::new(h.fetcher),
         artifacts: Arc::new(fridica::workers::artifacts::LocalJobIo {
             home: h.dir.path().join("home"),

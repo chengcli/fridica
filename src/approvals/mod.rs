@@ -8,7 +8,7 @@ use crate::{
         worker::*,
         Authority,
     },
-    store::Store,
+    store::Shared,
     workers::protocol::ApprovalHandler,
 };
 use anyhow::{bail, Result};
@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, Notify, Semaphore};
 
 #[derive(Clone)]
 pub struct Broker {
-    store: Store,
+    store: Shared,
     config: Arc<Mutex<Arc<Config>>>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn Identifiers>,
@@ -31,7 +31,7 @@ pub struct Broker {
 }
 impl Broker {
     pub fn new(
-        store: Store,
+        store: Shared,
         config: Arc<Config>,
         clock: Arc<dyn Clock>,
         ids: Arc<dyn Identifiers>,

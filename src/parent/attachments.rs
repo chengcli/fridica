@@ -11,7 +11,7 @@ use crate::{
         files::{self, Downloader},
         links,
     },
-    store::Store,
+    store::Shared,
 };
 use fridica_core::store::Store as _;
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ pub struct WithAttachments<P: Parent, D: Downloader> {
     parent: Arc<P>,
     files: Arc<D>,
     config: Arc<Config>,
-    store: Store,
+    store: Shared,
     clock: Arc<dyn Clock>,
     timeout: Duration,
     links: Option<Arc<dyn links::Reader>>,
@@ -41,7 +41,7 @@ impl<P: Parent, D: Downloader> WithAttachments<P, D> {
         parent: Arc<P>,
         files: Arc<D>,
         config: Arc<Config>,
-        store: Store,
+        store: Shared,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {

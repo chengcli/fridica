@@ -4,11 +4,11 @@ use super::{progress::Tracker, protocol::*};
 use crate::{
     config::Config,
     core::{time::Clock, worker::*},
-    store::Store,
+    store::Shared,
 };
 use anyhow::{bail, Context, Result};
 use fridica_core::store::{
-    ClaimedJob, Completed, Completion, PendingWorkerControl, PreviousSnapshot, Store as _,
+    ClaimedJob, Completed, Completion, PendingWorkerControl, PreviousSnapshot, Store as Backend,
 };
 use serde_json::json;
 use std::{
@@ -67,7 +67,7 @@ impl Default for Options {
     }
 }
 pub struct Supervisor {
-    store: Store,
+    store: Shared,
     factory: Arc<dyn Factory>,
     approvals: Arc<dyn ApprovalHandler>,
     io: Arc<dyn JobIo>,
@@ -77,7 +77,7 @@ pub struct Supervisor {
 }
 impl Supervisor {
     pub fn new(
-        store: Store,
+        store: Shared,
         config: Arc<Config>,
         factory: Arc<dyn Factory>,
         approvals: Arc<dyn ApprovalHandler>,
@@ -653,7 +653,7 @@ async fn close_worker(worker: &Arc<dyn Worker>, grace: Duration) -> bool {
     ) && !worker.alive()
 }
 struct Task {
-    store: Store,
+    store: Shared,
     factory: Arc<dyn Factory>,
     worker: Arc<dyn Worker>,
     spec: WorkerSpec,
@@ -955,13 +955,13 @@ async fn poll_progress(t: &Task, file: String, mut tracker: Tracker) -> std::con
 }
 
 /// The job with this ID; an unknown job is an error.
-async fn job(store: &Store, id: &str) -> Result<Job> {
+async fn job(store: &impl Backend, id: &str) -> Result<Job> {
     let id = id.to_owned();
     store.transact(move |u| u.job_record(&id)).await
 }
 /// Admit queued job `id` in `slot` against `config`'s machines and limits.
 async fn claim(
-    store: &Store,
+    store: &impl Backend,
     id: &str,
     slot: usize,
     config: &Arc<Config>,
@@ -974,7 +974,7 @@ async fn claim(
 }
 /// Record how a job attempt ended.
 async fn complete(
-    store: &Store,
+    store: &impl Backend,
     id: String,
     attempt: u32,
     completion: Completion,
@@ -986,7 +986,7 @@ async fn complete(
 }
 /// The snapshot `worker`'s previous job (other than `job`) ran with.
 async fn previous_snapshot(
-    store: &Store,
+    store: &impl Backend,
     worker: &str,
     job: &str,
 ) -> Result<Option<PreviousSnapshot>> {
@@ -996,7 +996,7 @@ async fn previous_snapshot(
         .await
 }
 
-async fn record_close_failure(store: &Store, worker_id: &str, now: f64) -> Result<()> {
+async fn record_close_failure(store: &impl Backend, worker_id: &str, now: f64) -> Result<()> {
     let id = worker_id.to_owned();
     store
         .transact(move |u| {

@@ -99,7 +99,7 @@ async fn intake(s: &Store, n: usize) -> i64 {
 fn actor<P: Parent>(s: &Store, p: Arc<P>) -> Actor<P> {
     Actor {
         config: None,
-        store: s.clone(),
+        store: Arc::new(s.clone()),
         parent: p,
         clock: Arc::new(ReplayClock::new(20.)),
         ids: Arc::new(SequenceIds::default()),
@@ -140,7 +140,7 @@ async fn addressed_message_runs_actor_then_delivery_and_closes_its_obligation() 
     );
     let sink = Arc::new(Sink::default());
     let d = Dispatcher {
-        store: s.clone(),
+        store: Arc::new(s.clone()),
         delivery: sink.clone(),
         clock: Arc::new(ReplayClock::new(21.)),
         owner: "UOWNER".into(),

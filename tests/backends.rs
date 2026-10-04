@@ -663,21 +663,21 @@ async fn durable_supervisor_runs_real_protocol_adapters_and_records_wire_events(
             ids: Arc::new(SequenceIds::default()),
             options: Options::default(),
             recorder: Arc::new(StoreWireRecorder {
-                store: store.clone(),
+                store: Arc::new(store.clone()),
                 clock: clock.clone(),
             }),
         });
         let config = Arc::new(config);
         let (notifications, mut pending) = tokio::sync::mpsc::channel(1);
         let approvals = Arc::new(Broker::new(
-            store.clone(),
+            Arc::new(store.clone()),
             config.clone(),
             clock.clone(),
             Arc::new(SequenceIds::default()),
             Some(notifications),
         ));
         let supervisor = Supervisor::new(
-            store.clone(),
+            Arc::new(store.clone()),
             config,
             factory,
             approvals.clone(),

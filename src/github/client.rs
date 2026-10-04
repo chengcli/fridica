@@ -4,7 +4,7 @@ use crate::{
     config::Config,
     core::{delivery::AdapterFuture, time::Clock},
     exec::process::{self, Launch},
-    store::Store,
+    store::Shared,
 };
 use fridica_core::store::Store as _;
 use serde::{Deserialize, Serialize};
@@ -165,7 +165,7 @@ impl Default for Options {
     }
 }
 pub struct Gh {
-    store: Store,
+    store: Shared,
     clock: Arc<dyn Clock>,
     options: Options,
     env: BTreeMap<OsString, OsString>,
@@ -251,7 +251,7 @@ fn environment(
 impl Gh {
     pub fn new(
         config: &Config,
-        store: Store,
+        store: Shared,
         clock: Arc<dyn Clock>,
         options: Options,
     ) -> Result<Self, Failure> {
@@ -260,7 +260,7 @@ impl Gh {
     /// Explicit owner environment snapshot for deterministic daemon construction.
     pub fn with_environment(
         config: &Config,
-        store: Store,
+        store: Shared,
         clock: Arc<dyn Clock>,
         options: Options,
         inherited: impl IntoIterator<Item = (OsString, OsString)>,

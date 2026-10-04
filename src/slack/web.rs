@@ -8,7 +8,7 @@ use crate::{
         ids::ThreadId,
         time::Clock,
     },
-    store::Store,
+    store::Shared,
 };
 pub use fridica_slack::web::{Failure, Identity, Post, Upload, WebClient};
 use fridica_slack::{
@@ -74,7 +74,7 @@ pub fn scope(config: &Config) -> Scope {
 /// The owner's client for `config`, journaled to `store`.
 pub fn client(
     config: &Config,
-    store: Store,
+    store: Shared,
     clock: Arc<dyn Clock>,
     token: String,
     timeout: Duration,

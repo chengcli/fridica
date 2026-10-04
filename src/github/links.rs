@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     core::{delivery::AdapterFuture, time::Clock},
-    store::Store,
+    store::Shared,
 };
 use fridica_core::store::Store as _;
 use regex::Regex;
@@ -94,7 +94,7 @@ struct Cache {
 }
 pub struct Links<A: Api + ?Sized> {
     api: Arc<A>,
-    store: Store,
+    store: Shared,
     clock: Arc<dyn Clock>,
     cache_seconds: f64,
     retry_delay: Duration,
@@ -103,7 +103,7 @@ pub struct Links<A: Api + ?Sized> {
 impl<A: Api + ?Sized> Links<A> {
     pub fn new(
         api: Arc<A>,
-        store: Store,
+        store: Shared,
         clock: Arc<dyn Clock>,
         cache_seconds: f64,
     ) -> Result<Self, Failure> {

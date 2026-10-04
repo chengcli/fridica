@@ -1,8 +1,8 @@
 //! Explicit owner-requested historical mention review. Never called by migration
 //! or startup, and never infer an answer from an unrelated historical post.
-use crate::{config::Config, core::Authority, store::Store};
+use crate::{config::Config, core::Authority};
 use anyhow::{bail, Result};
-use fridica_core::store::{Backfill, HistoricalObligation, MentionQuery, Store as _};
+use fridica_core::store::{Backfill, HistoricalObligation, MentionQuery, Store as Backend};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -33,7 +33,7 @@ impl Request {
     }
 }
 pub async fn run(
-    store: &Store,
+    store: &impl Backend,
     config: &Config,
     request: Request,
     authority: Authority,

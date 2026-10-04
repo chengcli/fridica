@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{bail, Result};
 pub use fridica_core::store::ConfigurationIntent as Intent;
-use fridica_core::store::{PendingConfigurationEdit, Store as _};
+use fridica_core::store::{PendingConfigurationEdit, Store as Backend};
 
 /// Record a prepared edit's intent and replace the file.
 pub async fn replace(store: &Store, edit: editor::Prepared, now: f64) -> Result<()> {
@@ -19,7 +19,7 @@ pub async fn replace(store: &Store, edit: editor::Prepared, now: f64) -> Result<
 }
 /// Startup adapters were constructed from `config`. An unrenamed edit is
 /// explicitly abandoned; a renamed edit is adopted only from exactly that file.
-pub async fn recover_startup(store: &Store, config: &Config, now: f64) -> Result<()> {
+pub async fn recover_startup(store: &impl Backend, config: &Config, now: f64) -> Result<()> {
     if let Some(PendingConfigurationEdit { seq, intent }) =
         store.transact(|u| u.pending_configuration_edit()).await?
     {

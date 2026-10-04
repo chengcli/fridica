@@ -14,7 +14,7 @@ use crate::{
         process::{self, Launch, Process},
         ssh::{LaunchOptions, SshTransport},
     },
-    store::Store,
+    store::Shared,
 };
 use fridica_agent::{Agent, Backend, BoxFuture, Child, LaunchError, OutputFormat, Turn};
 use fridica_core::store::Store as _;
@@ -331,7 +331,7 @@ pub(crate) fn agent_decision(d: ApprovalDecision) -> fridica_agent::ApprovalDeci
     }
 }
 pub struct StoreWireRecorder {
-    pub store: Store,
+    pub store: Shared,
     pub clock: Arc<dyn Clock>,
 }
 impl WireRecorder for StoreWireRecorder {

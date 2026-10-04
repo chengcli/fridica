@@ -96,7 +96,7 @@ async fn frozen_github_state_projections_and_request_multisets_match() {
         let store = Store::open(dir.path().join("db")).await.unwrap();
         let script = Arc::new(Script::new(case["routes"].clone()));
         let clock = Arc::new(ReplayClock::new(1000.));
-        let links = Links::new(script.clone(), store, clock, 180.).unwrap();
+        let links = Links::new(script.clone(), Arc::new(store), clock, 180.).unwrap();
         let output = links
             .linked(serde_json::from_value(case["texts"].clone()).unwrap())
             .await
@@ -132,7 +132,7 @@ async fn cache_expiry_rate_limits_and_recording_failures_are_visible() {
     let script = Arc::new(Script::new(
         json!({"/repos/o/r/issues/1":{"number":1,"title":"cached","state":"open"},"/repos/o/r/issues/2":{"__error":"rate"},"/repos/o/r/issues/3":{"__error":"recording"}}),
     ));
-    let reader = Links::new(script.clone(), store.clone(), clock.clone(), 10.).unwrap();
+    let reader = Links::new(script.clone(), Arc::new(store.clone()), clock.clone(), 10.).unwrap();
     let url = |n| vec![format!("https://github.com/o/r/issues/{n}")];
     let first = reader.linked(url(1)).await.unwrap();
     assert_eq!(
@@ -209,7 +209,7 @@ async fn one_bad_link_is_isolated_and_auxiliary_recording_failures_are_fatal() {
     let mut routes = corpus()["states"][0]["routes"].clone();
     routes["/repos/o/bad/pulls/1"] = json!(["bad"]);
     let script = Arc::new(Script::new(routes));
-    let reader = Links::new(script.clone(), store, clock, 0.).unwrap();
+    let reader = Links::new(script.clone(), Arc::new(store), clock, 0.).unwrap();
     let values = reader
         .linked(vec![
             "https://github.com/o/bad/pull/1 https://github.com/o/r/pull/218".into(),
@@ -239,7 +239,7 @@ async fn github_cache_is_bounded_and_oversized_pages_never_certify_success() {
             json!({"number":n,"title":"small","state":"open"});
     }
     let script = Arc::new(Script::new(routes));
-    let reader = Links::new(script.clone(), store, clock.clone(), 180.).unwrap();
+    let reader = Links::new(script.clone(), Arc::new(store), clock.clone(), 180.).unwrap();
     for n in 1..=258 {
         reader
             .linked(vec![format!("https://github.com/o/r/issues/{n}")])
@@ -297,7 +297,7 @@ async fn hung_sibling_cannot_hide_a_recording_fault_behind_optional_timeout() {
         let clock = Arc::new(ReplayClock::new(1000.));
         let reader = Links::new(
             Arc::new(AuditFaultWithHungSibling { auxiliary }),
-            store,
+            Arc::new(store),
             clock,
             180.,
         )
@@ -326,7 +326,7 @@ async fn cached_github_state_reports_its_age() {
     let script = Arc::new(Script::new(
         json!({"/repos/o/r/issues/1":{"number":1,"title":"cached","state":"open"}}),
     ));
-    let reader = Links::new(script.clone(), store, clock.clone(), 60.).unwrap();
+    let reader = Links::new(script.clone(), Arc::new(store), clock.clone(), 60.).unwrap();
     let url = vec!["https://github.com/o/r/issues/1".to_string()];
     let first = json!(reader.linked(url.clone()).await.unwrap());
     assert_eq!(first[0]["age_seconds"], 0.);

@@ -52,3 +52,10 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# While fridica#128 is in progress the companions are built from the sibling
+# checkouts; the patches go when fridica-core 0.4 and fridica-store-sqlite 0.2
+# are published.
+[patch.crates-io]
+fridica-core = { path = "../fridica-core" }
+fridica-store-sqlite = { path = "../fridica-store-sqlite" }

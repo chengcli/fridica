@@ -1,5 +1,6 @@
 use super::*;
 use crate::slack::ingress::ENVELOPE_LIMIT;
+use crate::store::Store;
 use crate::{
     config::{loader, LoadContext},
     core::{
@@ -221,7 +222,7 @@ path="{}"
         let server = Server::new().await;
         let web = client(
             &config,
-            store.clone(),
+            Arc::new(store.clone()),
             clock.clone(),
             "xoxp-private-test-secret".into(),
             timeout,
@@ -259,7 +260,7 @@ path="{}"
     }
     fn dispatcher(&self) -> Dispatcher<SlackClient> {
         Dispatcher {
-            store: self.store.clone(),
+            store: Arc::new(self.store.clone()),
             delivery: self.web.clone(),
             clock: self.clock.clone(),
             owner: "UOWNER".into(),
@@ -598,7 +599,7 @@ async fn real_http_history_drives_durable_catchup_and_does_not_leak_method_argum
     h.server.json(json!({"ok":true,"messages":[{"ts":"999.1","user":"UALICE","text":"<@UOWNER> help"}],"response_metadata":{"next_cursor":"next & = cursor"}}));
     h.server.json(json!({"ok":true,"messages":[]}));
     let receiver = Receiver::new(
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.config.clone(),
         h.clock.clone(),
         Arc::new(SequenceIds::default()),
