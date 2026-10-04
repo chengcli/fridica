@@ -252,7 +252,7 @@ impl Harness {
         let gate = Arc::new(Gate::default());
         let clock = Arc::new(ReplayClock::new(20.));
         let supervisor = Supervisor::new(
-            store.clone(),
+            Arc::new(store.clone()),
             config.clone(),
             factory.clone(),
             gate.clone(),
@@ -700,7 +700,7 @@ async fn observe_only_never_constructs_workers_or_claims_jobs() {
     let h = Harness::new().await;
     h.add("a", "gpu", 0, false, 1).await;
     let observer = Supervisor::new(
-        h.store.clone(),
+        Arc::new(h.store.clone()),
         h.config.clone(),
         h.factory.clone(),
         h.gate.clone(),

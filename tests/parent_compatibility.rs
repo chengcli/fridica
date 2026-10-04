@@ -87,7 +87,7 @@ impl Fixture {
     fn actor(&self) -> Actor<Script> {
         Actor {
             config: Some(self.config.clone()),
-            store: self.store.clone(),
+            store: Arc::new(self.store.clone()),
             parent: self.parent.clone(),
             clock: self.clock.clone(),
             ids: self.ids.clone(),
@@ -203,7 +203,7 @@ async fn details_only_reply_links_the_ordered_upload_before_answer_closure() {
             "2"
         );
         let dispatcher = Dispatcher {
-            store: f.store.clone(),
+            store: Arc::new(f.store.clone()),
             delivery: Arc::new(Sink(Mutex::new(
                 vec![
                     DeliveryOutcome::Sent {

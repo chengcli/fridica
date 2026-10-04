@@ -205,7 +205,7 @@ path="{}"
         let ws = WsServer::new().await;
         let web = crate::slack::web::client(
             &config,
-            store.clone(),
+            Arc::new(store.clone()),
             clock.clone(),
             "xoxp-owner-secret".into(),
             Duration::from_secs(2),
@@ -213,7 +213,7 @@ path="{}"
         .unwrap()
         .with_test_endpoints(http.base.clone(), http.base.clone(), http.base.clone());
         let receiver = Receiver::new(
-            store.clone(),
+            Arc::new(store.clone()),
             config,
             clock.clone(),
             Arc::new(SequenceIds::default()),

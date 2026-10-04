@@ -210,7 +210,7 @@ control_socket="private/control.sock"
         ]);
         let mut execution = Execution::system(
             &self.config,
-            self.store.clone(),
+            Arc::new(self.store.clone()),
             self.clock.clone(),
             Host {
                 home: root.join("home"),

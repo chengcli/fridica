@@ -4,10 +4,9 @@
 use crate::{
     config::{registry::Machine, Config},
     core::{delivery::AdapterFuture, time::Clock},
-    store::Store,
 };
 use anyhow::Result;
-use fridica_core::store::Store as _;
+use fridica_core::store::Store as Backend;
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -41,7 +40,7 @@ impl Monitor {
     pub async fn assess(
         &self,
         config: &Config,
-        store: &Store,
+        store: &impl Backend,
         clock: &dyn Clock,
     ) -> Result<BTreeMap<String, Assessment>> {
         let placement = &config.placement;
@@ -187,7 +186,9 @@ w = "/work/hung"
         let config =
             crate::config::loader::parse(source, &dir.path().join("config.toml"), &context)
                 .unwrap();
-        let store = Store::open(dir.path().join("db")).await.unwrap();
+        let store = crate::store::Store::open(dir.path().join("db"))
+            .await
+            .unwrap();
         let clock = ReplayClock::new(1000.);
         let reader = Arc::new(Scripted(Default::default()));
         let monitor = Monitor::new(reader.clone());

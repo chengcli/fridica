@@ -857,7 +857,7 @@ async fn restart_recovers_unconsumed_results_and_uncertain_sends_without_duplica
         if uncertain {
             // Commit the report but interrupt its send before acknowledgement.
             let actor = fridica::threads::actor::Actor {
-                store: h.store.clone(),
+                store: Arc::new(h.store.clone()),
                 config: Some(h.config.clone()),
                 parent: h.parent.clone(),
                 clock: h.clock.clone(),
@@ -2977,7 +2977,7 @@ async fn debrief_in_flight_is_fenced_by_owner_pause_or_clean() {
 fn control_actor(h: &Harness) -> fridica::threads::actor::Actor<ParentScript> {
     fridica::threads::actor::Actor {
         config: Some(h.config.clone()),
-        store: h.store.clone(),
+        store: Arc::new(h.store.clone()),
         parent: h.parent.clone(),
         clock: h.clock.clone(),
         ids: Arc::new(fridica::core::time::RandomIds),
@@ -4043,7 +4043,7 @@ async fn complete_runtime_capture(
         if scenario == "restart_result" || scenario == "restart_sending" {
             if scenario == "restart_sending" {
                 let actor = fridica::threads::actor::Actor {
-                    store: h.store.clone(),
+                    store: Arc::new(h.store.clone()),
                     config: Some(h.config.clone()),
                     parent: h.parent.clone(),
                     clock: h.clock.clone(),

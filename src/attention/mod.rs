@@ -4,10 +4,11 @@ pub mod backfill;
 use crate::{
     config::Attention,
     core::{ids::ThreadId, Authority},
-    store::Store,
 };
 use anyhow::{bail, Context, Result};
-use fridica_core::store::{ArrivedMessage, Disposal, Mention, QueuedAnswer, Store as _, Unit};
+use fridica_core::store::{
+    ArrivedMessage, Disposal, Mention, QueuedAnswer, Store as Backend, Unit,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -50,7 +51,7 @@ pub enum Capacity {
 }
 
 pub async fn intake(
-    store: &Store,
+    store: &impl Backend,
     msg: Message,
     owner: String,
     now: f64,
@@ -143,7 +144,7 @@ pub(crate) fn intake_tx(
 }
 
 pub async fn reserve(
-    store: &Store,
+    store: &impl Backend,
     session: String,
     inbox: i64,
     trigger: String,
@@ -196,7 +197,11 @@ pub async fn reserve(
         .await
 }
 
-pub async fn claim_due(store: &Store, session: String, now: f64) -> Result<Option<(i64, String)>> {
+pub async fn claim_due(
+    store: &impl Backend,
+    session: String,
+    now: f64,
+) -> Result<Option<(i64, String)>> {
     store
         .transact(move |u| {
             // Keep the control barrier and inbox claim in the same snapshot. An
@@ -223,7 +228,7 @@ pub struct Answer {
     pub inbox: i64,
 }
 /// The caller has validated a substantive reply. A blocked notice is never an Answer.
-pub async fn queue_answer(store: &Store, answer: Answer, now: f64) -> Result<i64> {
+pub async fn queue_answer(store: &impl Backend, answer: Answer, now: f64) -> Result<i64> {
     if answer.text.trim().is_empty() {
         bail!("an answer must contain text");
     }
@@ -274,7 +279,7 @@ pub(crate) fn queue_answer_tx(u: &mut dyn Unit, answer: &Answer, now: f64) -> Re
     Ok(id)
 }
 
-pub async fn delivered(store: &Store, post: i64, slack_ts: String, now: f64) -> Result<()> {
+pub async fn delivered(store: &impl Backend, post: i64, slack_ts: String, now: f64) -> Result<()> {
     store
         .transact(move |u| u.confirm_post(post, &slack_ts, now))
         .await
@@ -289,7 +294,7 @@ pub enum Disposition {
     OwnerClosed { reason: String },
 }
 pub async fn disposition(
-    store: &Store,
+    store: &impl Backend,
     id: String,
     change: Disposition,
     actor: Authority,
@@ -339,12 +344,12 @@ pub async fn disposition(
         .await
 }
 
-pub async fn sweep(store: &Store, now: f64) -> Result<usize> {
+pub async fn sweep(store: &impl Backend, now: f64) -> Result<usize> {
     store.transact(move |u| u.queue_due(now)).await
 }
 
 pub async fn signal_streak(
-    store: &Store,
+    store: &impl Backend,
     session: String,
     streak: usize,
     threshold: usize,

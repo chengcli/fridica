@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::time::ReplayClock;
+use crate::store::Store;
 use std::os::unix::fs::PermissionsExt;
 const SCRIPT: &str = r#"#!/usr/bin/env python3
 import json, os, pathlib, signal, sys, time
@@ -56,7 +57,7 @@ impl Harness {
             "MY_GH_TOKEN",
         );
         Gh {
-            store: self.store.clone(),
+            store: Arc::new(self.store.clone()),
             clock: self.clock.clone(),
             options: Options {
                 program: self.dir.path().join("gh"),

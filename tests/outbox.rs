@@ -54,7 +54,7 @@ impl Delivery for Fake {
 }
 fn dispatcher(s: &Store, adapter: Arc<Fake>, clock: Arc<ReplayClock>) -> Dispatcher<Fake> {
     Dispatcher {
-        store: s.clone(),
+        store: Arc::new(s.clone()),
         delivery: adapter,
         clock,
         owner: "UOWNER".into(),
@@ -256,7 +256,7 @@ async fn delivery_timeout_is_ambiguous_and_never_automatically_resent() {
         .await
         .unwrap();
     let dispatcher = Dispatcher {
-        store: s.clone(),
+        store: Arc::new(s.clone()),
         delivery: Arc::new(HangingDelivery),
         clock: Arc::new(ReplayClock::new(2.)),
         owner: "UOWNER".into(),

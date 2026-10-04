@@ -1,37 +1,33 @@
-//! One SQLite transaction per response. Never select blobs or private replay data.
+//! One unit of work per response. Views never carry blobs or private replay data.
 use crate::{config::Config, slack::names::Names};
 use anyhow::{bail, Result};
-use fridica_core::store::{Cell, Row, Unit};
+use fridica_core::store::Unit;
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-fn rows(raw: Vec<Row>) -> Result<Vec<Value>> {
+/// View records as the API shows them: a `_json` field becomes the value it
+/// holds, under its name without the suffix.
+fn rows<T: Serialize>(records: Vec<T>) -> Result<Vec<Value>> {
     let mut result = vec![];
     let mut size = 0;
-    for Row(cells) in raw {
+    for record in records {
+        let Value::Object(fields) = serde_json::to_value(record)? else {
+            bail!("a view record is an object");
+        };
         let mut value = serde_json::Map::new();
-        for (name, cell) in cells {
-            let raw = match cell {
-                Cell::Null => Value::Null,
-                Cell::Integer(n) => json!(n),
-                Cell::Real(n) => json!(n),
-                Cell::Text(t) => json!(t),
-            };
+        for (name, raw) in fields {
             let (key, data) = if let Some(key) = name.strip_suffix("_json") {
                 (
-                    key,
-                    if raw.is_null() {
-                        Value::Null
-                    } else {
-                        serde_json::from_str(raw.as_str().unwrap())?
+                    key.to_owned(),
+                    match raw.as_str() {
+                        Some(text) => serde_json::from_str(text)?,
+                        None => Value::Null,
                     },
                 )
-            } else if ["ephemeral", "reported", "has_file", "observe_only"].contains(&name.as_str())
-            {
-                (name.as_str(), json!(raw.as_i64().unwrap_or(0) != 0))
             } else {
-                (name.as_str(), raw)
+                (name, raw)
             };
-            value.insert(key.into(), data);
+            value.insert(key, data);
         }
         for key in ["result", "last_result"] {
             if let Some(result) = value.get_mut(key).filter(|v| !v.is_null()) {
@@ -122,14 +118,17 @@ pub fn get(
     let mut values = match parts.as_slice() {
         ["status"] => {
             let status = u.status()?;
-            let runtime = rows(status.runtime.into_iter().collect())?
-                .pop()
-                .unwrap_or(json!({"started_at":0.,"slack_status":"stopped"}));
+            let runtime = status
+                .runtime
+                .unwrap_or(fridica_core::store::RuntimeStatus {
+                    started_at: 0.,
+                    slack_status: "stopped".into(),
+                });
             return Ok(Some(json!({
                 "owner":config.owner.slack_user,
-                "started_at":runtime["started_at"],
+                "started_at":runtime.started_at,
                 "observe_only":observe_only,
-                "slack":runtime["slack_status"],
+                "slack":runtime.slack_status,
                 "pending_approvals":status.pending_approvals,
                 "running_jobs":status.running_jobs,
                 "queued_jobs":status.queued_jobs,
@@ -219,8 +218,8 @@ fn machines(
     config: &Config,
     processes: &BTreeMap<String, String>,
 ) -> Result<Vec<Value>> {
-    let counts = rows(u.busy_machines()?)?;
-    let worker_rows = rows(u.worker_machines()?)?;
+    let counts = u.busy_machines()?;
+    let worker_rows = u.worker_machines()?;
     Ok(config
         .machines
         .machines
@@ -228,17 +227,18 @@ fn machines(
         .map(|machine| {
             let busy = counts
                 .iter()
-                .find(|v| v["machine"] == machine.name)
-                .and_then(|v| v["busy"].as_u64())
-                .unwrap_or(0) as usize;
+                .find(|load| load.machine == machine.name)
+                .map(|load| load.busy.max(0) as usize)
+                .unwrap_or(0);
             let mut value = machine.payload(busy);
             value["transport"] = json!(machine.transport);
             value["host"] = json!(machine.host);
             value["max_workers"] = json!(machine.max_workers);
             value["live_workers"] = json!(worker_rows
                 .iter()
-                .filter(|v| v["machine"] == machine.name
-                    && processes.contains_key(v["id"].as_str().unwrap()))
+                .filter(
+                    |worker| worker.machine == machine.name && processes.contains_key(&worker.id)
+                )
                 .count());
             value["workspace_details"] = json!(machine
                 .workspaces

@@ -67,7 +67,7 @@ path="{}"
         let store = Store::open(dir.path().join("db")).await.unwrap();
         let clock = Arc::new(ReplayClock::new(2_000_000_000.));
         let receiver = Receiver::new(
-            store.clone(),
+            Arc::new(store.clone()),
             config,
             clock.clone(),
             Arc::new(SequenceIds::default()),

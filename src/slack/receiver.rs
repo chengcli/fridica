@@ -5,7 +5,7 @@ use crate::{
     attention,
     config::Config,
     core::time::{Clock, Identifiers},
-    store::Store,
+    store::Shared,
 };
 use anyhow::{bail, Result};
 use fridica_core::store::Store as _;
@@ -16,14 +16,14 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Receiver {
-    pub(crate) store: Store,
+    pub(crate) store: Shared,
     pub(crate) config: Arc<Config>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) ids: Arc<dyn Identifiers>,
 }
 impl Receiver {
     pub fn new(
-        store: Store,
+        store: Shared,
         config: Arc<Config>,
         clock: Arc<dyn Clock>,
         ids: Arc<dyn Identifiers>,

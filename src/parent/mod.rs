@@ -11,7 +11,7 @@ use crate::{
         time::Clock,
     },
     exec::process,
-    store::Store,
+    store::Shared,
 };
 pub use fridica_core::parent::{context, schema};
 use fridica_core::store::Store as _;
@@ -41,7 +41,7 @@ impl Default for Options {
 }
 pub struct CliParent {
     config: Arc<Config>,
-    store: Store,
+    store: Shared,
     clock: Arc<dyn Clock>,
     options: Options,
 }
@@ -64,7 +64,12 @@ impl CliParent {
     ) -> attachments::WithAttachments<Self, D> {
         self.with_attachments(slack.clone()).with_links(slack)
     }
-    pub fn new(config: Arc<Config>, store: Store, clock: Arc<dyn Clock>, options: Options) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        store: Shared,
+        clock: Arc<dyn Clock>,
+        options: Options,
+    ) -> Self {
         Self {
             config,
             store,

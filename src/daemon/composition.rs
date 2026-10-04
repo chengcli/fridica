@@ -12,7 +12,7 @@ use crate::{
     github::{client, links::Links},
     parent::{self, CliParent},
     slack::{files::Downloader, links::Reader},
-    store::Store,
+    store::{Shared, Store},
     threads::runtime::{Adapters, ParentFactory, Runtime},
     workers::{
         artifacts::SystemJobIo,
@@ -62,7 +62,7 @@ impl Execution {
     /// Target directories/admission remain the responsibility of daemon startup.
     pub fn system(
         config: &Config,
-        store: Store,
+        store: Shared,
         clock: Arc<dyn Clock>,
         host: Host,
     ) -> Result<Self> {
@@ -138,6 +138,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
     mode: Mode,
 ) -> Result<ComposedRuntime<S>> {
     let context = crate::config::LoadContext::current()?;
+    let shared: Shared = Arc::new(store.clone());
     let files: Arc<dyn Downloader> = slack.clone();
     let (adapters, observe_only, parent_factory): (_, _, ParentFactory<ComposedParent>) = match mode
     {
@@ -157,7 +158,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                 bail!("enabled GitHub context requires an API adapter");
             }
             let parent_factory: ParentFactory<ComposedParent> = {
-                let (store, clock, slack) = (store.clone(), clock.clone(), slack.clone());
+                let (store, clock, slack) = (shared.clone(), clock.clone(), slack.clone());
                 let options = execution.parent;
                 let github = execution.github;
                 Arc::new(move |config| {
@@ -191,12 +192,12 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
                 ids: ids.clone(),
                 options: execution.workers,
                 recorder: Arc::new(StoreWireRecorder {
-                    store: store.clone(),
+                    store: shared.clone(),
                     clock: clock.clone(),
                 }),
             };
             let io = ScopedJobIo {
-                store: store.clone(),
+                store: shared.clone(),
                 fetcher: execution.fetcher,
                 artifacts: execution.artifacts,
                 clock: clock.clone(),

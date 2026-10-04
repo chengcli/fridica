@@ -12,7 +12,7 @@ use crate::{
         time::{Clock, Identifiers},
         Authority,
     },
-    store::Store,
+    store::{Shared, Store},
     workers::{
         protocol::{Factory, JobIo},
         supervisor::{Options, Supervisor},
@@ -51,7 +51,11 @@ const ARCHIVE_INTERVAL: f64 = 60.;
 const ARCHIVE_THREADS: usize = 20;
 const ARCHIVE_EVENTS: usize = 1000;
 pub struct Runtime<P: Parent, D: Delivery> {
+    /// The SQLite store, for what is not a unit of work: archiving and
+    /// configuration replacement.
     store: Store,
+    /// The same store as the components see it.
+    shared: Shared,
     snapshot: RwLock<Snapshot<P>>,
     editing: Option<(ParentFactory<P>, LoadContext)>,
     clock: Arc<dyn Clock>,
@@ -89,6 +93,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         observe_only: bool,
     ) -> Result<Self> {
         adapters.workers.validate_config(&config)?;
+        let shared: Shared = Arc::new(store.clone());
         super::configuration::recover_startup(&store, &config, clock.now()).await?;
         let timeout = Duration::try_from_secs_f64(config.parent.timeout)?;
         let now = clock.now();
@@ -102,14 +107,14 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             .transact(move |u| u.backfill_links(now, 7. * 86400.).map(drop))
             .await?;
         let approvals = Arc::new(Broker::new(
-            store.clone(),
+            shared.clone(),
             config.clone(),
             clock.clone(),
             ids.clone(),
             None,
         ));
         let supervisor = Supervisor::new(
-            store.clone(),
+            shared.clone(),
             config.clone(),
             adapters.workers,
             approvals.clone(),
@@ -121,7 +126,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             },
         )?;
         let actor = Arc::new(actor::Actor {
-            store: store.clone(),
+            store: shared.clone(),
             config: Some(config.clone()),
             parent: adapters.parent,
             clock: clock.clone(),
@@ -134,7 +139,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         });
         let manager = Manager::new(actor, config.limits.parent_concurrency)?;
         let dispatcher = Dispatcher {
-            store: store.clone(),
+            store: shared.clone(),
             delivery: adapters.delivery,
             clock: clock.clone(),
             owner: config.owner.slack_user.clone(),
@@ -143,6 +148,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         };
         Ok(Self {
             store,
+            shared,
             snapshot: RwLock::new(Snapshot {
                 config,
                 manager: Arc::new(manager),
@@ -159,8 +165,9 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             archived: std::sync::Mutex::new(f64::NEG_INFINITY),
         })
     }
-    pub fn store(&self) -> Store {
-        self.store.clone()
+    /// The store as the components see it: a unit of work runs through it.
+    pub fn store(&self) -> Shared {
+        self.shared.clone()
     }
     pub fn config(&self) -> Arc<Config> {
         self.snapshot.read().unwrap().config.clone()
@@ -190,7 +197,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("configuration editing is unavailable"))?;
         let actor = Arc::new(actor::Actor {
-            store: self.store.clone(),
+            store: self.shared.clone(),
             config: Some(config.clone()),
             parent: factory(config.clone())?,
             clock: self.clock.clone(),
@@ -355,7 +362,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     /// Bind authenticated Slack envelopes to the same durable store and clock.
     pub fn slack_receiver(&self) -> crate::slack::receiver::Receiver {
         crate::slack::receiver::Receiver::new(
-            self.store.clone(),
+            self.shared.clone(),
             self.config(),
             self.clock.clone(),
             self.ids.clone(),

@@ -1,11 +1,8 @@
 //! Trusted callers supply authority derived from their authenticated capability,
 //! never from a request body's `actor` field. Effects and audit commit together.
-use crate::{
-    core::{Authority, ThreadControl},
-    store::Store,
-};
+use crate::core::{Authority, ThreadControl};
 use anyhow::{bail, Result};
-use fridica_core::store::{ControlState, ResumePoint, Store as _, Unit};
+use fridica_core::store::{ControlState, ResumePoint, Store as Backend, Unit};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +18,7 @@ pub enum Control {
 }
 
 pub async fn apply(
-    store: &Store,
+    store: &impl Backend,
     session: String,
     action: Control,
     actor: Authority,
@@ -44,7 +41,7 @@ pub async fn apply(
 /// A retry with the same client ID returns the original inbox ID without
 /// reopening a subsequently paused thread or executing the instruction twice.
 pub async fn instruct(
-    store: &Store,
+    store: &impl Backend,
     session: String,
     text: String,
     client_id: String,

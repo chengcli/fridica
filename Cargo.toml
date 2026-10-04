@@ -16,8 +16,8 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = "0.3"
-fridica-store-sqlite = "0.1"
+fridica-core = "0.4"
+fridica-store-sqlite = "0.2"
 fridica-agent = "0.3.1"
 fridica-slack = "0.2.3"
 anyhow = "1"
@@ -43,7 +43,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-fridica-store-sqlite = { version = "0.1", features = ["testing"] }
+fridica-store-sqlite = { version = "0.2", features = ["testing"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 fridica-slack = { version = "0.2.3", features = ["testing"] }
 # Tests inspect databases with SQL.

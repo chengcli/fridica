@@ -18,10 +18,22 @@ fn level(name: &str) -> usize {
         _ => panic!("unclassified architecture module: {name}"),
     }
 }
+/// The files that open, migrate or archive the database: the only ones that
+/// may name the SQLite store itself (fridica#128). Components hold
+/// `store::Shared` and run units of work through the storage contract.
+const HOSTS: [&str; 5] = [
+    "src/bin/fridica.rs",
+    "src/daemon/mod.rs",
+    "src/daemon/composition.rs",
+    "src/threads/runtime.rs",
+    "src/threads/configuration.rs",
+];
 struct Check {
     module: String,
     path: PathBuf,
     scope: Vec<String>,
+    /// Inside a `#[cfg(test)]` module, which may open a store of its own.
+    testing: bool,
 }
 impl Check {
     fn dependency(&self, segments: &[String]) {
@@ -54,6 +66,13 @@ impl Check {
             self.module,
             target[0]
         );
+        if target.len() >= 2 && target[0] == "store" && target[1] == "Store" && !self.testing {
+            assert!(
+                HOSTS.iter().any(|host| self.path.ends_with(host)),
+                "the SQLite store is named in {}: components hold store::Shared and reach state through the storage contract (fridica#128); only the host opens, migrates and archives the database",
+                self.path.display()
+            );
+        }
     }
     fn tree(&self, tree: &UseTree, mut prefix: Vec<String>) {
         match tree {
@@ -83,9 +102,17 @@ impl<'a> Visit<'a> for Check {
     fn visit_visibility(&mut self, _: &'a syn::Visibility) {}
     fn visit_item_mod(&mut self, node: &'a syn::ItemMod) {
         if node.content.is_some() {
+            let testing = self.testing;
+            self.testing |= node.attrs.iter().any(|attribute| {
+                attribute.path().is_ident("cfg")
+                    && attribute
+                        .parse_args::<syn::Path>()
+                        .is_ok_and(|p| p.is_ident("test"))
+            });
             self.scope.push(node.ident.to_string());
             visit::visit_item_mod(self, node);
             self.scope.pop();
+            self.testing = testing;
         }
     }
     fn visit_item_use(&mut self, node: &'a syn::ItemUse) {
@@ -181,6 +208,7 @@ fn module_dependencies_only_point_downward_and_ddl_is_centralized() {
             module,
             path: path.clone(),
             scope,
+            testing: false,
         }
         .visit_file(&syntax);
         // The schema lives in fridica-store-sqlite (#117).
@@ -240,6 +268,7 @@ fn relative_imports_cannot_bypass_layers_but_visibility_is_not_an_import() {
                 module: "core".into(),
                 path: "src/core/example.rs".into(),
                 scope: vec!["core".into(), "example".into()],
+                testing: false,
             }
             .visit_file(&syn::parse_file(source).unwrap());
         });
@@ -249,6 +278,46 @@ fn relative_imports_cannot_bypass_layers_but_visibility_is_not_an_import() {
         module: "core".into(),
         path: "src/core/example.rs".into(),
         scope: vec!["core".into(), "example".into()],
+        testing: false,
     }
     .visit_file(&syn::parse_file("pub(crate) fn f() {} use super::time::Clock;").unwrap());
+}
+
+#[test]
+fn only_the_host_names_the_sqlite_store() {
+    let check = |path: &str, source: &str| {
+        std::panic::catch_unwind(|| {
+            Check {
+                module: "threads".into(),
+                path: path.into(),
+                scope: vec!["threads".into(), "example".into()],
+                testing: false,
+            }
+            .visit_file(&syn::parse_file(source).unwrap());
+        })
+    };
+    for source in [
+        "use crate::store::Store;",
+        "use crate::{config::Config, store::Store};",
+        "fn open() { crate::store::Store::open(path); }",
+    ] {
+        assert!(
+            check("src/threads/example.rs", source).is_err(),
+            "a component named the SQLite store: {source}"
+        );
+        assert!(
+            check("src/threads/runtime.rs", source).is_ok(),
+            "the host may name the SQLite store: {source}"
+        );
+    }
+    for source in [
+        "use crate::store::Shared;",
+        "use crate::store::{archive, Shared};",
+        "#[cfg(test)] mod tests { use crate::store::Store; }",
+    ] {
+        assert!(
+            check("src/threads/example.rs", source).is_ok(),
+            "flagged: {source}"
+        );
+    }
 }

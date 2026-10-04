@@ -17,7 +17,7 @@ use crate::{
         worker::{Failure as WorkerFailureKind, WorkerFailure, WorkerRecord},
     },
     slack::socket,
-    store::Store,
+    store::{Shared, Store},
     threads::service::{self, Failure, Lifecycle},
     workers::protocol::{Factory, Worker, WorkerSpec},
 };
@@ -236,19 +236,20 @@ async fn run(
     }
     let config = Arc::new(config);
     let store = Store::open(config.state.path.clone()).await?;
+    let shared: Shared = Arc::new(store.clone());
     let (finished, following) = watch::channel(false);
     let clock = Arc::new(SystemClock);
     let web = Arc::new(crate::slack::web::SlackClient::from(
         crate::slack::web::client(
             &config,
-            store.clone(),
+            shared.clone(),
             clock.clone(),
             credentials.user,
             Duration::from_secs(30),
         )?,
     ));
     let follower = tokio::spawn(log::follow(
-        store.clone(),
+        shared.clone(),
         config.slack.clone(),
         Some(web.clone()),
         following,
@@ -256,7 +257,7 @@ async fn run(
     let mode = if let Some(host) = host {
         composition::Mode::Active(Box::new(composition::Execution::system(
             &config,
-            store.clone(),
+            shared,
             clock.clone(),
             host,
         )?))

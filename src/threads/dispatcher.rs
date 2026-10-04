@@ -5,7 +5,7 @@ use crate::{
         delivery::{Delivery, DeliveryOutcome},
         time::Clock,
     },
-    store::Store,
+    store::Shared,
 };
 use anyhow::{bail, Result};
 use fridica_core::{
@@ -16,7 +16,7 @@ use fridica_core::{
 use std::{path::Path, sync::Arc, time::Duration};
 
 pub struct Dispatcher<D: Delivery> {
-    pub store: Store,
+    pub store: Shared,
     pub delivery: Arc<D>,
     pub clock: Arc<dyn Clock>,
     pub owner: String,

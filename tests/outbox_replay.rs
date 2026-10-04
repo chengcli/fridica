@@ -90,7 +90,7 @@ async fn delivery_replays_frozen_python_outcomes_history_and_order_exactly() {
             }),
         });
         let dispatcher = Dispatcher {
-            store: store.clone(),
+            store: Arc::new(store.clone()),
             delivery: tape.clone(),
             clock: clock.clone(),
             owner: "UOWNER".into(),

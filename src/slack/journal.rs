@@ -1,6 +1,6 @@
 //! Fridica's Slack journal: every boundary that fridica-slack reports goes to
 //! the private replay ledger, with Socket Mode status and identity in `meta`.
-use crate::{core::time::Clock, store::Store};
+use crate::{core::time::Clock, store::Shared};
 use fridica_core::store::{SlackIdentity, Store as _};
 use fridica_slack::{BoxFuture, Identity, Recording, Status};
 use serde_json::{json, Value};
@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct StoreJournal {
-    pub store: Store,
+    pub store: Shared,
     pub clock: Arc<dyn Clock>,
     /// Keep complete Slack bodies (`state.record = "full"`); otherwise they
     /// are summarized (#116).

@@ -11,12 +11,12 @@ use crate::{
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
-    store::Store,
+    store::Shared,
 };
 use anyhow::{bail, Context, Result};
 use fridica_core::store::{
-    Arrival, Fence, NewAsk, ObligationChange, ParentTurn, QueuedHandoff, Settlement, Store as _,
-    TriageSettlement, TurnClose, TurnFailure, TurnInput, TurnRetry,
+    Arrival, Fence, NewAsk, ObligationChange, ParentTurn, QueuedHandoff, Settlement,
+    Store as Backend, TriageSettlement, TurnClose, TurnFailure, TurnInput, TurnRetry,
 };
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -35,7 +35,7 @@ pub enum Step {
 pub struct Actor<P: Parent> {
     /// None supports reply-only operation; delegation requires a validated config.
     pub config: Option<Arc<Config>>,
-    pub store: Store,
+    pub store: Shared,
     pub parent: Arc<P>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn Identifiers>,
@@ -538,7 +538,7 @@ fn rate_limited(calls: &[Value]) -> bool {
         .is_some_and(|call| call["failure"]["code"] == super::failure::RATE_LIMITED)
 }
 
-async fn load(store: &Store, id: i64, session: String) -> Result<ParentRequest> {
+async fn load(store: &impl Backend, id: i64, session: String) -> Result<ParentRequest> {
     store.transact(move|u| {
         let TurnInput{thread:data,kind,reference,payload,message,from_peer,history,obligations,review_required:review}=u.turn_input(&session,id)?;
         let mut trigger=json!({"kind":kind,"ref":reference,"payload":serde_json::from_str::<Value>(&payload)?});
@@ -722,7 +722,7 @@ fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> 
 /// Otherwise a late observation can consume an owner-resumed inbox item, or
 /// resurrect an item which a concurrent clean deliberately dropped.
 pub(super) async fn settle(
-    store: &Store,
+    store: &impl Backend,
     id: i64,
     request: &ParentRequest,
     verdict: String,
@@ -752,7 +752,7 @@ pub(super) async fn settle(
 
 #[allow(clippy::too_many_arguments)]
 async fn commit(
-    store: &Store,
+    store: &impl Backend,
     id: i64,
     session: String,
     request: ParentRequest,
@@ -903,11 +903,16 @@ async fn commit(
 }
 
 /// Startup recovery keeps unsent reservations reusable by the same inbox item.
-pub async fn recover(store: &Store) -> Result<usize> {
+pub async fn recover(store: &impl Backend) -> Result<usize> {
     store.transact(|u| u.recover_turns()).await
 }
 
-async fn current(store: &Store, id: i64, session: &str, request: &ParentRequest) -> Result<bool> {
+async fn current(
+    store: &impl Backend,
+    id: i64,
+    session: &str,
+    request: &ParentRequest,
+) -> Result<bool> {
     let session = session.to_owned();
     let version = request.session["version"].as_i64();
     store
@@ -915,7 +920,7 @@ async fn current(store: &Store, id: i64, session: &str, request: &ParentRequest)
         .await
 }
 async fn settle_triage(
-    store: &Store,
+    store: &impl Backend,
     id: i64,
     session: String,
     request: ParentRequest,
@@ -990,7 +995,9 @@ mod lifecycle_tests {
     async fn stale_observation_or_deferral_cannot_consume_resume_or_undo_clean() {
         for until in [None, Some(100.)] {
             let dir = tempfile::tempdir().unwrap();
-            let store = Store::open(dir.path().join("db")).await.unwrap();
+            let store = crate::store::Store::open(dir.path().join("db"))
+                .await
+                .unwrap();
             let session = "TTEAM:CROOM:100.1".to_owned();
             let id = attention::intake(
                 &store,

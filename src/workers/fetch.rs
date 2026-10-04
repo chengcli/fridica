@@ -8,7 +8,7 @@ use crate::{
     config::registry::valid_fetch_ref,
     core::{delivery::AdapterFuture, time::Clock, worker::*},
     exec::fetch::{Fetched, Fetcher, Request},
-    store::Store,
+    store::Shared,
 };
 use fridica_core::store::Store as _;
 use fridica_slack::files::Downloader;
@@ -73,7 +73,7 @@ pub fn context(job: &Job, fetched: &Fetched) -> String {
 }
 #[derive(Clone)]
 pub struct ScopedJobIo {
-    pub store: Store,
+    pub store: Shared,
     pub fetcher: Arc<dyn Fetcher>,
     pub artifacts: Arc<dyn JobIo>,
     pub clock: Arc<dyn Clock>,
