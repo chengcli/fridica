@@ -13,7 +13,7 @@ fn level(name: &str) -> usize {
         "config" => 1,
         "store" => 2,
         "exec" | "workers" | "machines" | "github" => 3,
-        "attention" | "threads" | "parent" | "slack" | "approvals" | "report" => 4,
+        "attention" | "threads" | "parent" | "slack" | "approvals" => 4,
         "cli" | "control" | "daemon" | "dashboard" | "doctor" | "mcp" | "bin" => 5,
         _ => panic!("unclassified architecture module: {name}"),
     }
@@ -102,6 +102,33 @@ impl<'a> Visit<'a> for Check {
         visit::visit_path(self, node);
     }
 }
+/// SQL and raw database access, as they are written in this codebase
+/// (case-sensitive, so prose does not match).
+const RAW_STORE: [&str; 13] = [
+    "rusqlite",
+    "Sqlite(",
+    ".transaction()",
+    "SELECT ",
+    "INSERT INTO",
+    "INSERT OR ",
+    "REPLACE INTO",
+    "UPDATE ",
+    "DELETE FROM",
+    "CREATE TABLE",
+    "CREATE INDEX",
+    "DROP TABLE",
+    "PRAGMA ",
+];
+/// The first raw database access in `text`, if any. A closure handed to a
+/// `call` is the store's raw connection; `actor.call(&request)` is not.
+fn raw_store(text: &str) -> Option<String> {
+    let call = regex::Regex::new(r"(\.call\(\s*(move\s*)?\||\bstore\s*\.call\()").unwrap();
+    RAW_STORE
+        .iter()
+        .find(|pattern| text.contains(*pattern))
+        .map(|pattern| pattern.to_string())
+        .or_else(|| call.find(text).map(|m| m.as_str().to_owned()))
+}
 fn files(path: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(path).unwrap() {
         let path = entry.unwrap().path();
@@ -119,10 +146,18 @@ fn module_dependencies_only_point_downward_and_ddl_is_centralized() {
     files(&root, &mut paths);
     for path in paths {
         let relative = path.strip_prefix(&root).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        // Fridica reaches its state only through the storage contract; the
+        // store, its SQL and its connection belong to fridica-store-sqlite (#117).
+        if let Some(found) = raw_store(&text) {
+            panic!(
+                "raw database access ({found:?}) in {}: the store belongs to fridica-store-sqlite (#117); use fridica_core::store traits through Store::transact",
+                path.display()
+            );
+        }
         if relative == Path::new("lib.rs") {
             continue;
         }
-        let text = fs::read_to_string(&path).unwrap();
         let module = relative
             .components()
             .next()
@@ -148,7 +183,8 @@ fn module_dependencies_only_point_downward_and_ddl_is_centralized() {
             scope,
         }
         .visit_file(&syntax);
-        if relative != Path::new("store/schema.rs") {
+        // The schema lives in fridica-store-sqlite (#117).
+        {
             for ddl in [
                 "CREATE TABLE",
                 "ALTER TABLE",
@@ -158,11 +194,37 @@ fn module_dependencies_only_point_downward_and_ddl_is_centralized() {
             ] {
                 assert!(
                     !text.contains(ddl),
-                    "DDL outside schema in {}",
+                    "DDL in fridica (the schema belongs to fridica-store-sqlite) in {}",
                     path.display()
                 );
             }
         }
+    }
+}
+
+#[test]
+fn raw_store_access_is_recognised_but_parent_calls_are_not() {
+    for source in [
+        "store.call(move |c| Ok(()))",
+        "self.store\n    .call(|c| Ok(()))",
+        "x.call(move|c| f(c))",
+        "let tx = c.transaction()?;",
+        "Sqlite(&tx).record()",
+        "use rusqlite::Connection;",
+        "\"SELECT id FROM jobs\"",
+        "\"UPDATE jobs SET status='done'\"",
+        "\"DELETE FROM jobs\"",
+        "\"INSERT INTO jobs VALUES (?)\"",
+    ] {
+        assert!(raw_store(source).is_some(), "missed: {source}");
+    }
+    for source in [
+        "let (raw, call) = self.call(&request).await?;",
+        "actor.call(&request)",
+        "// Select the update, then delete it.",
+        "store.transact(move |u| u.record(kind, now, payload, true))",
+    ] {
+        assert_eq!(raw_store(source), None, "flagged: {source}");
     }
 }
 

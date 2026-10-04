@@ -1,1 +1,0 @@
-ALTER TABLE jobs ADD COLUMN fork_from_worker TEXT NOT NULL DEFAULT '';

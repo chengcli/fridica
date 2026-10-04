@@ -421,17 +421,31 @@ fn frozen_python_control_views_preserve_legacy_fields_and_attention_selection() 
     for case in corpus["cases"].as_array().unwrap() {
         let path = case["target"].as_str().unwrap();
         let (parts, query) = target(path).unwrap();
-        let actual = views::get(&db, &f.config, &parts, &query, &processes, false)
-            .unwrap()
-            .unwrap();
+        let actual = views::get(
+            &mut fridica::store::Sqlite(&db),
+            &f.config,
+            &parts,
+            &query,
+            &processes,
+            false,
+        )
+        .unwrap()
+        .unwrap();
         legacy(&actual, &case["expected"], path);
     }
     db.execute("UPDATE jobs SET status='done' WHERE id='job-2'", [])
         .unwrap();
     let (parts, query) = target("/jobs?status=all&limit=4").unwrap();
-    let recent = views::get(&db, &f.config, &parts, &query, &processes, false)
-        .unwrap()
-        .unwrap();
+    let recent = views::get(
+        &mut fridica::store::Sqlite(&db),
+        &f.config,
+        &parts,
+        &query,
+        &processes,
+        false,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(recent.as_array().unwrap().len(), 4);
     assert_eq!(recent[3]["id"], "job-2");
 }

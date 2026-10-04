@@ -7,14 +7,13 @@ use crate::{
         delivery::Post,
         parent::{Debrief, Decision, Discussion, Parent, ParentRequest, ReplyStatus},
     },
-    store::outbox,
 };
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use fridica_core::store::{DebriefOrigin, DebriefPost, DebriefTurn, Store as _, Unit};
 use serde_json::json;
 
 pub(super) fn enqueue(
-    c: &Connection,
+    u: &mut dyn Unit,
     decision: &Decision,
     session: &str,
     inbox: i64,
@@ -26,9 +25,15 @@ pub(super) fn enqueue(
         return Ok(());
     }
     let after = format!("{inbox}:reply");
-    let origin: Option<(i64,i64,String)> = c.query_row("SELECT t.version,t.turns,o.trigger_class FROM threads t JOIN outbox o ON o.session_id=t.id WHERE t.id=? AND t.status='complete' AND o.idem_key=?",params![session,after],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-    if let Some((version, turn, class)) = origin {
-        c.execute("INSERT INTO thread_inbox(session_id,kind,ref,payload_json,created) VALUES(?,'debrief',?,?,?)",params![session,inbox.to_string(),json!({"after":after,"version":version,"turn":turn,"class":class}).to_string(),now])?;
+    if let Some(DebriefOrigin {
+        version,
+        turn,
+        class,
+    }) = u.debrief_origin(session, &after)?
+    {
+        let payload =
+            json!({"after":after,"version":version,"turn":turn,"class":class}).to_string();
+        u.queue_debrief(session, inbox, &payload, now)?;
     }
     Ok(())
 }
@@ -85,30 +90,23 @@ pub(super) async fn handle<P: Parent>(
         .filter(|s| !s.is_empty() && s.chars().count() <= 2500);
     let now = actor.clock.now();
     let owner = actor.owner.clone();
-    actor.store.call(move|c| {
-        let tx=c.transaction()?;
-        let active:bool=tx.query_row("SELECT control='active' AND version=? AND debriefed_turn<? AND EXISTS(SELECT 1 FROM thread_inbox WHERE id=? AND state='processing') FROM threads WHERE id=?",params![request.session["version"].as_i64(),turn,id,session],|r|r.get(0))?;
-        let notes_changed=super::effects::notes(&tx,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
+    actor.store.transact(move|u| {
+        let active=u.debrief_due(&session,request.session["version"].as_i64(),turn,id)?;
+        let notes_changed=super::effects::notes(u,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
         if !active || notes_changed {
-            tx.execute("UPDATE thread_inbox SET state='pending' WHERE id=? AND state='processing'",[id])?;
-            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-            tx.commit()?;
+            u.debrief_stale(id)?;
             return Ok(Step::Stale);
         }
         if let Some(text)=&text {
             let post=Post {idem_key:format!("{id}:debrief"),session_id:session.clone(),kind:"debrief_root".into(),channel:request.session["channel"].as_str().context("missing channel")?.into(),thread_ts:None,text:format!("Debrief: this discussion is finished.\n\n{text}"),meta:Some(json!({"owner":owner,"session":session,"turn":turn,"status":"complete","kind":"debrief_root","worker":"","v":2})),filename:String::new(),blob:None,after:request.trigger["payload"]["after"].as_str().context("missing debrief prerequisite")?.into()};
-            let post_id=outbox::enqueue_tx(&tx,&post,now)?;
-            tx.execute("UPDATE outbox SET trigger_class=? WHERE id=?",params![class,post_id])?;
-            tx.execute("UPDATE reply_reservations SET outbox_id=? WHERE inbox_id=? AND state='reserved'",params![post_id,id])?;
-            tx.execute("UPDATE threads SET debriefed_turn=?,updated=?,version=version+1 WHERE id=?",params![turn,now,session])?;
+            let post_id=u.queue_post(&post,now)?;
+            u.debrief_posted(&DebriefPost{session:session.clone(),inbox:id,post:post_id,class,turn,now})?;
         } else {
-            tx.execute("UPDATE reply_reservations SET state='released' WHERE inbox_id=? AND outbox_id IS NULL",[id])?;
-            tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'system','debrief.unavailable',?,?)",params![now,session,json!({"inbox_id":id}).to_string()])?;
+            u.debrief_unavailable(&session,id,now)?;
         }
-        tx.execute("INSERT INTO parent_turns(session_id,inbox_id,backend,call,action_json,response_json,context_json,created) VALUES(?,?,'adapter','debrief',?,?,?,?)",params![session,id,json!({"debrief":text}).to_string(),call["response"].to_string(),serde_json::to_string(&request)?,now])?;
-        tx.execute("UPDATE thread_inbox SET state='done' WHERE id=?",[id])?;
-        tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('debrief_commit',?,?)",params![now,json!({"inbox_id":id,"request":request,"debrief":text}).to_string()])?;
-        tx.commit()?;
+        u.keep_debrief_turn(&DebriefTurn{session:session.clone(),inbox:id,action:json!({"debrief":text}).to_string(),response:call["response"].to_string(),context:serde_json::to_string(&request)?,created:now})?;
+        u.inbox_done(id)?;
+        u.record("debrief_commit",now,&json!({"inbox_id":id,"request":request,"debrief":text}).to_string(),true)?;
         Ok(Step::Committed)
     }).await
 }

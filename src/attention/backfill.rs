@@ -2,7 +2,7 @@
 //! or startup, and never infer an answer from an unrelated historical post.
 use crate::{config::Config, core::Authority, store::Store};
 use anyhow::{bail, Result};
-use rusqlite::{params, OptionalExtension};
+use fridica_core::store::{Backfill, HistoricalObligation, MentionQuery, Store as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -46,45 +46,35 @@ pub async fn run(
         bail!("invalid historical backfill request");
     }
     let config = config.clone();
-    store.call(move |c| {
-        let tx=c.transaction()?;
+    store.transact(move |u| {
         let identity=json!({"request":request,"workspace":config.slack.workspace,"channels":config.slack.channels,"owner":config.owner.slack_user});
         if request.apply {
-            let prior:Option<String>=tx.query_row("SELECT payload_json FROM replay_events WHERE kind='obligations_backfill' AND json_extract(payload_json,'$.request.client_id')=?",[&request.client_id],|r|r.get(0)).optional()?;
+            let prior=u.backfill_record(&request.client_id)?;
             if let Some(prior)=prior {
                 let prior:Value=serde_json::from_str(&prior)?;
                 if prior["identity"]!=identity {bail!("backfill client ID conflict");}
                 return Ok(prior["result"].clone());
             }
         }
-        let mut candidates=vec![];
-        let mut query=tx.prepare("SELECT m.event_id,t.id,m.workspace,m.channel,m.ts,m.received_at FROM messages m JOIN threads t ON t.workspace=m.workspace AND t.channel=m.channel AND t.root_ts=m.root_ts
-            WHERE m.workspace=? AND m.channel IN (SELECT value FROM json_each(?))
-            AND CAST(m.ts AS REAL)>=? AND CAST(m.ts AS REAL)<? AND m.sender!=? AND m.source!='self'
-            AND instr(m.text,?)>0 AND CAST(m.ts AS REAL)>t.reset_at AND t.control NOT IN ('closed','archived','cleaned')
-            AND NOT EXISTS(SELECT 1 FROM obligations o WHERE o.dedup_key='mention:'||m.workspace||':'||m.channel||':'||m.ts)
-            ORDER BY CAST(m.ts AS REAL),m.event_id LIMIT 1001")?;
-        let selected=query.query_map(params![config.slack.workspace,json!(config.slack.channels).to_string(),request.since,request.until,config.owner.slack_user,format!("<@{}>",config.owner.slack_user)],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,f64>(5)?)))?;
-        for row in selected {candidates.push(row?);}
-        drop(query);
+        let candidates=u.historical_mentions(&MentionQuery{workspace:config.slack.workspace.clone(),channels:json!(config.slack.channels).to_string(),since:request.since,until:request.until,owner:config.owner.slack_user.clone(),mention:format!("<@{}>",config.owner.slack_user)})?;
         if candidates.len()>1000 {bail!("backfill exceeds 1000 mentions; select a narrower time range");}
         let mut items=vec![];
-        for (event,session,workspace,channel,ts,created) in candidates {
-            let key=format!("mention:{workspace}:{channel}:{ts}");
+        let mut obligations=vec![];
+        for mention in candidates {
+            let key=format!("mention:{}:{}:{}",mention.workspace,mention.channel,mention.ts);
             let id=format!("backfill:{key}");
             if request.apply {
-                tx.execute("INSERT INTO obligations(id,session_id,kind,dedup_key,source_json,summary,created,due,state,state_json,updated) VALUES(?,?,'mention',?,?,'Historical mention; answer status requires owner review',?,?,'deferred',?,?)",
-                    params![id,session,key,json!({"event_id":event,"backfill":true,"answer_status":"unknown"}).to_string(),created,now+config.attention.mention_grace,json!({"kind":"deferred","reason":"Explicit historical backfill; prior answer status is unknown","until":now+config.attention.mention_grace}).to_string(),now])?;
-                tx.execute("UPDATE messages SET mentions_owner=1 WHERE event_id=?",[&event])?;
+                obligations.push(HistoricalObligation{id:id.clone(),session:mention.session.clone(),dedup_key:key,event_id:mention.event_id.clone(),
+                    source:json!({"event_id":mention.event_id,"backfill":true,"answer_status":"unknown"}).to_string(),created:mention.received_at,due:now+config.attention.mention_grace,
+                    state:json!({"kind":"deferred","reason":"Explicit historical backfill; prior answer status is unknown","until":now+config.attention.mention_grace}).to_string(),updated:now});
             }
-            items.push(json!({"id":id,"session_id":session,"event_id":event,"timestamp":ts}));
+            items.push(json!({"id":id,"session_id":mention.session,"event_id":mention.event_id,"timestamp":mention.ts}));
         }
         let result=json!({"applied":request.apply,"count":items.len(),"items":items,"answer_status":"unknown","due":if request.apply{Some(now+config.attention.mention_grace)}else{None}});
         if request.apply {
-            tx.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,?,'obligations.backfill',?,?)",params![now,config.owner.slack_user,request.client_id,result.to_string()])?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('obligations_backfill',?,?)",params![now,json!({"request":request,"identity":identity,"result":result}).to_string()])?;
+            u.apply_backfill(&Backfill{obligations,time:now,actor:config.owner.slack_user.clone(),client_id:request.client_id.clone(),result:result.to_string()})?;
+            u.record("obligations_backfill",now,&json!({"request":request,"identity":identity,"result":result}).to_string(),true)?;
         }
-        tx.commit()?;
         Ok(result)
     }).await
 }

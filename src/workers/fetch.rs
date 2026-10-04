@@ -8,8 +8,9 @@ use crate::{
     config::registry::valid_fetch_ref,
     core::{delivery::AdapterFuture, time::Clock, worker::*},
     exec::fetch::{Fetched, Fetcher, Request},
-    store::{fetch, Store},
+    store::Store,
 };
+use fridica_core::store::Store as _;
 use fridica_slack::files::Downloader;
 use serde_json::json;
 use std::sync::Arc;
@@ -86,7 +87,10 @@ impl ScopedJobIo {
         job: Job,
         reply: &mut oneshot::Sender<Result<String, WorkerFailure>>,
     ) -> Result<String, WorkerFailure> {
-        let seq = fetch::begin(&self.store, job.clone(), json!(request), self.clock.now())
+        let (fetched, intent, now) = (job.clone(), json!(request), self.clock.now());
+        let seq = self
+            .store
+            .transact(move |u| u.begin_fetch(&fetched, &intent, now))
             .await
             .map_err(|_| failure(Failure::Execution, "fetch_intent_storage_failed"))?
             .ok_or_else(|| failure(Failure::Cancelled, "fetch_job_not_active"))?;
@@ -98,7 +102,10 @@ impl ScopedJobIo {
             Ok(fetched) => json!(fetched),
             Err(error) => json!({"error":error.code,"kind":error.kind}),
         };
-        let active = fetch::finish(&self.store, job.clone(), seq, recorded, self.clock.now())
+        let (fetched, now) = (job.clone(), self.clock.now());
+        let active = self
+            .store
+            .transact(move |u| u.finish_fetch(&fetched, seq, &recorded, now))
             .await
             .map_err(|_| failure(Failure::Execution, "fetch_completion_storage_failed"))?;
         if active {
@@ -123,11 +130,8 @@ impl ScopedJobIo {
         let wanted = job.files.clone();
         let names: Vec<(String, String)> = self
             .store
-            .call(move |c| {
-                let rows: Vec<String> = c
-                    .prepare("SELECT attachments_json FROM messages WHERE workspace||':'||channel||':'||root_ts=?")?
-                    .query_map([session], |r| r.get(0))?
-                    .collect::<rusqlite::Result<_>>()?;
+            .transact(move |u| {
+                let rows = u.session_attachments(&session)?;
                 let attachments: Vec<serde_json::Value> = rows
                     .iter()
                     .filter_map(|r| serde_json::from_str::<Vec<serde_json::Value>>(r).ok())
@@ -210,11 +214,8 @@ impl ScopedJobIo {
         let now = self.clock.now();
         let payload = json!({"job_id":job.id,"attempt":job.attempt,"result":payload});
         self.store
-            .call(move |c| {
-                c.execute(
-                    "INSERT INTO replay_events(kind,time,payload_json) VALUES('worker_files',?,?)",
-                    rusqlite::params![now, payload.to_string()],
-                )?;
+            .transact(move |u| {
+                u.record("worker_files", now, &payload.to_string(), true)?;
                 Ok(())
             })
             .await

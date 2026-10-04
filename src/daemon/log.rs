@@ -7,9 +7,10 @@ use crate::{
     slack::names::{self, Names, UserNames},
     store::Store,
 };
-use rusqlite::{Connection, OptionalExtension};
+use fridica_core::store::{Event, Store as _, Unit};
 use serde_json::Value;
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::Duration,
@@ -41,27 +42,18 @@ pub async fn follow(
         return;
     }
     let mut attempted: BTreeMap<String, std::time::Instant> = BTreeMap::new();
-    let mut seq: i64 = store
-        .call(|c| {
-            Ok(
-                c.query_row("SELECT COALESCE(MAX(seq),0) FROM replay_events", [], |r| {
-                    r.get(0)
-                })?,
-            )
-        })
-        .await
-        .unwrap_or(0);
+    let mut seq: i64 = store.transact(|u| u.last_seq()).await.unwrap_or(0);
     loop {
         let done = *finished.borrow();
         let after = seq;
         let scope = slack.clone();
         let names: Names = store
-            .call(move |c| Ok(Names::load(c, &scope)?))
+            .transact(move |u| Names::recorded(u, &scope))
             .await
             .unwrap_or_default();
         if let Some(lookup) = &lookup {
             let unknown: Vec<String> = store
-                .call(move |c| unknown_senders(c, after))
+                .transact(move |u| unknown_senders(u, after))
                 .await
                 .unwrap_or_default();
             let retry = Duration::from_secs(600);
@@ -76,14 +68,14 @@ pub async fn follow(
                 if let Some(name) = lookup.user_name(&sender).await {
                     let (id, recorded) = (sender.clone(), name.clone());
                     let _ = store
-                        .call(move |c| Ok(names::record_user(c, &id, &recorded)?))
+                        .transact(move |u| names::record_user(u, &id, &recorded))
                         .await;
                 }
             }
             attempted.retain(|_, at| at.elapsed() < retry);
         }
         let slack = slack.clone();
-        if let Ok((last, lines)) = store.call(move |c| read(c, &slack, after)).await {
+        if let Ok((last, lines)) = store.transact(move |u| read(u, &slack, after)).await {
             seq = last;
             for (level, name, message) in lines {
                 line(level, name, &message);
@@ -102,12 +94,8 @@ pub async fn follow(
 type Line = (&'static str, &'static str, String);
 
 /// Senders of messages taken in after `after`, at most a handful per pass.
-fn unknown_senders(c: &mut Connection, after: i64) -> anyhow::Result<Vec<String>> {
-    let rows: Vec<String> = c
-        .prepare("SELECT json_extract(payload_json,'$.message.sender') FROM replay_events WHERE seq>? AND kind='intake' ORDER BY seq LIMIT 500")?
-        .query_map([after], |r| r.get::<_, Option<String>>(0))?
-        .filter_map(|r| r.ok().flatten())
-        .collect();
+fn unknown_senders(u: &mut dyn Unit, after: i64) -> anyhow::Result<Vec<String>> {
+    let rows = u.intake_senders_after(after)?;
     let mut seen = BTreeSet::new();
     Ok(rows
         .into_iter()
@@ -116,28 +104,26 @@ fn unknown_senders(c: &mut Connection, after: i64) -> anyhow::Result<Vec<String>
         .collect())
 }
 
-fn read(c: &mut Connection, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
-    let names = Names::load(c, slack)?;
-    let rows: Vec<(i64, String, String)> = c
-        .prepare(
-            "SELECT seq,kind,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT 500",
-        )?
-        .query_map([after], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<rusqlite::Result<_>>()?;
+fn read(u: &mut dyn Unit, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec<Line>)> {
+    let names = Names::recorded(u, slack)?;
+    let rows = u.events_after(after, 500)?;
+    let u = RefCell::new(u);
     let mut last = after;
     let mut lines = vec![];
-    for (seq, kind, payload) in rows {
+    for Event {
+        seq, kind, payload, ..
+    } in rows
+    {
         last = seq;
         let Ok(payload) = serde_json::from_str::<Value>(&payload) else {
             continue;
         };
         let post = |id: i64| {
-            c.query_row("SELECT kind,session_id FROM outbox WHERE id=?", [id], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .optional()
-            .ok()
-            .flatten()
+            u.borrow_mut()
+                .outbox_post(id)
+                .ok()
+                .flatten()
+                .map(|p| (p.kind, p.session))
         };
         if let Some(line) = describe(&post, &names, &kind, &payload) {
             lines.push(line);

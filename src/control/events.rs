@@ -4,8 +4,9 @@
 //! watcher project to nothing while the cursor still moves past them.
 use crate::{core::ids::ThreadId, slack::names::Names};
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension};
+use fridica_core::store::{Event, Unit};
 use serde_json::{json, Map, Value};
+use std::cell::RefCell;
 
 /// The schema version of every object this feed emits. Fields are only added
 /// within a version; a removal or rename bumps it.
@@ -241,51 +242,28 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
 /// The feed after `after`: at most `limit` ledger records are scanned, and
 /// `next` is the last one scanned (or `after` when there was none), so a
 /// client that resumes from `next` never sees a record twice.
-pub fn read(c: &Connection, names: &Names, after: i64, limit: usize) -> Result<Value> {
+pub fn read(u: &mut dyn Unit, names: &Names, after: i64, limit: usize) -> Result<Value> {
     let limit = limit.clamp(1, MAX_LIMIT);
-    let rows: Vec<(i64, String, f64, String)> = c
-        .prepare(
-            "SELECT seq,kind,time,payload_json FROM replay_events WHERE seq>? ORDER BY seq LIMIT ?",
-        )?
-        .query_map(rusqlite::params![after, limit as i64], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+    let rows = u.events_after(after, limit)?;
+    let u = RefCell::new(u);
     let post = |id: i64| {
-        c.query_row("SELECT kind,session_id FROM outbox WHERE id=?", [id], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
-        .optional()
-        .ok()
-        .flatten()
-    };
-    let job = |id: &str| {
-        c.query_row("SELECT session_id FROM jobs WHERE id=?", [id], |r| r.get(0))
-            .optional()
+        u.borrow_mut()
+            .outbox_post(id)
             .ok()
             .flatten()
+            .map(|p| (p.kind, p.session))
     };
+    let job = |id: &str| u.borrow_mut().job_session(id).ok().flatten();
     // The message row keeps its first arrival time; a repeat at the very same
     // time is found among the few records just before this one.
     let first = |event: &str, seq: i64, time: f64| {
-        let stored: Option<f64> = c
-            .query_row(
-                "SELECT received_at FROM messages WHERE event_id=?",
-                [event],
-                |r| r.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten();
+        let stored = u.borrow_mut().message_received_at(event).ok().flatten();
         match stored {
             None => true,
             Some(stored) if stored != time => false,
-            Some(_) => !c
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM replay_events WHERE kind='intake' AND seq<?1 AND seq>=?1-1000 AND time=?2 AND json_extract(payload_json,'$.message.event_id')=?3)",
-                    rusqlite::params![seq, time, event],
-                    |r| r.get::<_, bool>(0),
-                )
+            Some(_) => !u
+                .borrow_mut()
+                .has_recent_intake(event, seq, time)
                 .unwrap_or(false),
         }
     };
@@ -298,7 +276,14 @@ pub fn read(c: &Connection, names: &Names, after: i64, limit: usize) -> Result<V
     let mut next = after;
     let mut events = vec![];
     let scanned = rows.len();
-    for (seq, kind, time, payload) in rows {
+    for Event {
+        seq,
+        kind,
+        time,
+        payload,
+        ..
+    } in rows
+    {
         next = seq;
         let Ok(payload) = serde_json::from_str::<Value>(&payload) else {
             continue;
@@ -312,12 +297,8 @@ pub fn read(c: &Connection, names: &Names, after: i64, limit: usize) -> Result<V
     Ok(json!({"v":VERSION,"events":events,"next":next,"scanned":scanned}))
 }
 /// Where the ledger ends now: the cursor a new follower starts from.
-pub fn end(c: &Connection) -> Result<i64> {
-    Ok(
-        c.query_row("SELECT COALESCE(MAX(seq),0) FROM replay_events", [], |r| {
-            r.get(0)
-        })?,
-    )
+pub fn end(u: &mut dyn Unit) -> Result<i64> {
+    u.last_seq()
 }
 
 #[cfg(test)]

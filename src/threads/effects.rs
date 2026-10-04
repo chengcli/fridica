@@ -1,7 +1,7 @@
 //! Bounded parent edits to thread memory. No model field grants authority.
 use crate::core::parent::{Decision, ReplyStatus};
 use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use fridica_core::store::Unit;
 use serde_json::{json, Value};
 
 fn bounded(value: &mut String, limit: usize) -> Result<()> {
@@ -41,37 +41,29 @@ pub(super) fn validate(decision: &mut Decision) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn notes(c: &Connection, session: &str) -> Result<(i64, Value)> {
-    let row: Option<(i64, String)> = c.query_row("SELECT revision,data_json FROM notes WHERE session_id=? ORDER BY revision DESC LIMIT 1", [session], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
-    match row {
+pub(super) fn notes(u: &mut dyn Unit, session: &str) -> Result<(i64, Value)> {
+    match u.latest_notes(session)? {
         Some((revision, raw)) => Ok((revision, serde_json::from_str(&raw)?)),
         None => Ok((0, json!({}))),
     }
 }
 
 pub(super) fn commit(
-    c: &Connection,
+    u: &mut dyn Unit,
     decision: &Decision,
     session: &str,
     inbox: i64,
     now: f64,
 ) -> Result<()> {
-    let raw: String = c.query_row(
-        "SELECT decisions_json FROM threads WHERE id=?",
-        [session],
-        |r| r.get(0),
-    )?;
+    let raw = u.thread_decisions(session)?;
     let mut decisions: Vec<String> = serde_json::from_str(&raw)?;
     decisions.extend(decision.decisions.iter().cloned());
     if decisions.len() > 20 {
         decisions.drain(..decisions.len() - 20);
     }
-    c.execute(
-        "UPDATE threads SET decisions_json=? WHERE id=?",
-        params![serde_json::to_string(&decisions)?, session],
-    )?;
+    u.keep_decisions(session, &serde_json::to_string(&decisions)?)?;
 
-    let (revision, mut data) = notes(c, session)?;
+    let (revision, mut data) = notes(u, session)?;
     let original = data.clone();
     let fields = data
         .as_object_mut()
@@ -80,11 +72,7 @@ pub(super) fn commit(
         .reply
         .as_ref()
         .is_some_and(|r| matches!(r.status, ReplyStatus::Blocked));
-    let posted: bool = c.query_row(
-        "SELECT EXISTS(SELECT 1 FROM outbox WHERE session_id=? AND idem_key=?)",
-        params![session, format!("{inbox}:reply")],
-        |r| r.get(0),
-    )?;
+    let posted = u.post_queued(session, &format!("{inbox}:reply"))?;
     if blocked && posted {
         for key in ["blocker", "assignee", "next_step"] {
             fields.insert(key.into(), json!(""));
@@ -102,8 +90,7 @@ pub(super) fn commit(
     }
     if data != original {
         let revision = revision.checked_add(1).context("note revision overflow")?;
-        c.execute("INSERT INTO notes(session_id,revision,actor,data_json,source,created) VALUES(?,?,'parent',?,?,?)",params![session,revision,data.to_string(),inbox.to_string(),now])?;
-        c.execute("INSERT INTO audit(time,actor,action,target,details_json) VALUES(?,'parent','notes.write',?,?)",params![now,session,json!({"revision":revision,"inbox_id":inbox}).to_string()])?;
+        u.write_parent_notes(session, revision, &data.to_string(), inbox, now)?;
     }
     Ok(())
 }

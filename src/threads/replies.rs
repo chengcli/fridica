@@ -3,22 +3,15 @@
 //! because a follow-up arrived.
 use crate::core::{parent::ParentRequest, policy};
 use anyhow::Result;
-use rusqlite::{Connection, OptionalExtension};
+use fridica_core::store::{LastReply, Unit};
 use serde_json::{json, Value};
 
 pub(super) fn repeat_evidence(
-    c: &Connection,
+    u: &mut dyn Unit,
     request: &ParentRequest,
     owner: &str,
 ) -> Result<Value> {
-    let last: Option<(i64, String, String)> = c.query_row(
-        "SELECT o.id,o.state,COALESCE(m.sender,'') FROM outbox o
-         LEFT JOIN thread_inbox i ON i.session_id=o.session_id AND o.idem_key=CAST(i.id AS TEXT)||':reply' AND i.kind='message'
-         LEFT JOIN messages m ON m.event_id=CASE WHEN o.trigger_event!='' THEN o.trigger_event ELSE i.ref END
-         WHERE o.session_id=? AND o.kind='reply' ORDER BY o.id DESC LIMIT 1",
-        [request.session["id"].as_str().unwrap_or("")],
-        |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-    ).optional()?;
+    let last = u.last_reply(request.session["id"].as_str().unwrap_or(""))?;
     let message = &request.trigger["message"];
     let text = message["text"].as_str().unwrap_or("");
     let sender = message["sender"].as_str().unwrap_or("");
@@ -36,15 +29,11 @@ pub(super) fn repeat_evidence(
         (true, "addressed or explicit repost")
     } else if last.is_none() {
         (true, "no previous reply")
-    } else if last.as_ref().is_some_and(|(_, state, _)| state == "failed") {
+    } else if last.as_ref().is_some_and(|r| r.state == "failed") {
         (true, "previous reply definitely failed")
     } else if !message["meta"].is_null() {
         (false, "peer follow-up")
-    } else if !sender.is_empty()
-        && last
-            .as_ref()
-            .is_some_and(|(_, _, answered)| sender != answered)
-    {
+    } else if !sender.is_empty() && last.as_ref().is_some_and(|r| sender != r.requester) {
         (true, "different requester")
     } else if text.contains('?') {
         (true, "new question")
@@ -52,7 +41,7 @@ pub(super) fn repeat_evidence(
         (false, "same requester without a new ask")
     };
     Ok(
-        json!({"allowed":allowed,"reason":reason,"previous":last.map(|(id,state,sender)|json!({"id":id,"state":state,"requester":sender}))}),
+        json!({"allowed":allowed,"reason":reason,"previous":last.map(|LastReply{id,state,requester}|json!({"id":id,"state":state,"requester":requester}))}),
     )
 }
 
@@ -60,15 +49,14 @@ pub(super) fn repeat_evidence(
 const INLINE_DETAILS: usize = 1500;
 
 pub(super) fn render(
-    c: &Connection,
+    u: &mut dyn Unit,
     request: &ParentRequest,
     owner: &str,
     reply: &mut crate::core::parent::Reply,
     limit: usize,
 ) -> Result<()> {
     let session = request.session["id"].as_str().unwrap_or("");
-    let messages: Vec<(String,String)> = c.prepare("SELECT sender,text FROM messages WHERE workspace||':'||channel||':'||root_ts=? ORDER BY CAST(ts AS REAL) DESC LIMIT 100")?
-        .query_map([session],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let messages = u.latest_messages(session)?;
     let people = crate::core::render::participants(owner, messages);
     let requester = if request.trigger["kind"] == "owner_instruction"
         || request.trigger["origin"]["class"] == "owner"
@@ -77,7 +65,7 @@ pub(super) fn render(
     } else if let Some(sender) = request.trigger["message"]["sender"].as_str() {
         sender.to_owned()
     } else if let Some(event) = request.trigger["origin"]["event_id"].as_str() {
-        c.query_row("SELECT sender FROM messages WHERE event_id=? AND workspace||':'||channel||':'||root_ts=?",[event,session],|r|r.get(0)).optional()?.unwrap_or_default()
+        u.message_sender(event, session)?.unwrap_or_default()
     } else {
         String::new()
     };

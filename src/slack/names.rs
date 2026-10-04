@@ -7,8 +7,9 @@ use crate::{
     config::schema::Slack,
     core::ids::{ChannelId, SlackTs, ThreadId, WorkspaceId},
 };
+use anyhow::Result;
+use fridica_core::store::SlackNames;
 use fridica_slack::BoxFuture;
-use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeMap;
 
 /// Recorded member names are bounded; past this, a new name replaces none.
@@ -35,36 +36,32 @@ impl UserNames for super::web::SlackClient {
     }
 }
 /// Keep a member's name for later output.
-pub fn record_user(c: &Connection, user: &str, name: &str) -> rusqlite::Result<()> {
-    let mut users: BTreeMap<String, String> = meta(c, "slack_user_names")?
+pub fn record_user(u: &mut (impl SlackNames + ?Sized), user: &str, name: &str) -> Result<()> {
+    let mut users: BTreeMap<String, String> = u
+        .user_names()?
         .and_then(|v| serde_json::from_str(&v).ok())
         .unwrap_or_default();
     if users.len() >= USER_LIMIT && !users.contains_key(user) {
         return Ok(());
     }
     users.insert(user.into(), name.into());
-    c.execute(
-        "INSERT INTO meta VALUES('slack_user_names',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [serde_json::to_string(&users).unwrap_or_default()],
-    )?;
-    Ok(())
-}
-
-fn meta(c: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    c.query_row("SELECT value FROM meta WHERE key=?", [key], |r| r.get(0))
-        .optional()
+    u.keep_user_names(&serde_json::to_string(&users).unwrap_or_default())
 }
 
 impl Names {
-    pub fn load(c: &Connection, slack: &Slack) -> rusqlite::Result<Self> {
+    /// The recorded names of `slack`'s workspace.
+    pub fn recorded(u: &mut (impl SlackNames + ?Sized), slack: &Slack) -> Result<Self> {
+        let recorded = u.slack_names()?;
         Ok(Self {
             workspace: slack.workspace.clone(),
             configured: slack.channels.clone(),
-            workspace_name: meta(c, "slack_workspace_name")?.unwrap_or_default(),
-            channels: meta(c, "slack_channel_names")?
+            workspace_name: recorded.workspace.unwrap_or_default(),
+            channels: recorded
+                .channels
                 .and_then(|v| serde_json::from_str(&v).ok())
                 .unwrap_or_default(),
-            users: meta(c, "slack_user_names")?
+            users: recorded
+                .users
                 .and_then(|v| serde_json::from_str(&v).ok())
                 .unwrap_or_default(),
         })

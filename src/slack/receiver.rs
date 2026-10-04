@@ -8,9 +8,9 @@ use crate::{
     store::Store,
 };
 use anyhow::{bail, Result};
+use fridica_core::store::Store as _;
 pub use fridica_slack::Acknowledgement;
 use fridica_slack::{socket::Refused, BoxFuture, Intake};
-use rusqlite::params;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -73,17 +73,14 @@ impl Receiver {
         } else {
             json!({"envelope_id":id,"type":kind,"ignored":true})
         };
-        self.store.call(move |c| {
-            let tx = c.transaction()?;
-            tx.execute("INSERT INTO replay_events(kind,time,payload_json) VALUES('slack_envelope',?,?)",params![now,record.to_string()])?;
+        self.store.transact(move |u| {
+            u.record("slack_envelope",now,&record.to_string(),true)?;
             if let Some(message) = message {
-                attention::intake_tx(&tx,message,&config.owner.slack_user,now,config.attention.mention_grace,&obligation,None)?;
+                attention::intake_tx(u,message,&config.owner.slack_user,now,config.attention.mention_grace,&obligation,None)?;
             }
             if dropped {
-                tx.execute("INSERT INTO health_events(kind,details_json,created) VALUES('slack_dropped_mention',?,?)",
-                    params![json!({"event_id":record["envelope"]["payload"]["event_id"],"reason":"unsupported_message"}).to_string(),now])?;
+                u.note("slack_dropped_mention",&json!({"event_id":record["envelope"]["payload"]["event_id"],"reason":"unsupported_message"}).to_string(),now)?;
             }
-            tx.commit()?;
             Ok(())
         }).await?;
         Ok(Some(Acknowledgement { envelope_id: id }))
