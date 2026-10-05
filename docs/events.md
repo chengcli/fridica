@@ -112,7 +112,7 @@ same `cursor`
   `job_status` (`finished` when the worker returned a result, whatever status
   that result reports; `failed`; or `interrupted`, including a stopped
   worker's), `result` (the worker's result: `status`, `summary`, `report`,
-  `stance`, …; `null` unless finished) and `code` (the failure, or `null`).
+  `annotations` when the worker was asked for some, …; `null` unless finished) and `code` (the failure, or `null`).
   A driver reads results here without joining `GET /threads/<id>`. A queued job
   cancelled before it ran has no completion, so no `job_result`.
 
