@@ -434,7 +434,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -524,7 +524,8 @@ dependencies = [
 [[package]]
 name = "fridica-core"
 version = "0.5.1"
-source = "git+https://github.com/chengcli/fridica-core?rev=cbecbed09d723f075d670f1b1f8b2bce3cfa7204#cbecbed09d723f075d670f1b1f8b2bce3cfa7204"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba79ff075cb10f46924267d0911eb0a036fa22d99d279e1aba539a105eaad24e"
 dependencies = [
  "anyhow",
  "regex",
@@ -554,7 +555,7 @@ dependencies = [
 [[package]]
 name = "fridica-store-sqlite"
 version = "0.3.0"
-source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=cba700535ea6bdac0388dc68e5adbd9213243866#cba700535ea6bdac0388dc68e5adbd9213243866"
+source = "git+https://github.com/chengcli/fridica-store-sqlite?rev=385869a02d97a0955b732bf4cb7352d018a12a88#385869a02d97a0955b732bf4cb7352d018a12a88"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1307,7 +1308,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1520,7 +1521,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1843,10 +1844,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
