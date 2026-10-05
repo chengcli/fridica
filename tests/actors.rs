@@ -1334,3 +1334,141 @@ async fn a_rewrite_of_a_refused_reply_answers_the_asks_the_refused_one_did() {
         "answered"
     );
 }
+
+/// An externally driven thread (fridica#130): a worker result and a peer's
+/// study post are settled with no parent call and no post, and the event
+/// feed carries them to the driver as `job_result` and `peer_post`; a human
+/// addressing the owner still gets a parent turn, told who drives.
+#[tokio::test]
+async fn external_threads_settle_results_and_study_posts_for_the_driver() {
+    use fridica::{control::events, slack::names::Names};
+    use fridica_core::store::Store as _;
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(dir.path().join("db")).await.unwrap();
+    // A peer's study claim opens the thread.
+    attention::intake(
+        &s,
+        Message {
+            files: vec![],
+            event_id: "claim".into(),
+            workspace: "TTEAM".into(),
+            channel: "CROOM".into(),
+            ts: "100.1".into(),
+            thread_ts: None,
+            sender: "UPEER".into(),
+            text: "Claim (iteration 1): spectral\napproach: spectral".into(),
+            source: "socket".into(),
+            meta: Some(json!({"v":2,"owner":"UPEER","session":"x","turn":0,"status":"complete","kind":"study_claim","worker":""})),
+            attachments: vec![],
+        },
+        "UOWNER".into(),
+        10.,
+        900.,
+        "o-claim".into(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // The driver's delegate: a worker, its finished job and the completion
+    // the supervisor records.
+    s.transact(|u| {
+        assert!(u.set_thread_driver(SESSION, "external", r#"{"kind":"owner"}"#, 11.)?);
+        u.add_workers(
+            &serde_json::from_value::<Vec<_>>(json!([{"id":"worker-1","session_id":SESSION,
+                "machine":"local","workspace":"project","backend":"codex","role":"explorer","ephemeral":true}]))?,
+            11.,
+        )?;
+        u.queue_jobs(
+            &serde_json::from_value::<Vec<_>>(json!([{"id":"job-1","worker_id":"worker-1",
+                "session_id":SESSION,"brief":"ref: t/g1/i1/Explore/a1/explorer\nExplore.",
+                "join_group":"group-1","tags":["t/g1/i1/Explore/a1/explorer"],"context":"fresh"}]))?,
+            11.,
+        )?;
+        u.record("worker_completion", 12., &json!({"job_id":"job-1","attempt":1,"completion":{"interrupted":false,"stopped":false,"allow_retry":false,"artifacts":[],
+            "outcome":{"Ok":{"result":{"status":"done","summary":"Two approaches","report":"## Approaches\n- spectral: a"},"backend_session_id":"b"}}}}).to_string(), true)?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    s.call(|c| {
+        c.execute("UPDATE jobs SET status='done',attempt=1,result_json='{\"status\":\"done\",\"summary\":\"Two approaches\",\"report\":\"r\"}' WHERE id='job-1'",[])?;
+        c.execute("INSERT INTO thread_inbox(session_id,kind,ref,created,dedup_key) VALUES(?,'worker_result','job-1',12,'worker-result:job-1')",[SESSION])?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let p = Arc::new(Script::new(vec![]));
+    let a = actor(&s, p.clone());
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Observed);
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Observed);
+    assert_eq!(a.step(SESSION.into()).await.unwrap(), Step::Idle);
+    assert!(p.requests.lock().unwrap().is_empty(), "no parent turn");
+    assert_eq!(
+        scalar(&s, "SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT CAST(reported AS TEXT) FROM jobs").await,
+        "1"
+    );
+    assert_eq!(
+        scalar(&s, "SELECT group_concat(state) FROM thread_inbox").await,
+        "done,done"
+    );
+    assert!(scalar(
+        &s,
+        "SELECT group_concat(verdict) FROM messages WHERE verdict!=''"
+    )
+    .await
+    .contains("observe: external driver"));
+    let feed = s
+        .transact(|u| events::read(u, &Names::default(), 0, 1000))
+        .await
+        .unwrap();
+    let kinds: Vec<&str> = feed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["message", "peer_post", "job", "job_result"]);
+    let peer = &feed["events"][1];
+    assert_eq!(
+        (
+            peer["owner"].as_str(),
+            peer["meta"]["kind"].as_str(),
+            peer["thread"].as_str()
+        ),
+        (Some("UPEER"), Some("study_claim"), Some("100.1"))
+    );
+    let result = &feed["events"][3];
+    assert_eq!(
+        (
+            result["join_group"].as_str(),
+            result["worker_id"].as_str(),
+            result["role"].as_str(),
+            result["job_status"].as_str(),
+            result["result"]["summary"].as_str()
+        ),
+        (
+            Some("group-1"),
+            Some("worker-1"),
+            Some("explorer"),
+            Some("finished"),
+            Some("Two approaches")
+        )
+    );
+    // A human addressing the owner still gets a parent turn; its request
+    // says the thread is driven externally.
+    intake(&s, 5).await;
+    let p = Arc::new(Script::new(vec![
+        json!({"reply":{"text":"The study runs on its own.","status":"complete","answers":["o5"]}}),
+    ]));
+    assert_eq!(
+        actor(&s, p.clone()).step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    let requests = p.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].session["driver"], "external");
+}

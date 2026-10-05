@@ -295,6 +295,53 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             self.supervisor.interrupt(id).await
         }
     }
+    /// Start a driver's delegation in a thread (fridica#130). Refusals are
+    /// answers, not errors.
+    pub async fn delegate(
+        &self,
+        session: String,
+        request: super::external::DelegateRequest,
+        authority: Authority,
+    ) -> Result<std::result::Result<serde_json::Value, super::external::Refusal>> {
+        if authority != Authority::Owner {
+            bail!("delegation requires owner authentication");
+        }
+        if self.observe_only() {
+            return Ok(Err((409, "observe_only")));
+        }
+        super::external::delegate(
+            &self.shared,
+            self.config(),
+            self.ids.clone(),
+            session,
+            request,
+            self.clock.now(),
+        )
+        .await
+    }
+    /// Queue a driver's post (fridica#130). Refusals are answers, not errors.
+    pub async fn external_post(
+        &self,
+        target: super::external::Target,
+        request: super::external::PostRequest,
+        authority: Authority,
+    ) -> Result<std::result::Result<serde_json::Value, super::external::Refusal>> {
+        if authority != Authority::Owner {
+            bail!("posting requires owner authentication");
+        }
+        if self.observe_only() {
+            return Ok(Err((409, "observe_only")));
+        }
+        super::external::post(
+            &self.shared,
+            self.config(),
+            self.ids.clone(),
+            target,
+            request,
+            self.clock.now(),
+        )
+        .await
+    }
     pub async fn processes(&self) -> std::collections::BTreeMap<String, String> {
         self.supervisor.processes().await
     }

@@ -670,6 +670,52 @@ async fn frozen_cli_commands_preserve_requests_and_authenticated_identity() {
     server.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn the_driver_command_sets_who_drives_a_thread() {
+    let f = Fixture::new();
+    let echo = Arc::new(Echo::default());
+    let server = f
+        .bind(echo.clone(), Access::OwnerPeer, Options::default())
+        .await;
+    let socket = f.config.state.control_socket.to_str().unwrap().to_owned();
+    let run = |values: &[&str]| {
+        let mut args: Vec<String> = values.iter().map(|v| (*v).into()).collect();
+        args.extend(["--socket".into(), socket.clone()]);
+        bounded_cli(args)
+    };
+    for driver in ["external", "parent"] {
+        let out = run(&["threads", "TTEAM:CROOM:100.1", "driver", driver]).await;
+        assert_eq!(
+            out.returncode,
+            0,
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let request: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(
+            (&request["method"], &request["target"], &request["body"]),
+            (
+                &json!("POST"),
+                &json!("/threads/TTEAM:CROOM:100.1/driver"),
+                &json!({"driver":driver})
+            )
+        );
+        assert_eq!(request["authority"]["kind"], "owner");
+    }
+    // A driver needs its value, only `driver` takes one, and only these two.
+    for invalid in [
+        vec!["threads", "t", "driver"],
+        vec!["threads", "t", "pause", "external"],
+        vec!["threads", "t", "driver", "robot"],
+    ] {
+        let out = run(&invalid).await;
+        assert_ne!(out.returncode, 0, "{invalid:?}");
+        assert!(out.stdout.is_empty());
+    }
+    assert_eq!(echo.calls.load(Ordering::SeqCst), 2);
+    server.close().await.unwrap();
+}
+
 struct Reject;
 impl Backend for Reject {
     fn request(&self, _: Request, _: Authority) -> AdapterFuture<'_, Response> {

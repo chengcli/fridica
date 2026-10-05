@@ -7,6 +7,7 @@ pub mod manager;
 mod debrief;
 use fridica_core::delegation;
 mod effects;
+pub mod external;
 mod linked;
 mod progress;
 use fridica_core::failure;

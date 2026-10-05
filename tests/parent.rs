@@ -460,6 +460,25 @@ fn owner_prompt_inputs_reload_and_schema_matches_the_implemented_actions() {
         .unwrap()
         .0
         .contains("Rule A"));
+    // The decision schema offers exactly the roles a delegation accepts (#131).
+    let schema = parent::prompts::build(&config, &request("decide"))
+        .unwrap()
+        .1;
+    let roles = &schema["properties"]["delegations"]["items"]["properties"]["role"]["enum"];
+    // An empty role means `general`.
+    let accepted: Vec<&str> = ["", "general"]
+        .into_iter()
+        .chain(
+            fridica::config::roles::worker_roles()
+                .iter()
+                .map(String::as_str),
+        )
+        .collect();
+    assert_eq!(roles, &json!(accepted));
+    assert_eq!(
+        roles,
+        &json!(["", "general", "implementer", "reviewer", "tester"])
+    );
     std::fs::write(&rules, "## Participation\nTriage B\n## Replies\nRule B").unwrap();
     assert!(parent::prompts::build(&config, &request("triage"))
         .unwrap()

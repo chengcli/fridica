@@ -9,8 +9,13 @@ use crate::{
         Authority,
     },
     slack::names::Names,
-    threads::{controls::Control, runtime::Runtime},
+    threads::{
+        controls::Control,
+        external::{DelegateRequest, PostRequest, Refusal, Target},
+        runtime::Runtime,
+    },
 };
+use fridica_core::fork::ContextMode;
 use fridica_core::store::{MessageFiles, Store as _};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
@@ -434,6 +439,123 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     Err(error) => operation_error(error),
                 }
             }
+            ["threads", id, "delegate"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                let request = match delegate_body(&body) {
+                    Ok(request) => request,
+                    Err(code) => return Response::error(400, code),
+                };
+                answer(
+                    self.runtime
+                        .delegate(id.to_string(), request, authority)
+                        .await,
+                )
+            }
+            ["threads", id, "post"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                let request = match post_body(&body, false) {
+                    Ok(request) => request,
+                    Err(code) => return Response::error(400, code),
+                };
+                answer(
+                    self.runtime
+                        .external_post(Target::Thread(id.to_string()), request, authority)
+                        .await,
+                )
+            }
+            ["channels", channel, "post"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                let request = match post_body(&body, true) {
+                    Ok(request) => request,
+                    Err(code) => return Response::error(400, code),
+                };
+                answer(
+                    self.runtime
+                        .external_post(Target::Channel(channel.to_string()), request, authority)
+                        .await,
+                )
+            }
+            ["threads", id, "driver"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                if body
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .any(|k| !["actor", "driver"].contains(&k.as_str()))
+                {
+                    return Response::error(400, "unknown_body_field");
+                }
+                let Some(driver) = body["driver"]
+                    .as_str()
+                    .filter(|d| matches!(*d, "parent" | "external"))
+                    .map(str::to_owned)
+                else {
+                    return Response::error(400, "invalid_driver");
+                };
+                let (session, actor, value) =
+                    (id.to_string(), json!(authority).to_string(), driver.clone());
+                match store
+                    .transact(move |u| {
+                        if !u.thread_exists(&session)? {
+                            return Ok(None);
+                        }
+                        u.set_thread_driver(&session, &value, &actor, now).map(Some)
+                    })
+                    .await
+                {
+                    Ok(Some(changed)) => Response::ok(json!({"driver":driver,"changed":changed})),
+                    Ok(None) => Response::error(404, "no_such_thread"),
+                    Err(error) => operation_error(error),
+                }
+            }
+            ["threads", id, "workers", worker, "stop"] => {
+                if authority != Authority::Owner {
+                    return Response::error(403, "owner_required");
+                }
+                if body
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .any(|k| !["actor", "mode"].contains(&k.as_str()))
+                {
+                    return Response::error(400, "unknown_body_field");
+                }
+                let stop = match body.get("mode") {
+                    None | Some(Value::Null) => true,
+                    Some(mode) => match mode.as_str() {
+                        Some("stop") => true,
+                        Some("interrupt") => false,
+                        _ => return Response::error(400, "invalid_mode"),
+                    },
+                };
+                let (session, lookup) = (id.to_string(), worker.to_string());
+                match store
+                    .transact(move |u| {
+                        Ok(u.thread_workers(&session)?.iter().any(|w| w.id == lookup))
+                    })
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => return Response::error(404, "no_such_worker"),
+                    Err(error) => return operation_error(error),
+                }
+                match self.runtime.worker_control(worker, stop, authority).await {
+                    Ok(value) => Response::ok(if stop {
+                        json!({"stopped":value})
+                    } else {
+                        json!({"interrupted":value})
+                    }),
+                    Err(error) => operation_error(error),
+                }
+            }
             ["threads", id, action] => {
                 if authority != Authority::Owner {
                     return Response::error(403, "owner_required");
@@ -648,6 +770,143 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
             _ => Response::error(404, "not_found"),
         }
     }
+}
+/// A refusal is its status and code; anything else failed.
+fn answer(result: anyhow::Result<std::result::Result<Value, Refusal>>) -> Response {
+    match result {
+        Ok(Ok(value)) => Response::ok(value),
+        Ok(Err((status, code))) => Response::error(status, code),
+        Err(error) => operation_error(error),
+    }
+}
+/// The body of `POST /threads/<id>/delegate`, checked strictly.
+fn delegate_body(body: &Value) -> Result<DelegateRequest, &'static str> {
+    const FIELDS: [&str; 9] = [
+        "actor",
+        "role",
+        "brief",
+        "context",
+        "worker_id",
+        "ephemeral",
+        "backend",
+        "deliverable",
+        "tags",
+    ];
+    let fields = body.as_object().ok_or("invalid_body_or_query")?;
+    if fields.keys().any(|k| !FIELDS.contains(&k.as_str())) {
+        return Err("unknown_body_field");
+    }
+    // An absent or null field takes its default.
+    let field = |name: &str| fields.get(name).filter(|v| !v.is_null());
+    let string = |name: &str, default: &str, code| match field(name) {
+        None => Ok(default.to_owned()),
+        Some(v) => v.as_str().map(str::to_owned).ok_or(code),
+    };
+    let brief = string("brief", "", "invalid_brief")?;
+    if brief.trim().is_empty() || brief.chars().count() > 40000 {
+        return Err("invalid_brief");
+    }
+    let context = match string("context", "fresh", "invalid_context")?.as_str() {
+        "fresh" => ContextMode::Fresh,
+        "fork" => ContextMode::Fork,
+        _ => return Err("invalid_context"),
+    };
+    let ephemeral = match field("ephemeral") {
+        None => false,
+        Some(v) => v.as_bool().ok_or("invalid_ephemeral")?,
+    };
+    let tags = match field("tags") {
+        None => vec![],
+        Some(v) => v
+            .as_array()
+            .filter(|tags| tags.len() <= 16)
+            .ok_or("invalid_tags")?
+            .iter()
+            .map(|tag| {
+                tag.as_str()
+                    .filter(|t| !t.is_empty() && t.chars().count() <= 200)
+                    .map(str::to_owned)
+                    .ok_or("invalid_tags")
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    let backend = string("backend", "same", "invalid_backend")?;
+    if backend.is_empty() || backend.len() > 64 {
+        return Err("invalid_backend");
+    }
+    Ok(DelegateRequest {
+        role: string("role", "general", "invalid_role")?,
+        brief,
+        context,
+        worker_id: string("worker_id", "", "unknown_worker")?,
+        ephemeral,
+        backend,
+        deliverable: string("deliverable", "report", "invalid_deliverable")?,
+        tags,
+    })
+}
+/// The body of a driver's post, checked strictly; a channel takes only a
+/// `study_root`, and a root carries no details (it has no thread yet).
+fn post_body(body: &Value, channel: bool) -> Result<PostRequest, &'static str> {
+    let fields = body.as_object().ok_or("invalid_body_or_query")?;
+    if fields
+        .keys()
+        .any(|k| !["actor", "text", "details", "meta", "client_id"].contains(&k.as_str()))
+    {
+        return Err("unknown_body_field");
+    }
+    let text = body["text"].as_str().ok_or("invalid_text")?;
+    if text.trim().is_empty() || text.chars().count() > 40000 {
+        return Err("invalid_text");
+    }
+    let details = match fields.get("details").filter(|v| !v.is_null()) {
+        None => "",
+        Some(v) => v
+            .as_str()
+            .filter(|d| d.chars().count() <= 40000)
+            .ok_or("invalid_details")?,
+    };
+    let meta = body["meta"].as_object().ok_or("invalid_meta")?;
+    if meta.keys().any(|k| k != "kind" && k != "status") {
+        return Err("unknown_meta_field");
+    }
+    let kind = meta
+        .get("kind")
+        .and_then(Value::as_str)
+        .filter(|k| crate::threads::external::outbox_kind(k).is_some())
+        .ok_or("invalid_post_kind")?;
+    if channel && kind != "study_root" {
+        return Err("invalid_post_kind");
+    }
+    if kind == "study_root" && !details.is_empty() {
+        return Err("invalid_details");
+    }
+    let status = match meta.get("status").filter(|v| !v.is_null()) {
+        None => "complete",
+        Some(v) => v
+            .as_str()
+            .filter(|s| matches!(*s, "complete" | "waiting" | "blocked"))
+            .ok_or("invalid_status")?,
+    };
+    let client_id = match fields.get("client_id").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .filter(|id| {
+                    (8..=80).contains(&id.len())
+                        && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                })
+                .ok_or("invalid_client_id")?
+                .to_owned(),
+        ),
+    };
+    Ok(PostRequest {
+        kind: kind.into(),
+        status: status.into(),
+        text: text.into(),
+        details: details.into(),
+        client_id,
+    })
 }
 fn only_actor(body: &Value) -> bool {
     body.as_object()

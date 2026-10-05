@@ -89,11 +89,17 @@ pub enum Commands {
         connection: Connection,
     },
     /// List threads, show one, or apply a control.
+    ///
+    /// `driver external|parent` sets who drives the thread's work: its parent
+    /// turns (the default), or an external driver on the control socket.
     Threads {
         /// Thread as `#channel:TS` (shown as `name`) or its full ID.
         id: Option<String>,
-        #[arg(value_parser=["pause","resume","close","archive","restore","clean"], requires="id")]
+        #[arg(value_parser=["pause","resume","close","archive","restore","clean","driver"], requires="id")]
         action: Option<String>,
+        /// For `driver`: who drives the thread.
+        #[arg(value_parser=["external","parent"], requires="action")]
+        driver: Option<String>,
         #[command(flatten)]
         connection: Connection,
     },
@@ -336,8 +342,18 @@ impl Commands {
             Self::Threads {
                 id,
                 action,
+                driver,
                 connection,
             } => match (id, action) {
+                (Some(id), Some(action)) if action == "driver" => (
+                    connection,
+                    "POST",
+                    format!("/threads/{}/driver", thread(&id)?),
+                    Some(json!({"driver":driver.context("driver needs external or parent")?})),
+                ),
+                (Some(_), Some(_)) if driver.is_some() => {
+                    bail!("only the driver action takes a value")
+                }
                 (Some(id), Some(action)) => (
                     connection,
                     "POST",

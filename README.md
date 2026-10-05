@@ -681,6 +681,7 @@ The CLI uses it and never writes the database.
 
 ```bash
 fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
+fridica threads ID driver external|parent   # who drives the thread's work (docs/external-driver.md)
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
 fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
 fridica files list '#ai-human-plume:1790790458.842149'   # a thread's Slack files
@@ -694,6 +695,11 @@ fridica dashboard [--port N]             # the control-room page on 127.0.0.1, w
 `events` is a versioned feed with a cursor, for your own tools to follow Fridica
 instead of reading its database: messages, turns and their outcomes, pauses, failed
 posts and jobs. See [`docs/events.md`](docs/events.md).
+
+`threads ID driver external` hands a thread's work to a local driver on the control
+socket (such as fridica-research): it delegates, posts and stops workers through the
+routes in [`docs/external-driver.md`](docs/external-driver.md), and worker results and
+study posts reach it on the event feed instead of becoming parent turns.
 
 `instruct` tells the parent something as you, in the channel's most recently active
 thread (a thread ID instead targets that thread). It prints the `client_id` it used;

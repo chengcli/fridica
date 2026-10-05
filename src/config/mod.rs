@@ -7,6 +7,7 @@ pub mod loader;
 pub mod prompts;
 pub mod provisions;
 pub mod repos;
+pub mod roles;
 pub mod schema;
 pub mod setup;
 pub use fridica_core::config::{registry, Attention};

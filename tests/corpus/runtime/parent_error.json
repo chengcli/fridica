@@ -159,7 +159,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "10"
+            "value": "11"
           },
           {
             "key": "durable_generation",
@@ -271,6 +271,7 @@
             "created": 20.0,
             "debriefed_turn": 0,
             "decisions_json": [],
+            "driver": "parent",
             "id": "TTEAM:CROOM:100.1",
             "last_reply_hash": "",
             "last_unsolicited": 0.0,
@@ -355,7 +356,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "10"
+            "value": "11"
           },
           {
             "key": "durable_generation",
@@ -891,6 +892,7 @@
             "created": 20.0,
             "debriefed_turn": 0,
             "decisions_json": [],
+            "driver": "parent",
             "id": "TTEAM:CROOM:100.1",
             "last_reply_hash": "",
             "last_unsolicited": 0.0,
@@ -975,7 +977,7 @@
         "meta": [
           {
             "key": "schema_version",
-            "value": "10"
+            "value": "11"
           },
           {
             "key": "durable_generation",
@@ -1511,6 +1513,7 @@
             "created": 20.0,
             "debriefed_turn": 0,
             "decisions_json": [],
+            "driver": "parent",
             "id": "TTEAM:CROOM:100.1",
             "last_reply_hash": "",
             "last_unsolicited": 0.0,
