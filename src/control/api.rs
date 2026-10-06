@@ -578,6 +578,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     *action,
                     "pause"
                         | "resume"
+                        | "retry"
                         | "close"
                         | "archive"
                         | "instruct"
@@ -673,6 +674,7 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                         }
                     }
                     "resume" => Control::Resume,
+                    "retry" => Control::Retry,
                     "close" => Control::Close,
                     "archive" => Control::Archive,
                     "restore" => Control::Restore,
@@ -917,6 +919,8 @@ fn operation_error(error: anyhow::Error) -> Response {
         Response::error(500, "storage_failed")
     } else if error.to_string().contains("owner") || error.to_string().contains("authentication") {
         Response::error(403, "owner_required")
+    } else if error.to_string() == "nothing to retry" {
+        Response::error(409, "nothing_to_retry")
     } else if error.to_string() == "thread worker cleanup is pending" {
         Response::error(409, "thread_cleanup_pending")
     } else if matches!(
@@ -924,6 +928,7 @@ fn operation_error(error: anyhow::Error) -> Response {
         "notes revision conflict"
             | "instruction ID reused with different text"
             | "closed threads require explicit restoration"
+            | "only an active thread can retry its last decision"
             | "instruction outside configured scope"
             | "instructions are unavailable in observe-only mode"
     ) {

@@ -95,7 +95,7 @@ pub enum Commands {
     Threads {
         /// Thread as `#channel:TS` (shown as `name`) or its full ID.
         id: Option<String>,
-        #[arg(value_parser=["pause","resume","close","archive","restore","clean","driver"], requires="id")]
+        #[arg(value_parser=["pause","resume","retry","close","archive","restore","clean","driver"], requires="id")]
         action: Option<String>,
         /// For `driver`: who drives the thread.
         #[arg(value_parser=["external","parent"], requires="action")]

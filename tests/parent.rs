@@ -487,6 +487,12 @@ fn owner_prompt_inputs_reload_and_schema_matches_the_implemented_actions() {
     std::fs::write(&rules, "invalid").unwrap();
     assert!(parent::prompts::build(&config, &request("decide")).is_err());
     fn strict(v: &Value) {
+        // Strict structured output (Codex) needs a type on every node; an
+        // empty choice set once left the hand-off items untyped (#136).
+        assert!(
+            v.get("type").is_some() || v.get("anyOf").is_some(),
+            "untyped schema node: {v}"
+        );
         if v["type"] == "object" {
             assert_eq!(v["additionalProperties"], false);
             let properties = v["properties"].as_object().unwrap();
