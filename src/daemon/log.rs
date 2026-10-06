@@ -132,6 +132,63 @@ fn read(u: &mut dyn Unit, slack: &Slack, after: i64) -> anyhow::Result<(i64, Vec
     Ok((last, lines))
 }
 
+/// Characters of a backend's error message the log shows.
+const BACKEND_ERROR_CHARS: usize = 300;
+/// The error message a parent backend that exited with an error gave, bounded
+/// and on one line: the innermost `message` of a JSON error event on stdout
+/// (Codex nests the API's error as JSON inside its own), the result of an
+/// error result (Claude), or else the last line of stderr. Never other output.
+fn backend_error(output: &Value) -> Option<String> {
+    fn innermost(message: &str) -> String {
+        match serde_json::from_str::<Value>(message) {
+            Ok(inner) => inner["error"]["message"]
+                .as_str()
+                .or(inner["message"].as_str())
+                .map(innermost)
+                .unwrap_or_else(|| message.to_owned()),
+            Err(_) => message.to_owned(),
+        }
+    }
+    let stdout = text(&output["stdout"]);
+    let from_events = stdout.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line.trim()).ok()?;
+        let message = if event["type"] == "result" && event["is_error"] == true {
+            event["result"].as_str()
+        } else if matches!(event["type"].as_str(), Some("error" | "turn.failed")) {
+            event["error"]["message"]
+                .as_str()
+                .or(event["message"].as_str())
+        } else {
+            None
+        }?;
+        Some(innermost(message))
+    });
+    let message = from_events.or_else(|| {
+        text(&output["stderr"])
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .map(str::to_owned)
+    })?;
+    let line: String = message
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.is_empty() {
+        return None;
+    }
+    Some(if line.chars().count() > BACKEND_ERROR_CHARS {
+        format!(
+            "{}…",
+            line.chars().take(BACKEND_ERROR_CHARS).collect::<String>()
+        )
+    } else {
+        line
+    })
+}
 fn text(v: &Value) -> &str {
     v.as_str().unwrap_or("")
 }
@@ -244,6 +301,15 @@ pub(crate) fn describe(post: Post<'_>, names: &Names, kind: &str, p: &Value) -> 
                 ),
             )
         }
+        // A backend that exits with an error says why only in its output;
+        // the call's failure is just `parent_exit_N` (#136).
+        "parent_transport_result" if p["output"]["returncode"].as_i64().is_some_and(|c| c != 0) => {
+            (
+                "WARNING",
+                "parent",
+                format!("backend error: {}", backend_error(&p["output"])?),
+            )
+        }
         "parent_result" => match (&p["failure"], &p["error"]) {
             (Value::Null, Value::Null) => return None,
             (Value::Null, error) => ("WARNING", "parent", format!("call failed: {error}")),
@@ -321,6 +387,54 @@ pub(crate) fn describe(post: Post<'_>, names: &Names, kind: &str, p: &Value) -> 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_failed_backend_call_logs_its_error_bounded_on_one_line() {
+        let api = json!({"type":"error","status":400,"error":{"type":"invalid_request_error","code":"invalid_json_schema","message":"Invalid schema for response_format 'codex_output_schema': In context=('properties', 'handoffs', 'items'), schema must have a 'type' key.","param":"text.format.schema"}});
+        let codex = format!(
+            "{}\n{}\n",
+            json!({"type":"thread.started","thread_id":"t"}),
+            json!({"type":"error","message":api.to_string()})
+        );
+        let output =
+            json!({"returncode":1,"stdout":codex,"stderr":"Reading prompt from stdin...\n"});
+        assert_eq!(
+            backend_error(&output).unwrap(),
+            "Invalid schema for response_format 'codex_output_schema': In context=('properties', 'handoffs', 'items'), schema must have a 'type' key."
+        );
+        let names = Names::default();
+        let line = describe(
+            &|_| None,
+            &names,
+            "parent_transport_result",
+            &json!({"call_id":3,"output":output}),
+        )
+        .unwrap();
+        assert_eq!((line.0, line.1), ("WARNING", "parent"));
+        assert!(line.2.starts_with("backend error: Invalid schema"));
+        // Claude reports an error result; anything else falls back to stderr.
+        let claude =
+            json!({"type":"result","is_error":true,"result":"API Error: 400\nbad request"})
+                .to_string();
+        assert_eq!(
+            backend_error(&json!({"stdout":claude,"stderr":""})).unwrap(),
+            "API Error: 400 bad request"
+        );
+        let long = "x".repeat(BACKEND_ERROR_CHARS + 50);
+        let bounded =
+            backend_error(&json!({"stdout":"not json","stderr":format!("warn\n{long}\n\n")}))
+                .unwrap();
+        assert_eq!(bounded.chars().count(), BACKEND_ERROR_CHARS + 1);
+        assert!(backend_error(&json!({"stdout":"{}","stderr":"  \n"})).is_none());
+        // A successful call logs nothing here.
+        assert!(describe(
+            &|_| None,
+            &names,
+            "parent_transport_result",
+            &json!({"output":{"returncode":0,"stdout":codex}})
+        )
+        .is_none());
+    }
 
     #[test]
     fn describes_notable_events_without_message_text() {

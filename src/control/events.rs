@@ -154,6 +154,7 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
             let action = match name.as_str() {
                 "pause" => "paused",
                 "resume" => "resumed",
+                "retry" => "retried",
                 "close" => "closed",
                 "archive" => "archived",
                 "restore" => "restored",

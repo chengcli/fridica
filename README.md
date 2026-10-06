@@ -680,7 +680,8 @@ The daemon serves a control API on a Unix socket that only you can open (mode 06
 The CLI uses it and never writes the database.
 
 ```bash
-fridica status | threads [ID [resume|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
+fridica status | threads [ID [resume|retry|pause|close|archive|restore|clean]] | workers [ID interrupt|stop]
+fridica threads ID retry                 # rerun the message whose parent decision failed
 fridica threads ID driver external|parent   # who drives the thread's work (docs/external-driver.md)
 fridica machines | outbox [ID]          # outbox ID retries a failed or ambiguous post
 fridica instruct ai-human-plume "Approve cloning compressible_plume for this run"
@@ -691,6 +692,15 @@ fridica archive search "ctest baseline"  # archived threads containing the text 
 fridica archive restore TEAM:CHANNEL:TS  # bring one back; a new message in it does that by itself
 fridica dashboard [--port N]             # the control-room page on 127.0.0.1, with a key per run
 ```
+
+When a parent decision call fails (the backend exits with an error, or its answer
+stays invalid after repair), the thread is blocked and the message is finished
+without a reply; its asks stay open. The log shows `parent: backend error: …`, a
+short, single-line summary of what the backend said, before `call failed`. Fix the
+cause, then `fridica threads ID retry` (or `POST /threads/ID/retry`) puts that message
+back in the queue for a new parent turn, once. Catch-up and restarts do not: the
+message was already handled. `resume` also replays the thread's latest message, but
+restarts its turn count and sets the thread's reset point at that message first.
 
 `events` is a versioned feed with a cursor, for your own tools to follow Fridica
 instead of reading its database: messages, turns and their outcomes, pauses, failed

@@ -8,13 +8,19 @@ use serde_json::json;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Control {
-    Pause { reason: String },
+    Pause {
+        reason: String,
+    },
     Resume,
+    /// Requeue the item of the thread's last failed decision (#136).
+    Retry,
     Close,
     Archive,
     Restore,
     Clean,
-    Instruct { text: String },
+    Instruct {
+        text: String,
+    },
 }
 
 pub async fn apply(
@@ -149,6 +155,12 @@ fn apply_tx(
                 ThreadControl::Active,
             )
         }
+        Control::Retry => {
+            if control != "active" {
+                bail!("only an active thread can retry its last decision");
+            }
+            ("active", "retry", ThreadControl::Active)
+        }
         Control::Restore => {
             if actor != Authority::Owner {
                 bail!("restoration requires owner authentication");
@@ -192,6 +204,9 @@ fn apply_tx(
     )?;
     if matches!(action, Control::Resume) {
         u.restart_turns(&session)?;
+    } else if matches!(action, Control::Retry) && u.retry_failed_turn(&session)?.is_none() {
+        // Nothing changes: the unit of work is discarded.
+        bail!("nothing to retry");
     } else if matches!(action, Control::Instruct { .. }) {
         u.unblock(&session)?;
     }

@@ -379,6 +379,60 @@ async fn unavailable_parent_settles_once_preserves_asks_and_new_instruction_can_
     );
 }
 
+/// After a decision fails (for example a schema the backend refused, #136),
+/// an owner retry gives the same message a new parent turn, once; a thread
+/// whose last decision did not fail has nothing to retry.
+#[tokio::test]
+async fn an_owner_retry_reruns_the_message_whose_decision_failed_once() {
+    let f = Fixture::new(vec![
+        Err(ParentFailure {
+            code: "parent_exit_1".into(),
+        }),
+        Ok(json!({"reply":{"text":"Answered","status":"complete","answers":["o1"]}})),
+    ])
+    .await;
+    f.intake(1).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "blocked");
+    assert_eq!(f.scalar("SELECT state FROM thread_inbox").await, "done");
+    let retry = || {
+        controls::apply(
+            &f.store,
+            SESSION.into(),
+            Control::Retry,
+            Authority::Owner,
+            10.,
+        )
+    };
+    retry().await.unwrap();
+    assert_eq!(f.scalar("SELECT state FROM thread_inbox").await, "pending");
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "complete");
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    let calls = f.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].trigger["kind"], "message");
+    assert_eq!(calls[1].trigger["message"], calls[0].trigger["message"]);
+    assert_eq!(
+        f.scalar("SELECT state FROM obligations").await,
+        "awaiting_delivery"
+    );
+    // The last decision succeeded: nothing to retry, and nothing changes.
+    let error = retry().await.unwrap_err();
+    assert_eq!(error.to_string(), "nothing to retry");
+    assert_eq!(f.scalar("SELECT state FROM thread_inbox").await, "done");
+    assert_eq!(
+        f.scalar("SELECT CAST(count(*) AS TEXT) FROM audit WHERE action='thread.retry'")
+            .await,
+        "1"
+    );
+}
+
 #[tokio::test]
 async fn invalid_repair_rejects_every_proposed_effect_and_records_both_responses() {
     let raw = json!({"reply":{"text":"Claimed success","status":"complete","answers":["o1"]},"summary":"Must not persist","context":{"branch":"must-not-change"},"delegations":[{"brief":"valid work"},{"brief":"invalid work","machine":"missing"}]});
