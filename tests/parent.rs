@@ -609,6 +609,8 @@ async fn owner_controls_during_triage_fence_both_respond_and_quiet_results() {
 #[tokio::test]
 async fn concurrent_unsolicited_replies_recheck_channel_cooldown_in_commit() {
     let h = Harness::new("claude", FAKE, "gate", 5.).await;
+    // Both calls must be in flight at once, so the first does not go alone.
+    h.parent.assume_logged_in();
     let a = h.actor();
     let first = h.intake(1, "One general question").await;
     let second = h.intake(2, "Another question").await;
@@ -1597,6 +1599,27 @@ fn codex_startup_diagnostics_are_tolerated_only_before_a_completed_turn() {
             "{events:?}"
         );
     }
+}
+
+/// Claude reports a lost refresh of its expired login, when another process
+/// refreshed it at the same time, in the result envelope; that is
+/// `parent_auth_contended`, and nothing else is.
+#[test]
+fn a_lost_login_refresh_envelope_is_recognized() {
+    use fridica::parent::cli::{auth_contended, rate_limited};
+    let lost = br#"{"type":"result","subtype":"success","is_error":true,"terminal_reason":"api_error","api_error_status":null,"result":"Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute"}"#;
+    assert!(auth_contended("claude", lost));
+    assert!(!rate_limited("claude", lost));
+    assert!(!auth_contended("codex", lost));
+    assert!(!auth_contended(
+        "claude",
+        br#"{"type":"result","is_error":true,"result":"Invalid API key"}"#
+    ));
+    assert!(!auth_contended(
+        "claude",
+        br#"{"type":"result","is_error":false,"result":"Failed to refresh OAuth token"}"#
+    ));
+    assert!(!auth_contended("claude", b"not json"));
 }
 
 /// Claude reports its usage limit only in the result envelope of a non-zero

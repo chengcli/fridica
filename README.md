@@ -693,6 +693,12 @@ fridica archive restore TEAM:CHANNEL:TS  # bring one back; a new message in it d
 fridica dashboard [--port N]             # the control-room page on 127.0.0.1, with a key per run
 ```
 
+Two parent failures are temporary and retried without blocking the thread: a usage
+limit (after 10 minutes) and a lost refresh of an expired login (after a minute), when
+another call refreshed the same OAuth token at the same moment. To avoid the second,
+the first parent call after a start, or after such a failure, runs alone and the others
+wait for it (at most 30 s) before running in parallel again.
+
 When a parent decision call fails (the backend exits with an error, or its answer
 stays invalid after repair), the thread is blocked and the message is finished
 without a reply; its asks stay open. The log shows `parent: backend error: …`, a

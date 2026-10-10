@@ -307,8 +307,10 @@ impl<P: Parent> Actor<P> {
                 request.call = "triage".into();
                 let (raw, call) = self.call(&request).await?;
                 calls.push(call);
-                if rate_limited(&calls) {
-                    return self.retry_later(id, session, request, calls).await;
+                if let Some(temporary) = temporary(&calls) {
+                    return self
+                        .retry_later(id, session, request, calls, temporary)
+                        .await;
                 }
                 let choice = raw
                     .as_ref()
@@ -391,8 +393,10 @@ impl<P: Parent> Actor<P> {
             let (raw, call) = self.call(&request).await?;
             let now = self.clock.now();
             calls.push(call);
-            if rate_limited(&calls) {
-                return self.retry_later(id, session, request, calls).await;
+            if let Some(temporary) = temporary(&calls) {
+                return self
+                    .retry_later(id, session, request, calls, temporary)
+                    .await;
             }
             let Some(raw) = raw else {
                 calls.last_mut().unwrap()["settlement_error"] = json!("parent_unavailable");
@@ -465,6 +469,7 @@ impl<P: Parent> Actor<P> {
         session: String,
         request: ParentRequest,
         calls: Vec<Value>,
+        (code, delay): (&'static str, f64),
     ) -> Result<Step> {
         let now = self.clock.now();
         // The whole turn is redone later, so only the refused call and any
@@ -472,17 +477,14 @@ impl<P: Parent> Actor<P> {
         // read as a later, successful one (it would clear owner review).
         let calls = calls
             .iter()
-            .filter(|c| {
-                c["failure"]["code"] == super::failure::RATE_LIMITED
-                    || c["request"]["call"] == "triage"
-            })
+            .filter(|c| c["failure"]["code"] == code || c["request"]["call"] == "triage")
             .map(|call| {
                 let mut context = call["request"].clone();
                 if let Some(code) = call["failure"]["code"].as_str() {
                     context["failure"] = json!(code);
                 }
-                let error = if call["failure"]["code"] == super::failure::RATE_LIMITED {
-                    super::failure::RATE_LIMITED
+                let error = if call["failure"]["code"] == code {
+                    code
                 } else {
                     ""
                 };
@@ -501,9 +503,8 @@ impl<P: Parent> Actor<P> {
             session,
             version: request.session["version"].as_i64(),
             calls,
-            retry_at: now + super::failure::RATE_LIMIT_RETRY,
-            details: json!({"inbox_id":id,"retry_at":now+super::failure::RATE_LIMIT_RETRY})
-                .to_string(),
+            retry_at: now + delay,
+            details: json!({"inbox_id":id,"retry_at":now+delay}).to_string(),
             now,
         };
         let current = self.store.transact(move |u| u.retry_turn(&retry)).await?;
@@ -559,10 +560,20 @@ fn handoff_hop(request: &ParentRequest) -> u64 {
         0
     }
 }
-fn rate_limited(calls: &[Value]) -> bool {
-    calls
-        .last()
-        .is_some_and(|call| call["failure"]["code"] == super::failure::RATE_LIMITED)
+/// A temporary failure of the last call, with its code and how long until the
+/// turn is retried: the backend's usage limit (#107), or a lost refresh of
+/// its login. Neither blocks the thread or asks for owner review.
+pub(super) fn temporary(calls: &[Value]) -> Option<(&'static str, f64)> {
+    match calls.last()?["failure"]["code"].as_str()? {
+        super::failure::RATE_LIMITED => Some((
+            super::failure::RATE_LIMITED,
+            super::failure::RATE_LIMIT_RETRY,
+        )),
+        crate::parent::AUTH_CONTENDED => {
+            Some((crate::parent::AUTH_CONTENDED, crate::parent::AUTH_RETRY))
+        }
+        _ => None,
+    }
 }
 
 async fn load(store: &impl Backend, id: i64, session: String) -> Result<ParentRequest> {

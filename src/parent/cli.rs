@@ -81,6 +81,17 @@ pub fn rate_limited(backend: &str, output: &[u8]) -> bool {
                 && (envelope["api_error_status"] == 429 || envelope["error"] == "rate_limit")
         })
 }
+/// Whether Claude failed because another process was refreshing the same
+/// expired OAuth login; the backend calls this transient.
+pub fn auth_contended(backend: &str, output: &[u8]) -> bool {
+    backend == "claude"
+        && serde_json::from_slice::<Value>(output).is_ok_and(|envelope| {
+            envelope["is_error"] == true
+                && envelope["result"]
+                    .as_str()
+                    .is_some_and(|r| r.starts_with("Failed to refresh OAuth token"))
+        })
+}
 pub fn parse(backend: &str, output: &[u8]) -> Result<Value, crate::core::parent::ParentFailure> {
     let output = std::str::from_utf8(output).map_err(|_| failure("parent_invalid_utf8"))?;
     if backend == "claude" {
