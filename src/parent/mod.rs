@@ -39,11 +39,51 @@ impl Default for Options {
         }
     }
 }
+/// The failure code of a parent call that lost a race to refresh the
+/// backend's expired login: several calls at once, typically the
+/// catch-up after a restart, each refresh the OAuth token and all but one
+/// fail. Temporary: the turn is retried after [`AUTH_RETRY`], without
+/// blocking the thread.
+pub const AUTH_CONTENDED: &str = "parent_auth_contended";
+/// Seconds before a turn whose call lost the login refresh is retried; the
+/// backend says the refresh settles within a minute.
+pub const AUTH_RETRY: f64 = 60.;
+
+/// Until a parent call has gone through since startup, or since a call lost
+/// the login refresh, calls go one at a time, so only one of them refreshes
+/// an expired login; then they run in parallel again.
+struct LoginGate {
+    open: std::sync::atomic::AtomicBool,
+    probe: tokio::sync::Mutex<()>,
+}
+impl LoginGate {
+    /// `Some` while this call goes alone; `None` once the gate is open, or
+    /// after waiting `wait` ([`LOGIN_WAIT`]) for the call ahead, so waiting
+    /// never costs a turn its own timeout (a lost refresh is retried anyway).
+    async fn enter(&self, wait: Duration) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        use std::sync::atomic::Ordering::Acquire;
+        if self.open.load(Acquire) {
+            return None;
+        }
+        let probe = tokio::time::timeout(wait, self.probe.lock()).await.ok()?;
+        (!self.open.load(Acquire)).then_some(probe)
+    }
+    /// A call that got through opens the gate; one that lost the refresh
+    /// closes it again.
+    fn settle(&self, contended: bool) {
+        self.open
+            .store(!contended, std::sync::atomic::Ordering::Release);
+    }
+}
+/// The longest a parent call waits for the one ahead to get through.
+const LOGIN_WAIT: Duration = Duration::from_secs(30);
+
 pub struct CliParent {
     config: Arc<Config>,
     store: Shared,
     clock: Arc<dyn Clock>,
     options: Options,
+    login: LoginGate,
 }
 fn failure(code: &str) -> ParentFailure {
     ParentFailure { code: code.into() }
@@ -75,7 +115,16 @@ impl CliParent {
             store,
             clock,
             options,
+            login: LoginGate {
+                open: std::sync::atomic::AtomicBool::new(false),
+                probe: tokio::sync::Mutex::new(()),
+            },
         }
+    }
+    /// Let parent calls run in parallel from the start, as if one had already
+    /// gone through: for callers that know the backend's login is fresh.
+    pub fn assume_logged_in(&self) {
+        self.login.settle(false);
     }
     async fn run(&self, mut request: ParentRequest) -> Result<Value, ParentFailure> {
         request.session["now"] = json!(self.clock.now());
@@ -138,11 +187,19 @@ impl CliParent {
             .transact(move |u| u.record("parent_transport_call", now, &intent.to_string(), false))
             .await
             .map_err(|_| failure("parent_recording_failed"))?;
+        let probe = self.login.enter(LOGIN_WAIT).await;
         let completed = cli::execute(argv, directory.path(), environment, prompt, timeout).await;
+        let contended = completed
+            .as_ref()
+            .is_ok_and(|output| cli::auth_contended(backend, &output.stdout));
+        self.login.settle(contended);
+        drop(probe);
         let (result, output, complete) = match completed {
             Ok(output) => {
                 let result = if cli::rate_limited(backend, &output.stdout) {
                     Err(failure(crate::core::failure::RATE_LIMITED))
+                } else if contended {
+                    Err(failure(AUTH_CONTENDED))
                 } else if output.returncode != 0 {
                     Err(failure(&format!("parent_exit_{}", output.returncode)))
                 } else {
@@ -177,5 +234,46 @@ impl CliParent {
 impl Parent for CliParent {
     fn decide(&self, request: ParentRequest) -> AdapterFuture<'_, Result<Value, ParentFailure>> {
         Box::pin(self.run(request))
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+    fn gate() -> &'static LoginGate {
+        Box::leak(Box::new(LoginGate {
+            open: std::sync::atomic::AtomicBool::new(false),
+            probe: tokio::sync::Mutex::new(()),
+        }))
+    }
+
+    /// One call goes alone until it gets through; the rest then run in
+    /// parallel, until a call loses the refresh and closes the gate again.
+    #[tokio::test]
+    async fn one_call_refreshes_the_login_while_the_others_wait() {
+        let g = gate();
+        let first = g.enter(LOGIN_WAIT).await;
+        assert!(first.is_some());
+        let second = tokio::spawn(async move { g.enter(LOGIN_WAIT).await.is_some() });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!second.is_finished());
+        g.settle(false);
+        drop(first);
+        assert!(!second.await.unwrap());
+        assert!(g.enter(LOGIN_WAIT).await.is_none());
+        g.settle(true);
+        assert!(g.enter(LOGIN_WAIT).await.is_some());
+    }
+
+    /// Waiting never costs a call its own timeout: after the wait it goes
+    /// ahead without the gate.
+    #[tokio::test]
+    async fn a_call_waits_for_the_one_ahead_only_so_long() {
+        let g = gate();
+        let _first = g.enter(LOGIN_WAIT).await.unwrap();
+        let wait = Duration::from_millis(100);
+        let started = std::time::Instant::now();
+        assert!(g.enter(wait).await.is_none());
+        assert!(started.elapsed() >= wait);
     }
 }

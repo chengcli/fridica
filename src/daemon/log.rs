@@ -149,7 +149,22 @@ fn backend_error(output: &Value) -> Option<String> {
             Err(_) => message.to_owned(),
         }
     }
-    let stdout = text(&output["stdout"]);
+    // The ledger keeps a call's output as bytes (an array of numbers); a
+    // string is accepted too.
+    let decode = |v: &Value| -> String {
+        match v {
+            Value::Array(bytes) => String::from_utf8_lossy(
+                &bytes
+                    .iter()
+                    .filter_map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+                    .collect::<Vec<u8>>(),
+            )
+            .into_owned(),
+            other => text(other).to_owned(),
+        }
+    };
+    let stdout = decode(&output["stdout"]);
+    let stderr = decode(&output["stderr"]);
     let from_events = stdout.lines().rev().find_map(|line| {
         let event: Value = serde_json::from_str(line.trim()).ok()?;
         let message = if event["type"] == "result" && event["is_error"] == true {
@@ -164,7 +179,7 @@ fn backend_error(output: &Value) -> Option<String> {
         Some(innermost(message))
     });
     let message = from_events.or_else(|| {
-        text(&output["stderr"])
+        stderr
             .lines()
             .rev()
             .find(|l| !l.trim().is_empty())
@@ -426,6 +441,14 @@ mod tests {
                 .unwrap();
         assert_eq!(bounded.chars().count(), BACKEND_ERROR_CHARS + 1);
         assert!(backend_error(&json!({"stdout":"{}","stderr":"  \n"})).is_none());
+        // As recorded: output bytes, here Claude losing a login refresh.
+        let race = json!({"type":"result","is_error":true,"terminal_reason":"api_error","result":"Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute"});
+        let bytes = |s: String| json!(format!("{s}\n").into_bytes());
+        assert_eq!(
+            backend_error(&json!({"returncode":1,"stdout":bytes(race.to_string()),"stderr":[]}))
+                .unwrap(),
+            race["result"].as_str().unwrap()
+        );
         // A successful call logs nothing here.
         assert!(describe(
             &|_| None,

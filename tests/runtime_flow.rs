@@ -815,6 +815,48 @@ async fn usage_limits_wait_and_retry_instead_of_blocking_the_thread() {
     h.runtime.close().await.unwrap();
 }
 
+/// A parent call that lost a refresh of the backend's login to another
+/// process is temporary: the item waits a minute and is retried,
+/// without blocking the thread or asking for owner review.
+#[tokio::test]
+async fn a_lost_login_refresh_retries_the_turn_after_a_minute() {
+    let h = Harness::new(
+        vec![
+            json!({"failure":"parent_auth_contended"}),
+            json!({"reply":{"text":"Answered once the login settled.","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        h.scalar("SELECT state||' '||CAST(not_before-created BETWEEN 59 AND 600 AS TEXT) FROM thread_inbox").await,
+        "pending 1"
+    );
+    assert_eq!(
+        h.scalar("SELECT error FROM parent_turns ORDER BY id DESC LIMIT 1")
+            .await,
+        "parent_auth_contended"
+    );
+    assert_ne!(h.scalar("SELECT status FROM threads").await, "blocked");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "0"
+    );
+    h.clock.set(200.);
+    h.runtime.pass().await.unwrap();
+    let calls = h.parent.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].session["parent_review_required"], false);
+    assert_eq!(
+        h.scalar("SELECT text FROM outbox WHERE kind='reply'").await,
+        "Answered once the login settled."
+    );
+    h.runtime.close().await.unwrap();
+}
+
 /// A worker's sign-off line is not the parent's verdict (provision04): such a
 /// report goes to the parent, whose own reply is posted instead.
 #[tokio::test]

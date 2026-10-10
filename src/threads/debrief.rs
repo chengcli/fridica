@@ -79,9 +79,10 @@ pub(super) async fn handle<P: Parent>(
     }
     request.call = "debrief".into();
     let (raw, call) = actor.call(&request).await?;
-    // A usage limit is temporary (#107): the debrief waits and is retried.
-    if call["failure"]["code"] == super::failure::RATE_LIMITED {
-        let retry = actor.clock.now() + super::failure::RATE_LIMIT_RETRY;
+    // A usage limit (#107) or a lost login refresh is temporary: the
+    // debrief waits and is retried.
+    if let Some((_, delay)) = super::actor::temporary(std::slice::from_ref(&call)) {
+        let retry = actor.clock.now() + delay;
         return actor::settle(&actor.store, id, &request, String::new(), Some(retry)).await;
     }
     let text = raw
