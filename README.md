@@ -803,7 +803,8 @@ The daemon owns a single SQLite database, kept by
 - Links are followed only into configured channels, so nobody can make Fridica read
   a channel they cannot read.
 - Workers' artifacts are read only from inside their workspace, with symlinks
-  resolved, and must match their declared type (PNG, PDF, or UTF-8 Markdown).
+  resolved, and must match their declared type (PNG, PDF, or UTF-8 text under
+  any name but those two: a Markdown document, a patch, a log).
 - Message text, notes, linked messages, GitHub state, and worker results are passed to
   models as data, marked untrusted.
 

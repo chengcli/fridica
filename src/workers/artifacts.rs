@@ -31,17 +31,18 @@ pub fn validate_reference(reference: &ArtifactRef) -> Result<(), &'static str> {
     {
         return Err("artifact_requires_absolute_path");
     }
-    let suffix = match reference.kind.as_str() {
-        "png" => "png",
-        "pdf" => "pdf",
-        "md" => "md",
+    let extension = path.extension().and_then(|s| s.to_str());
+    let named = |suffix: &str| extension.is_some_and(|s| s.eq_ignore_ascii_case(suffix));
+    let matches = match reference.kind.as_str() {
+        "png" => named("png"),
+        "pdf" => named("pdf"),
+        // Any text file goes as it is (a patch, a log, a CSV, a file with no
+        // suffix), under its own name; only a name that claims one of the
+        // binary kinds is refused. The content check still requires UTF-8.
+        "md" => !named("png") && !named("pdf"),
         _ => return Err("artifact_kind_unsupported"),
     };
-    if !path
-        .extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.eq_ignore_ascii_case(suffix))
-    {
+    if !matches {
         return Err("artifact_suffix_mismatch");
     }
     Ok(())
