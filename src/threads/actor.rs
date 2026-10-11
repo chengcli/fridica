@@ -627,6 +627,16 @@ async fn load(store: &impl Backend, id: i64, session: String) -> Result<ParentRe
     }).await
 }
 
+/// Whether a valid decision ends the owner-review hold a failed parent call
+/// left on the thread: the hold stands only while the parent blocks again.
+fn hold_clears(request: &ParentRequest, decision: &Decision) -> bool {
+    request.session["parent_review_required"] == true
+        && !decision
+            .reply
+            .as_ref()
+            .is_some_and(|r| matches!(r.status, ReplyStatus::Blocked))
+}
+
 fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> {
     let mut decision: Decision =
         serde_json::from_value(raw.clone()).context("invalid parent response schema")?;
@@ -656,6 +666,14 @@ fn validate(raw: &Value, request: &ParentRequest, now: f64) -> Result<Decision> 
             bail!("an unsent reply cannot answer obligations");
         }
         decision.reply = None;
+    }
+    // A thread still blocked by the stand-in for a failed parent call (#141):
+    // nobody decided that block, so this successful turn reopens it unless
+    // the parent blocks again on its own. Without this the parent reads the
+    // stand-in note as the owner's hold and repeats it, or trips the
+    // explicit-decision rule below and settles blocked once more.
+    if hold_clears(request, &decision) && request.session["status"] == "blocked" {
+        decision.reopen_blocked = true;
     }
     let mut addressed = HashSet::new();
     let known: HashSet<&str> = request
@@ -887,7 +905,7 @@ async fn commit(
         if !work.context.is_null() {
             u.patch_context(&session,&work.context.to_string())?;
         }
-        super::effects::commit(u,&decision,&session,id,now)?;
+        super::effects::commit(u,&decision,&session,id,now,hold_clears(&request,&decision))?;
         // Hand-offs (#108): the target thread's own turn acts on each, with
         // this thread's state as of this turn attached as a fork bundle.
         if !decision.handoffs.is_empty() {

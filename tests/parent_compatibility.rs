@@ -681,6 +681,121 @@ async fn held_due_work_survives_failure_and_runs_after_successful_owner_reopenin
     );
 }
 
+// #141: the stand-in for a failed call blocks the thread; the next successful
+// turn, here on a peer's mention with no owner instruction and no
+// reopen_blocked, reopens it and drops the stand-in note.
+#[tokio::test]
+async fn successful_turn_after_a_failed_call_reopens_the_thread_without_reopen_blocked() {
+    let f = Fixture::new(vec![
+        Err(ParentFailure {
+            code: "parent_exit_1".into(),
+        }),
+        Ok(json!({"reply":{"text":"On it","status":"complete","answers":["o2"]}})),
+    ])
+    .await;
+    f.intake(1).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "blocked");
+    assert_eq!(
+        f.scalar("SELECT json_extract(data_json,'$.next_step') FROM notes ORDER BY revision DESC LIMIT 1").await,
+        "Owner review before retrying"
+    );
+    f.intake(2).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    {
+        let calls = f.parent.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].session["parent_review_required"], true);
+        assert_eq!(calls[1].session["status"], "blocked");
+    }
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "complete");
+    assert_eq!(
+        f.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox").await,
+        "1"
+    );
+    assert_eq!(
+        f.scalar("SELECT state FROM obligations WHERE id='o2'")
+            .await,
+        "awaiting_delivery"
+    );
+    assert_eq!(
+        f.scalar("SELECT json_extract(data_json,'$.blocker')||'|'||json_extract(data_json,'$.next_step') FROM notes ORDER BY revision DESC LIMIT 1").await,
+        "|"
+    );
+    assert_eq!(
+        f.scalar("SELECT error FROM parent_turns ORDER BY id DESC LIMIT 1")
+            .await,
+        ""
+    );
+}
+
+// The parent may still block on its own after a failed call: the thread then
+// stays blocked on the parent's reason, not the stand-in's.
+#[tokio::test]
+async fn parent_blocking_again_after_a_failed_call_keeps_the_thread_blocked() {
+    let f = Fixture::new(vec![
+        Err(ParentFailure {
+            code: "parent_exit_1".into(),
+        }),
+        Ok(json!({"reply":{"text":"Blocked: I need the branch name.","status":"blocked"},"note":{"blocker":"branch name unknown"}})),
+    ])
+    .await;
+    f.intake(1).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    f.intake(2).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "blocked");
+    assert_eq!(
+        f.scalar("SELECT json_extract(data_json,'$.blocker')||'|'||json_extract(data_json,'$.next_step') FROM notes ORDER BY revision DESC LIMIT 1").await,
+        "branch name unknown|"
+    );
+    assert_eq!(
+        f.scalar("SELECT CAST(count(*) AS TEXT) FROM obligations WHERE state='open'")
+            .await,
+        "2"
+    );
+}
+
+// Only the stand-in's own note fields are dropped: what the reopening turn
+// writes itself is kept.
+#[tokio::test]
+async fn reopening_after_a_failed_call_keeps_the_note_the_parent_writes_now() {
+    let f = Fixture::new(vec![
+        Err(ParentFailure {
+            code: "parent_timeout".into(),
+        }),
+        Ok(json!({"reply":{"text":"Running it; Zoey reviews after.","status":"complete"},"note":{"blocker":"Zoey's review pending","next_step":"Ask Zoey"}})),
+    ])
+    .await;
+    f.intake(1).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    f.intake(2).await;
+    assert_eq!(
+        f.actor().step(SESSION.into()).await.unwrap(),
+        Step::Committed
+    );
+    assert_eq!(f.scalar("SELECT status FROM threads").await, "complete");
+    assert_eq!(
+        f.scalar("SELECT json_extract(data_json,'$.blocker')||'|'||json_extract(data_json,'$.next_step') FROM notes ORDER BY revision DESC LIMIT 1").await,
+        "Zoey's review pending|Ask Zoey"
+    );
+}
+
 #[tokio::test]
 async fn failed_parent_turns_post_nothing_and_a_new_mention_retries_the_parent() {
     let f = Fixture::new(vec![

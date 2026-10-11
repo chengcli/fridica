@@ -1,7 +1,7 @@
 //! Bounded parent edits to thread memory. No model field grants authority.
 use crate::core::parent::{Decision, ReplyStatus};
 use anyhow::{bail, Context, Result};
-use fridica_core::store::Unit;
+use fridica_core::{failure, store::Unit};
 use serde_json::{json, Value};
 
 fn bounded(value: &mut String, limit: usize) -> Result<()> {
@@ -54,6 +54,7 @@ pub(super) fn commit(
     session: &str,
     inbox: i64,
     now: f64,
+    hold_cleared: bool,
 ) -> Result<()> {
     let raw = u.thread_decisions(session)?;
     let mut decisions: Vec<String> = serde_json::from_str(&raw)?;
@@ -76,6 +77,21 @@ pub(super) fn commit(
     if blocked && posted {
         for key in ["blocker", "assignee", "next_step"] {
             fields.insert(key.into(), json!(""));
+        }
+    }
+    // The stand-in for a failed parent call wrote its own blocker and next
+    // step (#141). Once the hold clears they are stale, so they go, and only
+    // they: a blocker the parent wrote itself stays.
+    if hold_cleared {
+        for stand_in in [failure::blocked(false), failure::blocked(true)] {
+            for (key, text) in [
+                ("blocker", &stand_in.note.blocker),
+                ("next_step", &stand_in.note.next_step),
+            ] {
+                if fields.get(key).and_then(Value::as_str) == Some(text) {
+                    fields.insert(key.into(), json!(""));
+                }
+            }
         }
     }
     for (key, value) in [
