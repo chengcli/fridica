@@ -21,13 +21,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # The default checkout is the trusted base branch. Checking out the
+      # pull request's merge commit by ref is refused for a fork's pull
+      # request (actions/checkout 5.1+, allow-unsafe-pr-checkout), so the
+      # merged commit is reached from main, once verified to be on it.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ github.token }}
-      - name: Verify merged commit belongs to main
-        run: git merge-base --is-ancestor HEAD origin/main
+      - name: Check out the merged commit, verified to be on main
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          git merge-base --is-ancestor "$MERGE_SHA" origin/main
+          git checkout --quiet --detach "$MERGE_SHA"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
