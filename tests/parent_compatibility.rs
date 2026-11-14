@@ -217,6 +217,7 @@ async fn details_only_reply_links_the_ordered_upload_before_answer_closure() {
             owner: "UOWNER".into(),
             observe_only: false,
             timeout: Duration::from_secs(1),
+            heads: None,
         };
         assert_eq!(dispatcher.drain(1).await.unwrap(), 1);
         assert_eq!(

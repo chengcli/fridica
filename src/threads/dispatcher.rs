@@ -5,6 +5,7 @@ use crate::{
         delivery::{Delivery, DeliveryOutcome},
         time::Clock,
     },
+    github::client::{Api, Operation, Request},
     store::Shared,
 };
 use anyhow::{bail, Result};
@@ -13,7 +14,19 @@ use fridica_core::{
     egress::{self, DenyList},
     store::{PostOutcome, Store as _},
 };
-use std::{path::Path, sync::Arc, time::Duration};
+use regex::Regex;
+use std::{
+    path::Path,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
+
+static VERDICT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^VERDICT (\S+)#([0-9]{1,9}) ([0-9a-f]{40}) (approve \(code review\)|approve|changes)$",
+    )
+    .unwrap()
+});
 
 pub struct Dispatcher<D: Delivery> {
     pub store: Shared,
@@ -22,8 +35,52 @@ pub struct Dispatcher<D: Delivery> {
     pub owner: String,
     pub observe_only: bool,
     pub timeout: Duration,
+    /// Reads a PR's live head for verdict lines; None signs nothing.
+    pub heads: Option<Arc<dyn Api>>,
 }
 impl<D: Delivery> Dispatcher<D> {
+    /// Turns each `VERDICT <owner>/<repo>#<PR> <sha> <verdict>` line
+    /// (provision04) into a line on top: the SIGN-OFF line only if the PR's
+    /// head, read now, is still `<sha>`; else why it was not signed.
+    async fn sign(&self, text: &str) -> String {
+        let (mut top, mut rest, mut first) = (vec![], vec![], None);
+        for line in text.lines() {
+            let Some(m) = VERDICT.captures(line.trim()) else {
+                rest.push(line);
+                continue;
+            };
+            let (repo, n, sha, verdict) = (&m[1], m[2].parse().unwrap_or(0), &m[3], &m[4]);
+            let live = match &self.heads {
+                _ if *first.get_or_insert_with(|| repo.to_owned()) != repo => {
+                    Err("one repository per message".into())
+                }
+                Some(api) => api
+                    .get(Request {
+                        repo: repo.into(),
+                        operation: Operation::Pull { number: n },
+                    })
+                    .await
+                    .map_err(|e| format!("head not read: {}", e.message()))
+                    .and_then(|v| {
+                        v["head"]["sha"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or("head not read".into())
+                    }),
+                None => Err("head not read: GitHub is off".into()),
+            };
+            top.push(match live {
+                Ok(live) if live == sha => format!("SIGN-OFF #{n} {sha} {verdict}"),
+                Ok(live) => format!("#{n} not signed: its head moved from {sha} to {live}."),
+                Err(why) => format!("#{n} not signed: {why}."),
+            });
+        }
+        if top.is_empty() {
+            return text.into();
+        }
+        top.extend(rest.into_iter().map(str::to_owned));
+        top.join("\n")
+    }
     /// Bound each pass so intake/control tasks cannot be starved by a busy queue.
     pub async fn drain(&self, limit: usize) -> Result<usize> {
         self.drain_checked(limit, None).await
@@ -33,8 +90,8 @@ impl<D: Delivery> Dispatcher<D> {
     /// it fails with `egress_<rule>`, which names the rule, never the term.
     /// An unreadable list holds every post back rather than sending unchecked.
     ///
-    /// Sign-off lines are not checked here: provision04 makes the agent
-    /// re-read the PR head before it signs (#109).
+    /// A SIGN-OFF line written as such is not checked here (#109); a verdict
+    /// line is signed against the live head, in the copy that is sent.
     pub async fn drain_checked(&self, limit: usize, deny: Option<&Path>) -> Result<usize> {
         if self.observe_only {
             return Ok(0);
@@ -73,9 +130,11 @@ impl<D: Delivery> Dispatcher<D> {
                     continue;
                 };
                 attempted += 1;
+                let mut sending = post.clone();
+                sending.post.text = self.sign(&post.post.text).await;
                 // Every broken rule is recorded, each as `egress_<rule>`, so
                 // the owner sees all of them in one pass.
-                let refused = check(&post, &rules);
+                let refused = check(&sending, &rules);
                 let result = if !refused.is_empty() {
                     DeliveryOutcome::Rejected {
                         code: refused
@@ -85,7 +144,7 @@ impl<D: Delivery> Dispatcher<D> {
                             .join("+"),
                     }
                 } else {
-                    tokio::time::timeout(self.timeout, self.delivery.send(post.clone()))
+                    tokio::time::timeout(self.timeout, self.delivery.send(sending))
                         .await
                         .unwrap_or(DeliveryOutcome::Ambiguous {
                             code: "delivery_timeout".into(),

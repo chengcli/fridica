@@ -60,6 +60,7 @@ fn dispatcher(s: &Store, adapter: Arc<Fake>, clock: Arc<ReplayClock>) -> Dispatc
         owner: "UOWNER".into(),
         observe_only: false,
         timeout: Duration::from_secs(1),
+        heads: None,
     }
 }
 
@@ -262,6 +263,7 @@ async fn delivery_timeout_is_ambiguous_and_never_automatically_resent() {
         owner: "UOWNER".into(),
         observe_only: false,
         timeout: Duration::from_millis(1),
+        heads: None,
     };
     assert_eq!(dispatcher.drain(10).await.unwrap(), 0);
     assert_eq!(state(&s, id).await, "ambiguous");

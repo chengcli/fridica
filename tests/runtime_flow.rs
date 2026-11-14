@@ -277,6 +277,7 @@ path="{}"
         .await
         .unwrap()
         .with_files(Arc::new(TextFiles))
+        .with_heads(Some(Arc::new(Head)))
         .with_configuration_editor(
             {
                 let parent = parent.clone();
@@ -887,6 +888,70 @@ async fn a_report_carrying_a_sign_off_goes_to_the_parent_instead_of_the_fast_pat
         parent_reply
     );
     h.runtime.close().await.unwrap();
+}
+
+/// PR #7's live head is ab..ab; every other PR's is cd..cd.
+struct Head;
+impl fridica::github::client::Api for Head {
+    fn get(
+        &self,
+        r: fridica::github::client::Request,
+    ) -> AdapterFuture<'_, Result<Value, fridica::github::client::Failure>> {
+        let seven = matches!(
+            r.operation,
+            fridica::github::client::Operation::Pull { number: 7 }
+        );
+        let sha = if seven { "ab" } else { "cd" }.repeat(20);
+        Box::pin(async move { Ok(json!({"head":{"sha":sha}})) })
+    }
+}
+/// A single-job report's verdict line is signed by the daemon, with no
+/// parent turn, only if the PR's head read at posting is the one reviewed.
+#[tokio::test]
+async fn a_report_verdict_is_signed_only_on_the_live_head_without_a_parent_turn() {
+    let (head, moved) = ("ab".repeat(20), "cd".repeat(20));
+    let verdict = format!("VERDICT owner/project#7 {head} approve");
+    for (report, posted) in [
+        (
+            format!("Checks passed.\n{verdict}"),
+            format!("SIGN-OFF #7 {head} approve\nChecks passed."),
+        ),
+        (
+            format!("VERDICT owner/project#9 {head} changes\nChecks passed."),
+            format!("#9 not signed: its head moved from {head} to {moved}.\nChecks passed."),
+        ),
+        (
+            format!("{verdict}\nVERDICT other/project#7 {head} changes"),
+            format!("SIGN-OFF #7 {head} approve\n#7 not signed: one repository per message."),
+        ),
+        ("Checks passed.".into(), "Checks passed.".into()),
+    ] {
+        let h = Harness::new(vec![delegate()], false).await;
+        h.worker.outcomes.lock().unwrap().push_back(Ok(Outcome {
+            result: serde_json::from_value(
+                json!({"status":"done","summary":"done","report":report}),
+            )
+            .unwrap(),
+            backend_session_id: "b".into(),
+        }));
+        h.intake(false).await;
+        h.runtime.pass().await.unwrap();
+        h.finish(1, 1).await;
+        h.runtime.pass().await.unwrap();
+        assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+        let sent = h
+            .sink
+            .calls
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .post
+            .text
+            .clone();
+        assert_eq!(sent, posted);
+        h.runtime.close().await.unwrap();
+    }
 }
 
 #[tokio::test]
