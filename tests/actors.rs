@@ -146,6 +146,7 @@ async fn addressed_message_runs_actor_then_delivery_and_closes_its_obligation() 
         owner: "UOWNER".into(),
         observe_only: false,
         timeout: Duration::from_secs(1),
+        heads: None,
     };
     assert_eq!(d.drain(100).await.unwrap(), 1);
     assert_eq!(

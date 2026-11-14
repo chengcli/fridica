@@ -7,8 +7,8 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde_json::json;
-/// Workers report verdicts; the parent writes sign-off lines (provision04, #109).
-pub const NO_SIGN_OFF:&str="You are a delegated worker: never write a SIGN-OFF line in your result or report, and start no line with \"sign-off\". Give your verdict and its evidence; the coordinating agent decides and writes the sign-off.";
+/// Workers report verdicts; Fridica signs a verdict line on the live head (provision04, #109).
+pub const NO_SIGN_OFF:&str="You are a delegated worker: never write a SIGN-OFF line in your result or report, and start no line with \"sign-off\". Give your verdict and its evidence; after a line-by-line reading of a PR's head, end your report with the line `VERDICT <owner>/<repo>#<PR> <40-character sha> approve|changes`, which Fridica signs only if that head is still live.";
 pub struct OwnerInstructions;
 impl super::jsonl::Instructions for OwnerInstructions {
     fn build(&self, config: &Config, worker: &WorkerRecord) -> Result<String> {

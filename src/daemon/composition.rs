@@ -140,6 +140,10 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
     let context = crate::config::LoadContext::current()?;
     let shared: Shared = Arc::new(store.clone());
     let files: Arc<dyn Downloader> = slack.clone();
+    let heads = match &mode {
+        Mode::Active(e) if config.github.enabled => e.github.clone(),
+        _ => None,
+    };
     let (adapters, observe_only, parent_factory): (_, _, ParentFactory<ComposedParent>) = match mode
     {
         Mode::ObserveOnly => (
@@ -220,6 +224,7 @@ pub async fn start<S: Delivery + Downloader + Reader + 'static>(
     let runtime = Runtime::start(store, config, adapters, clock, ids, observe_only)
         .await?
         .with_configuration_editor(parent_factory, context)
-        .with_files(files);
+        .with_files(files)
+        .with_heads(heads);
     Ok(runtime)
 }

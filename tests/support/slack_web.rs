@@ -266,6 +266,7 @@ path="{}"
             owner: "UOWNER".into(),
             observe_only: false,
             timeout: Duration::from_secs(2),
+            heads: None,
         }
     }
 }

@@ -96,6 +96,7 @@ async fn delivery_replays_frozen_python_outcomes_history_and_order_exactly() {
             owner: "UOWNER".into(),
             observe_only: false,
             timeout: Duration::from_secs(1),
+            heads: None,
         };
         for snapshot in fixture.snapshots {
             clock.set(snapshot.at);

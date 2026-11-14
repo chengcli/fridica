@@ -71,6 +71,11 @@ pub struct Runtime<P: Parent, D: Delivery> {
     archived: std::sync::Mutex<f64>,
 }
 impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
+    /// Lets the dispatcher read PR heads to sign verdict lines (provision04).
+    pub fn with_heads(mut self, heads: Option<Arc<dyn crate::github::client::Api>>) -> Self {
+        self.dispatcher.heads = heads;
+        self
+    }
     /// Lets owner controls read Slack text files through this client.
     pub fn with_files(mut self, files: Arc<dyn crate::slack::files::Downloader>) -> Self {
         self.files = Some(files);
@@ -145,6 +150,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             owner: config.owner.slack_user.clone(),
             observe_only,
             timeout: Duration::from_secs(30),
+            heads: None,
         };
         Ok(Self {
             store,
