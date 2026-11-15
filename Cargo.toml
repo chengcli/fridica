@@ -52,9 +52,3 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-
-# Use the coordinated sibling crate changes until they are published.
-[patch.crates-io]
-fridica-core = { path = "../fridica-core" }
-fridica-store-sqlite = { path = "../fridica-store-sqlite" }
-fridica-agent = { path = "../fridica-agent" }

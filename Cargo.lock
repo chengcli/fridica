@@ -513,6 +513,8 @@ dependencies = [
 [[package]]
 name = "fridica-agent"
 version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6dcb4daada42cad16476cb284a962518a0abef007506e664128dce540ae9cf"
 dependencies = [
  "serde",
  "serde_json",
@@ -522,6 +524,8 @@ dependencies = [
 [[package]]
 name = "fridica-core"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5147d5f75b2db8f3f5b46987ad433f58fa06751548db41cb6ceb519f14c9dc5c"
 dependencies = [
  "anyhow",
  "regex",
@@ -551,6 +555,8 @@ dependencies = [
 [[package]]
 name = "fridica-store-sqlite"
 version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c6ece36c642c164add2365fc1fd13d5ee61fc4b6623a74f7cbac6fed53cce57"
 dependencies = [
  "anyhow",
  "chrono",
