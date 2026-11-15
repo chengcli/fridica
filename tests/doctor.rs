@@ -498,19 +498,14 @@ async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
 #[tokio::test]
 async fn codex_parent_owner_inputs_and_sandbox_failures_are_independent() {
     let mut fixture = Fixture::new();
-    for name in ["invalid-repos.toml", "invalid-contract.md"] {
-        std::fs::write(
-            fixture.dir.path().join(name),
-            "private-secret invalid content",
-        )
-        .unwrap();
-    }
+    std::fs::write(
+        fixture.dir.path().join("invalid-contract.md"),
+        "private-secret invalid content",
+    )
+    .unwrap();
     let source = std::fs::read_to_string(&fixture.path)
         .unwrap()
-        .replace(
-            "backend=\"claude\"",
-            "backend=\"codex\"\nrepos=\"invalid-repos.toml\"",
-        )
+        .replace("backend=\"claude\"", "backend=\"codex\"")
         .replace(
             "slack_user=\"UOWNER\"",
             "slack_user=\"UOWNER\"\ncontract=\"invalid-contract.md\"",
@@ -526,7 +521,6 @@ async fn codex_parent_owner_inputs_and_sandbox_failures_are_independent() {
     assert_eq!(status(&report, "codex (parent locally)"), Status::Pass);
     assert_eq!(status(&report, "codex (parent locally)"), Status::Pass);
     assert_eq!(status(&report, "Agent contract"), Status::Fail);
-    assert_eq!(status(&report, "Repository list"), Status::Fail);
     assert_eq!(status(&report, "codex (worker on local)"), Status::Pass);
     assert_eq!(status(&report, "claude (worker on local)"), Status::Pass);
     #[cfg(target_os = "linux")]

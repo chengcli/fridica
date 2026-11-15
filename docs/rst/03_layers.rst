@@ -77,8 +77,7 @@ workers, machines or workspaces that do not exist, a thread over ``max_workers_p
 workers, or delegation in a channel that does not allow it are collected as errors and sent back for
 **one repair round**, with the previous answer. What survives validation is applied; nothing the model
 invents can name a machine outside the registry. A standing, owner-editable *contract*
-(``parent/contract.py``) supplies the rules for triage, the parent and every worker, and a shared
-repository list (``parent/repos.py``) tells both where each project lives and who owns it.
+(``parent/contract.py``) supplies the rules for triage, the parent and every worker.
 
 Execution: workers, supervisor, transports, machines
 ----------------------------------------------------

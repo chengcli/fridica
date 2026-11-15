@@ -28,7 +28,7 @@
      - One serial actor per thread, pure gate/advance policy, bounded parent context
    * - parent
      - 763
-     - Tool-less structured-output LLM calls, prompts, schemas, action validation and repair, contract, repos
+     - Tool-less structured-output LLM calls, prompts, schemas, action validation and repair, contract
    * - workers
      - 1,218
      - JSONL worker processes (Claude, Codex), WorkerResult parsing, artifacts, supervisor with slots

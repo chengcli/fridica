@@ -202,11 +202,6 @@ pub async fn run_with(
         config::contract::load(config.owner.contract.as_deref()).is_ok(),
         "invalid or unreadable agent contract",
     );
-    report.test(
-        "Repository list",
-        config::repos::load(config.parent.repos.as_deref()).is_ok(),
-        "invalid or unreadable repository list",
-    );
     for (name, variable, prefix) in [
         ("Slack app token", &config.slack.app_token_env, "xapp-"),
         ("Slack user token", &config.slack.user_token_env, "xoxp-"),

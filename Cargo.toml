@@ -52,3 +52,7 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# Use the coordinated core change until it is published.
+[patch.crates-io]
+fridica-core = { path = "../fridica-core" }

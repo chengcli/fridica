@@ -15,7 +15,6 @@ fn setup(root: &Path) {
     for name in ["project", "etc", "home"] {
         std::fs::create_dir_all(root.join(name)).unwrap();
     }
-    std::fs::write(root.join("etc/repos.toml"), "# fixture\n").unwrap();
     std::fs::write(root.join("etc/contract-custom.md"), "Fixture contract\n").unwrap();
 }
 fn normalize(v: &mut Value, root: &Path, home: &Path) {

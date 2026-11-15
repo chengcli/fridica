@@ -67,7 +67,7 @@ it is the published `fridica-core <https://github.com/chengcli/fridica-core>`_ c
    │   ├── github/           the F1 client and GithubState; used by parent and overseer
    │   ├── machines/         the registry and selector resolution
    │   ├── threads/          ThreadManager, ThreadActor, context builder
-   │   ├── parent/           the tool-less call: contract, prompts, schemas, actions + validation, repos
+   │   ├── parent/           the tool-less call: contract, prompts, schemas, actions + validation
    │   ├── workers/          protocol, Claude and Codex adapters (serde), supervisor, slots, results
    │   ├── exec/             transports: local, ssh (ControlMaster), slurm (stub); sandbox; watchdog
    │   ├── approvals/        the broker and the policy rules
@@ -80,7 +80,7 @@ it is the published `fridica-core <https://github.com/chengcli/fridica-core>`_ c
    │   ├── doctor/           checks that run where each process will run
    │   └── cli/              clap commands
    ├── dashboard/            unchanged vanilla JS (embedded)
-   ├── assets/               contract.md, repos.toml, template.toml, manifest.yaml (embedded)
+   ├── assets/               contract.md, template.toml, manifest.yaml (embedded)
    ├── python/fridica/       the launcher package (__init__.py, __main__.py)
    ├── pyproject.toml        maturin, bindings = "bin"
    ├── spec/                 the frozen Python 0.3.4 tree, used only by the parity harness
@@ -562,5 +562,5 @@ The Python launcher
 
 Wheels are built on CI for ``x86_64`` and ``aarch64`` Linux (manylinux) and macOS. The version comes
 from the git tag through ``cargo`` and ``maturin``; ``scripts/release.py verify`` keeps checking that
-the wheel bundles the manifest, contract, repository list, template and dashboard, now by listing the
+the wheel bundles the manifest, contract, template and dashboard, now by listing the
 binary's embedded assets (``fridica assets --list``).

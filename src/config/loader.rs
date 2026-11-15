@@ -134,7 +134,6 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     if parent.context_chars < 2000 {
         bail!("parent.context_chars must be at least 2000");
     }
-    parent.repos = parent.repos.map(|p| file(&p, base, context)).transpose()?;
     let limits: Limits = decode(root.get("limits"))?;
     let placement: Placement = decode(root.get("placement"))?;
     number(placement.probe_ttl, 0., "placement.probe_ttl")?;
@@ -525,7 +524,6 @@ fn protect(config: &Config, context: &LoadContext) -> Result<()> {
     let mut protected = context.protected.clone();
     protected.push(config.path.clone());
     protected.extend(config.owner.contract.iter().cloned());
-    protected.extend(config.parent.repos.iter().cloned());
     for machine in &config.machines.machines {
         if machine.remote() {
             continue;

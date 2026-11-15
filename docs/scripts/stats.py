@@ -313,7 +313,7 @@ def defaults() -> dict[str, dict]:
     from fridica.machines.registry import Machine, Policy
     return {
         "limits": {field.name: field.default for field in fields(Limits)},
-        "parent": {field.name: field.default for field in fields(ParentConfig) if field.name != "repos"},
+        "parent": {field.name: field.default for field in fields(ParentConfig)},
         "machine": {field.name: field.default for field in fields(Machine) if field.name in ("max_workers", "max_jobs")},
         "policy": {field.name: field.default for field in fields(Policy)},
     }

@@ -1,8 +1,8 @@
 //! Production instruction provider for the backend factory. Edits to owner
-//! rules and repository facts are visible on the next job without a restart.
+//! rules are visible on the next job without a restart.
 pub use crate::config::prompts::UNTRUSTED;
 use crate::{
-    config::{contract, repos, Config},
+    config::{contract, Config},
     core::worker::WorkerRecord,
 };
 use anyhow::{Context, Result};
@@ -20,8 +20,7 @@ impl super::jsonl::Instructions for OwnerInstructions {
             .workspace(&worker.workspace)
             .context("worker workspace is no longer configured")?;
         let contract = contract::load(config.owner.contract.as_deref())?;
-        let repositories = repos::load(config.parent.repos.as_deref())?;
-        let data = json!({"owner_id":config.owner.slack_user,"profile":config.owner.profile,"repositories":repositories,"machine":machine.payload(0),"workspace":worker.workspace});
+        let data = json!({"owner_id":config.owner.slack_user,"profile":config.owner.profile,"machine":machine.payload(0),"workspace":worker.workspace});
         Ok(format!(
             "{}\n\n{}\n{UNTRUSTED}\n{NO_SIGN_OFF}\n\nWorker data:\n{}",
             crate::config::provisions::shared(),

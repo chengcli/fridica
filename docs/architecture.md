@@ -28,7 +28,7 @@ serves every thread at once.
 | `machines/` | the registry (`Machine`, `Workspace`, `Policy`, `Resources`) and selector resolution |
 | `slack/` | ingress (`normalize`), egress (Web API and error mapping), the outbox dispatcher, catch-up, link following, rendering and metadata |
 | `threads/` | `ThreadManager` (one actor task per busy thread), `ThreadActor`, the pure `policy`, the parent `context` builder |
-| `parent/` | the tool-less structured-output LLM call, schemas, prompts, action validation with one repair round, the contract, the repository list |
+| `parent/` | the tool-less structured-output LLM call, schemas, prompts, action validation with one repair round, the contract |
 | `workers/` | the JSONL process base, `CodexWorker` (app-server JSON-RPC), `ClaudeWorker` (stream-json with the control protocol), `WorkerResult` parsing, artifacts, `Supervisor` |
 | `exec/` | the `Transport` protocol: `local`, `ssh` (ControlMaster, `exec sh -c`), `slurm` (stub); process plumbing; bubblewrap confinement |
 | `approvals/` | the broker (persist a request, await the owner's decision, deny on timeout) and policy rules |
@@ -55,8 +55,7 @@ serves every thread at once.
    - linked messages;
    - the session summary, decisions and sticky context;
    - this thread's workers with their last results, minus the prose report;
-   - the machine registry, with names, tags, workspace names and load, but no paths;
-   - the repository list.
+   - the machine registry, with names, tags, workspace names and load, but no paths.
 
    `ParentAgent.decide()` returns an `Action`. `parent/actions.validate()` resolves
    selectors through `machines.match.resolve()` and enforces the per-channel and

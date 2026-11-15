@@ -70,9 +70,7 @@ pub async fn check(
     }) {
         report.host.push(Check::HostPathsRefused);
     }
-    if crate::config::contract::load(config.owner.contract.as_deref()).is_err()
-        || crate::config::repos::load(config.parent.repos.as_deref()).is_err()
-    {
+    if crate::config::contract::load(config.owner.contract.as_deref()).is_err() {
         report.host.push(Check::OwnerInputsRefused);
     }
     if !report.host.is_empty() {

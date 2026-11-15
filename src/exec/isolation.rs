@@ -55,7 +55,6 @@ impl Isolation {
         private.extend(config.owner.contract.iter().cloned());
         // The egress deny list names what must stay private; workers never see it.
         private.extend(config.egress.deny_list.iter().cloned());
-        private.extend(config.parent.repos.iter().cloned());
         private.extend_from_slice(additional);
         if private
             .iter()

@@ -524,8 +524,6 @@ dependencies = [
 [[package]]
 name = "fridica-core"
 version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "506dfaf68f5ac6faba667143728e6d2692c991503c535caa01aeed3558417425"
 dependencies = [
  "anyhow",
  "regex",

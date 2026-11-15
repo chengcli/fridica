@@ -1,7 +1,7 @@
 pub use crate::config::prompts::UNTRUSTED;
 use crate::config::prompts::{ACTION, DEBRIEF, TRIAGE};
 use crate::{
-    config::{contract, repos, Config},
+    config::{contract, Config},
     core::parent::ParentRequest,
 };
 use anyhow::{bail, Result};
@@ -12,7 +12,6 @@ pub fn build(
     request: &ParentRequest,
 ) -> Result<(String, serde_json::Value, String)> {
     let rules = contract::load(config.owner.contract.as_deref())?;
-    let repositories = repos::load(config.parent.repos.as_deref())?;
     let (instructions, schema, model) = match request.call.as_str() {
         "triage" => (
             format!("{}\n{TRIAGE}", rules.participation),
@@ -53,7 +52,7 @@ pub fn build(
     let linked_threads = session
         .as_object_mut()
         .and_then(|s| s.remove("linked_threads"));
-    let mut data = json!({"now":request.session["now"],"owner_id":config.owner.slack_user,"profile":config.owner.profile,"repositories":repositories,
+    let mut data = json!({"now":request.session["now"],"owner_id":config.owner.slack_user,"profile":config.owner.profile,
         "session":session,"trigger":trigger,"history":history,"obligations":request.obligations,"linked":request.linked,
         "machines":request.session["machines"],"workers":request.session["work"]["workers"],
         "delegation_allowed":request.session["channel"].as_str().is_some_and(|c|config.slack.may_delegate(c)) && request.session["driver"]!="external",

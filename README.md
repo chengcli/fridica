@@ -440,6 +440,9 @@ Claude, the ability to resume it) is tied to its directory. Multi-GPU jobs need
 The daemon rereads `config.toml` when it changes. A rejected edit keeps the running
 configuration. Machine changes apply to workers started afterwards.
 
+The former `[parent] repos` setting has been removed; delete it from existing
+configurations. Repository context comes from the request and linked GitHub content.
+
 ## Agent contract
 
 `contract.md`, next to `config.toml`, is the rulebook, and it is reread on every call.
@@ -461,15 +464,6 @@ The fixed instructions Fridica adds around the contract are packaged too, in
 (`parent-action.md`), the triage and debrief answer formats, and the
 untrusted-data line that closes every parent and worker prompt. They are not
 read from `config.toml`'s directory; changing them is a pull request.
-
-## Repository list
-
-`fridica/parent/repos.toml` ships with the package and is shared by the whole team.
-Change it through a pull request. Each entry has a name, a GitHub URL, and
-collaborators; the first collaborator is the owner, and their word is final. The
-list travels to the parent and to workers as data. Workers find checkouts by git
-remote, because entries never contain local paths. `[parent] repos = "…"` overrides
-the list for local testing.
 
 ## GitHub links
 
@@ -518,7 +512,7 @@ Two things to weigh before enabling it:
 - The daemon itself calls `api.github.com`. Machine network policies govern workers,
   not this traffic. Set `enabled = false` to keep the daemon off the network.
 
-The shared repository list is not a permission grant. To let workers review a public
+To let workers review a public
 GitHub ref without general network access, set `fetch_repos` in the workspace policy
 (for example, `["chengcli/snapy", "UCzhangxi/snapy"]`), with `network = []` and
 `approvals = "on-request"`. A delegated job may name one listed repo and ref;

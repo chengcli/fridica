@@ -61,10 +61,10 @@ What the parent sees
   WorkerResult **including the report**, plus the brief (first 1,000 characters) and any error (first
   500 characters), so the parent can write the reply from the worker's own words.
 * **Environment**: the machine registry with live load (so the parent can choose a less busy machine),
-  the shared repository list, the thread's task note, the delegation limits, and whether delegation
+  the thread's task note, the delegation limits, and whether delegation
   is allowed in this channel.
 
-The triage call is smaller: the owner's profile, repositories, summary, the last 15 history messages
+The triage call is smaller: the owner's profile, summary, the last 15 history messages
 and the trigger.
 
 .. include:: generated/t11_budgets.rst
@@ -96,7 +96,7 @@ What the worker sees
 --------------------
 
 A worker starts from standing instructions: the worker section of the owner's contract, the owner's
-profile, the repository list, a description of its machine, and its workspace. Each job then adds the
+profile, a description of its machine, and its workspace. Each job then adds the
 **brief**, a self-contained description written by the parent (at most 40,000 characters). Workers
 never read Slack. This forces the parent to state the task, the repository, the branch and the
 expected deliverable explicitly, which also makes every job reproducible from its database row.
