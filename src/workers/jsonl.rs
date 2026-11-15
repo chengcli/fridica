@@ -47,6 +47,28 @@ pub struct SystemLauncher {
     probes: Arc<Semaphore>,
 }
 impl SystemLauncher {
+    /// Best-effort retention at the admission boundary, before inputs or backend
+    /// work begin. The supervisor holds the slot exclusively through admission.
+    async fn cleanup(&self, spec: &WorkerSpec) {
+        if !spec.create_cwd()
+            || spec.workspace.policy.mode == "read-only"
+            || spec.workspace.path.file_name().and_then(|s| s.to_str())
+                != Some(format!("worker{}", spec.slot).as_str())
+        {
+            return;
+        }
+        let command = vec![
+            "/usr/bin/python3".into(),
+            "-I".into(),
+            "-S".into(),
+            "-c".into(),
+            include_str!("../exec/cleanup.py").into(),
+            json!({"workspace":spec.workspace.path,"slot":spec.slot}).to_string(),
+        ];
+        if let Ok(launch) = self.launch(spec, command) {
+            let _ = process::run_with_open_stdin(launch, Duration::from_secs(30), 4096).await;
+        }
+    }
     /// Construct from owner configuration, never from a worker/model payload.
     pub fn from_config(
         config: &Config,
@@ -103,6 +125,7 @@ impl Launcher for SystemLauncher {
                 }
             }
             if !spec.confined() {
+                self.cleanup(&spec).await;
                 return Ok(());
             }
             // Probe the configured base: slot directories can be absent until
@@ -159,7 +182,10 @@ impl Launcher for SystemLauncher {
             .await;
             use crate::exec::isolation::Check;
             let code = match check {
-                Check::Passed => return Ok(()),
+                Check::Passed => {
+                    self.cleanup(&spec).await;
+                    return Ok(());
+                }
                 Check::InventoryRefused => "worker_isolation_inventory_refused",
                 Check::SettingsRefused => "worker_isolation_settings_refused",
                 Check::NamespaceFailed => "worker_isolation_namespace_failed",

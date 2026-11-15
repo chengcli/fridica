@@ -437,6 +437,17 @@ busy waits rather than moving to another slot, because its session (and, for
 Claude, the ability to resume it) is tied to its directory. Multi-GPU jobs need
 `max_jobs = 1`, so the single slot gets every GPU.
 
+**Scratch retention.** Before each job, Fridica cleans its writable `workerN/`
+slot on the execution machine (local or SSH). Regular scratch files whose last
+modification and access are both more than seven days old are deleted, then
+directories emptied by that cleanup are removed. It never cleans a running job's
+slot, shared workspaces with `subfolders = false`, read-only workspaces, or sibling
+slots. Git checkouts/worktrees, symlinks and hard-linked files are preserved.
+Place a `.fridica-keep` file in a directory to preserve that entire subtree;
+put it in the slot root to disable cleanup for that slot. Cleanup is best effort
+and bounded to 30 seconds; inaccessible files are retried before a later job.
+Unused slots are cleaned when they next receive work, not by a background timer.
+
 The daemon rereads `config.toml` when it changes. A rejected edit keeps the running
 configuration. Machine changes apply to workers started afterwards.
 
