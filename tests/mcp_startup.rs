@@ -250,6 +250,30 @@ async fn ssh_startup_scans_target_settings_and_disables_their_servers() {
         std::fs::Permissions::from_mode(0o700),
     )
     .unwrap();
+    for name in [
+        "target-home/project/worker1/expired",
+        "project/worker1/expired",
+    ] {
+        f.write(name, "old scratch");
+        let old = std::time::SystemTime::now() - Duration::from_secs(8 * 86400);
+        std::fs::File::options()
+            .write(true)
+            .open(f.root.join(name))
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(old)
+                    .set_modified(old),
+            )
+            .unwrap();
+    }
+    f.launcher()
+        .admit(std::sync::Arc::new(f.config.clone()), f.spec.clone())
+        .await
+        .unwrap();
+    f.launcher().prepare(f.spec.clone()).await;
+    assert!(!remote.join("project/worker1/expired").exists());
+    assert!(f.root.join("project/worker1/expired").exists());
     let out = f.run().await;
     assert_eq!(
         out.returncode,
@@ -330,4 +354,74 @@ async fn explicit_server_overrides_a_colliding_ambient_alias_after_sanitization(
         .unwrap();
     assert!(disabled < configured);
     assert!(!args[configured].as_str().unwrap().contains("ambient"));
+}
+
+#[tokio::test]
+async fn preparation_cleans_only_expired_scratch_in_writable_slots() {
+    let mut f = Fixture::new();
+    let path = f.spec.workspace.path.join("expired.txt");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    let old = std::time::SystemTime::now() - Duration::from_secs(8 * 86400);
+    file.set_times(
+        std::fs::FileTimes::new()
+            .set_accessed(old)
+            .set_modified(old),
+    )
+    .unwrap();
+    drop(file);
+    f.spec.workspace.policy.mode = "read-only".into();
+    f.launcher()
+        .admit(std::sync::Arc::new(f.config.clone()), f.spec.clone())
+        .await
+        .unwrap();
+    f.launcher().prepare(f.spec.clone()).await;
+    assert!(path.exists());
+    f.spec.workspace.policy.mode = "full".into();
+    f.spec.workspace.subfolders = false;
+    f.launcher()
+        .admit(std::sync::Arc::new(f.config.clone()), f.spec.clone())
+        .await
+        .unwrap();
+    f.launcher().prepare(f.spec.clone()).await;
+    assert!(path.exists());
+    f.spec.workspace.subfolders = true;
+    f.launcher()
+        .admit(std::sync::Arc::new(f.config.clone()), f.spec.clone())
+        .await
+        .unwrap();
+    f.launcher().prepare(f.spec.clone()).await;
+    assert!(!path.exists());
+    assert!(path.parent().unwrap().is_dir());
+}
+
+#[tokio::test]
+async fn admission_neither_creates_a_slot_nor_deletes_old_files() {
+    let f = Fixture::new();
+    let launcher = f.launcher();
+    launcher
+        .admit(std::sync::Arc::new(f.config.clone()), f.spec.clone())
+        .await
+        .unwrap();
+    assert!(!f.spec.workspace.path.exists());
+    f.write("project/worker1/expired", "old");
+    let path = f.spec.workspace.path.join("expired");
+    let old = std::time::SystemTime::now() - Duration::from_secs(8 * 86400);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_accessed(old)
+                .set_modified(old),
+        )
+        .unwrap();
+    launcher
+        .admit(std::sync::Arc::new(f.config.clone()), f.spec.clone())
+        .await
+        .unwrap();
+    assert!(path.exists());
+    launcher.prepare(f.spec.clone()).await;
+    assert!(!path.exists());
 }

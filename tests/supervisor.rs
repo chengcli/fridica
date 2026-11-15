@@ -118,6 +118,7 @@ impl Worker for Fake {
 #[derive(Default)]
 struct Fakes {
     admissions: Mutex<Vec<WorkerSpec>>,
+    preparations: Mutex<Vec<WorkerSpec>>,
     refuse_admission: AtomicBool,
     block_admission: AtomicBool,
     reject_config: AtomicBool,
@@ -145,6 +146,11 @@ impl Fakes {
     }
 }
 impl Factory for Fakes {
+    fn prepare(&self, spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        Box::pin(async move {
+            self.preparations.lock().unwrap().push(spec);
+        })
+    }
     fn validate_config(&self, _config: &Config) -> anyhow::Result<()> {
         anyhow::ensure!(!self.reject_config.load(Ordering::SeqCst), "stale adapter");
         Ok(())
@@ -1205,6 +1211,7 @@ async fn admission_refusal_rechecks_warm_workers_before_fetch_and_never_retries(
     h.wait_status("a-1", "failed").await;
     assert_eq!(h.factory.created.lock().unwrap().len(), 1);
     assert_eq!(h.factory.admissions.lock().unwrap().len(), 2);
+    assert_eq!(h.factory.preparations.lock().unwrap().len(), 1);
     assert_eq!(worker.calls.lock().unwrap().len(), 1);
     assert_eq!(io.preparing.available_permits(), 1);
     assert!(!worker.alive());
@@ -1256,6 +1263,7 @@ async fn stop_during_admission_remains_responsive_and_prevents_fetch_and_backend
         "cancelled"
     );
     assert_eq!(io.preparing.available_permits(), 0);
+    assert!(h.factory.preparations.lock().unwrap().is_empty());
     assert!(h.factory.latest("a").calls.lock().unwrap().is_empty());
     assert!(!h.factory.latest("a").alive());
     h.supervisor.close().await.unwrap();

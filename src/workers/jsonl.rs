@@ -24,6 +24,10 @@ use std::{collections::BTreeMap, ffi::OsString, io, path::PathBuf, sync::Arc, ti
 use tokio::sync::Semaphore;
 
 pub trait Launcher: Send + Sync {
+    /// Mutating setup, called only after read-only admission succeeds.
+    fn prepare(&self, _spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        Box::pin(async {})
+    }
     fn validate_config(&self, _config: &Config) -> anyhow::Result<()> {
         Ok(())
     }
@@ -47,6 +51,28 @@ pub struct SystemLauncher {
     probes: Arc<Semaphore>,
 }
 impl SystemLauncher {
+    /// Best-effort retention after admission, before inputs or backend work
+    /// begin. The supervisor holds the slot exclusively through preparation.
+    async fn cleanup(&self, spec: &WorkerSpec) {
+        if !spec.create_cwd()
+            || spec.workspace.policy.mode == "read-only"
+            || spec.workspace.path.file_name().and_then(|s| s.to_str())
+                != Some(format!("worker{}", spec.slot).as_str())
+        {
+            return;
+        }
+        let command = vec![
+            "/usr/bin/python3".into(),
+            "-I".into(),
+            "-S".into(),
+            "-c".into(),
+            include_str!("../exec/cleanup.py").into(),
+            json!({"workspace":spec.workspace.path,"slot":spec.slot}).to_string(),
+        ];
+        if let Ok(launch) = self.launch(spec, command) {
+            let _ = process::run_with_open_stdin(launch, Duration::from_secs(30), 4096).await;
+        }
+    }
     /// Construct from owner configuration, never from a worker/model payload.
     pub fn from_config(
         config: &Config,
@@ -64,6 +90,9 @@ impl SystemLauncher {
     }
 }
 impl Launcher for SystemLauncher {
+    fn prepare(&self, spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        Box::pin(async move { self.cleanup(&spec).await })
+    }
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         let current = crate::exec::isolation::Isolation::new(config, &[])?;
         if current != self.isolation {
@@ -379,6 +408,9 @@ pub struct BackendFactory {
     pub recorder: Arc<dyn WireRecorder>,
 }
 impl Factory for BackendFactory {
+    fn prepare(&self, spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        self.launcher.prepare(spec)
+    }
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         self.launcher.validate_config(config)
     }

@@ -126,7 +126,7 @@ pub fn layout(spec: &WorkerSpec) -> String {
         );
     }
     format!(
-        "\n\nWorkspace layout: your working folder is {own}; write only there. It is one slot of the shared workspace {}, which you may read in full: other worker slots, {DIRECTORY} (files handed to workers, read-only) and anything people placed there for you. Search it, folders and subfolders, before reporting a file missing.",
+        "\n\nWorkspace layout: your working folder is {own}; write only there. It is one slot of the shared workspace {}, which you may read in full: other worker slots, {DIRECTORY} (files handed to workers, read-only) and anything people placed there for you. Search it, folders and subfolders, before reporting a file missing. Scratch files not modified or accessed for seven days may be deleted before a later job. Git repositories are preserved. Put a .fridica-keep file in a directory only when its data must persist beyond this retention period.",
         shared.display()
     )
 }
