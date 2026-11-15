@@ -1433,3 +1433,50 @@ async fn a_fork_worker_job_falls_back_to_the_thread_snapshot_when_the_source_can
     );
     h.supervisor.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn changing_explicit_mcp_servers_restarts_a_warm_worker_without_resuming() {
+    let h = Harness::new().await;
+    let mut config = (*h.config).clone();
+    config.github.mcp.enabled = true;
+    config
+        .github
+        .mcp
+        .machines
+        .insert("gpu".into(), Default::default());
+    let machine = config
+        .machines
+        .machines
+        .iter_mut()
+        .find(|m| m.name == "gpu")
+        .unwrap();
+    for workspace in &mut machine.workspaces {
+        workspace.policy.network = vec!["api.github.com".into()];
+        workspace.policy.fetch_repos.clear();
+    }
+    h.supervisor
+        .reconfigure(Arc::new(config.clone()))
+        .await
+        .unwrap();
+    h.add("a", "gpu", 0, false, 2).await;
+    h.supervisor.schedule().await.unwrap();
+    let first = h.factory.latest("a");
+    assert_eq!(first.spec.mcp_servers.len(), 1);
+    first.release.add_permits(1);
+    h.wait_status("a-0", "done").await;
+    config.github.mcp.machines.get_mut("gpu").unwrap().command = "/new/github-mcp-server".into();
+    h.supervisor.reconfigure(Arc::new(config)).await.unwrap();
+    assert_eq!(h.supervisor.schedule().await.unwrap(), vec!["a-1"]);
+    let second = h.factory.latest("a");
+    second.release.add_permits(1);
+    h.wait_status("a-1", "done").await;
+    assert!(!first.alive());
+    assert_eq!(h.factory.created.lock().unwrap().len(), 2);
+    assert!(second.calls.lock().unwrap()[0].resume.is_empty());
+    assert!(second.spec.mcp_servers[0]
+        .args
+        .last()
+        .unwrap()
+        .contains("/new/github-mcp-server"));
+    h.supervisor.close().await.unwrap();
+}

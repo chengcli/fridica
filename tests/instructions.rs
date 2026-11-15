@@ -157,9 +157,9 @@ fn shared_provisions_lead_every_parent_call_and_worker_prompt_in_order() {
         let (prompt, _, _) = fridica::parent::prompts::build(&config, &request).unwrap();
         assert!(prompt.starts_with(&shared), "{call}");
         assert!(!prompt.contains("\"repositories\":"), "{call}");
-        assert!(prompt.contains("SIGN-OFF #<PR> <sha> approve"), "{call}");
+        assert!(prompt.contains("Reviews live on GitHub"), "{call}");
         assert!(
-            prompt.contains("the first line of your reply is that sign-off line"),
+            prompt.contains("Never emit SIGN-OFF or VERDICT protocol lines"),
             "{call}"
         );
     }

@@ -2,4 +2,5 @@
 //! verified campaign evidence or authority to perform repository operations.
 pub mod client;
 pub mod links;
+pub mod mcp;
 pub mod view;

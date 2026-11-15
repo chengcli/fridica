@@ -1,5 +1,6 @@
 //! Owner-provisioned worker boundaries. No credentials, discovery I/O or jobs.
-//! Workers always run without MCP servers, and confinement needs no inventory,
+//! Ambient MCP servers are disabled; only explicit host configuration is used.
+//! Confinement needs no inventory,
 //! so the `[isolation]` table has no settings left; it is accepted empty.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

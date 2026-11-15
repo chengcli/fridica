@@ -319,6 +319,7 @@ pub enum Check {
     WorkspaceRefused,
     HostPathsRefused,
     OwnerInputsRefused,
+    GithubMcpFailed,
 }
 /// Bounded process ownership includes cancellation cleanup and the SSH stdin
 /// watchdog. Exact markers and successful exit are both required for success.

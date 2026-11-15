@@ -84,6 +84,24 @@ impl Launcher for SystemLauncher {
                     "",
                 )
             })?;
+            if let Some(target) =
+                crate::github::mcp::target(&config, &spec.machine.name, &spec.workspace.policy)
+            {
+                let launch = self.launch(
+                    &spec,
+                    crate::github::mcp::probe_command(
+                        target,
+                        spec.workspace.policy.mode == "read-only",
+                    ),
+                )?;
+                if !crate::github::mcp::probe_launch(launch, Duration::from_secs(30)).await {
+                    return Err(failure(
+                        Failure::Refusal,
+                        "worker_github_mcp_unavailable",
+                        "",
+                    ));
+                }
+            }
             if !spec.confined() {
                 return Ok(());
             }
@@ -423,6 +441,7 @@ pub fn driver_spec(spec: &WorkerSpec, backend: Backend) -> fridica_agent::Spec {
         confined: spec.confined(),
         // Scoped fetch must not run beside MCP servers that could reach out.
         forbid_mcp: !p.fetch_repos.is_empty(),
+        mcp_servers: spec.mcp_servers.clone(),
         job_timeout: seconds(spec.job_timeout),
         idle_timeout: seconds(spec.idle_timeout),
         approval_timeout: seconds(p.approval_timeout),
@@ -436,9 +455,8 @@ fn driver_options(options: &Options) -> fridica_agent::Options {
             title: "Fridica".into(),
             version: "2".into(),
         },
-        // Workers never get MCP servers: Claude starts with a strict empty MCP
-        // configuration, and the Codex startup helper disables every server it
-        // finds in the target's settings before app-server initializes.
+        // Explicit servers live in the spec. The startup helper disables ambient
+        // entries before applying the trusted definitions.
         disabled_mcp_servers: vec![],
         eof_wait: options.eof_wait,
         close_grace: options.close_grace,

@@ -5,7 +5,7 @@ use crate::core::worker::{ApprovalDecision, ApprovalRequest};
 pub use fridica_agent::codex::FEATURES_OFF;
 use fridica_agent::Backend;
 use serde_json::Value;
-/// The startup helper disables the target's MCP servers; none is named here.
+/// Ambient MCP servers are disabled by the target-side startup helper.
 pub fn command(spec: &WorkerSpec) -> Vec<String> {
     fridica_agent::codex::command(&driver_spec(spec, Backend::Codex), &[])
 }

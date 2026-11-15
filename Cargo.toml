@@ -16,9 +16,9 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = "0.5.2"
-fridica-store-sqlite = "0.3.2"
-fridica-agent = "0.3.1"
+fridica-core = "0.6.0"
+fridica-store-sqlite = "0.4.0"
+fridica-agent = "0.4.0"
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -43,7 +43,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-fridica-store-sqlite = { version = "0.3.2", features = ["testing"] }
+fridica-store-sqlite = { version = "0.4.0", features = ["testing"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 fridica-slack = { version = "0.2.3", features = ["testing"] }
 # Tests inspect databases with SQL.
@@ -53,6 +53,8 @@ syn = { version = "2", features = ["full", "visit"] }
 [lints.rust]
 unsafe_code = "forbid"
 
-# Use the coordinated core change until it is published.
+# Use the coordinated sibling crate changes until they are published.
 [patch.crates-io]
 fridica-core = { path = "../fridica-core" }
+fridica-store-sqlite = { path = "../fridica-store-sqlite" }
+fridica-agent = { path = "../fridica-agent" }

@@ -58,6 +58,12 @@ pub fn build(
         "delegation_allowed":request.session["channel"].as_str().is_some_and(|c|config.slack.may_delegate(c)) && request.session["driver"]!="external",
         "limits":{"reply_chars":config.limits.reply_chars,"max_delegations":config.limits.max_delegations_per_turn,"max_workers":config.limits.max_workers_per_thread},
         "repair":{"errors":request.errors,"previous_answer":request.previous}});
+    if config.github.mcp.enabled {
+        data["github_mcp_workspaces"] = json!(config.machines.machines.iter().flat_map(|m|
+            m.workspaces.iter().filter_map(|w| crate::github::mcp::target(config, &m.name, &w.policy)
+                .map(|_| json!({"machine":m.name,"workspace":w.name,"read_only":w.policy.mode=="read-only"}))))
+            .collect::<Vec<_>>());
+    }
     if request.call != "triage" && !request.github_state.is_empty() {
         data["github_state"] = json!(request.github_state);
     }

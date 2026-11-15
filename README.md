@@ -520,6 +520,60 @@ Fridica fetches it into a new bare repository and supplies its path and commit S
 This requires write mode without GPU confinement. Push requires separate approval;
 private repository credentials are not supported by scoped fetch.
 
+## GitHub MCP for workers
+
+Install [GitHub's official MCP server](https://github.com/github/github-mcp-server)
+as `github-mcp-server` on each worker machine. Configure that machine's existing
+`gh auth login --hostname github.com`, or provide a worker credential in the
+named environment variable. Fridica does not install the server or copy daemon
+credentials to SSH targets.
+
+```toml
+[github.mcp]
+enabled = true
+
+[github.mcp.machines.local]
+command = "github-mcp-server" # executable name or absolute path on this target
+token_env = "GH_TOKEN"       # name only; defaults to GH_TOKEN
+
+# Add other configured machine names in the same way:
+# [github.mcp.machines.snowy]
+# command = "/opt/bin/github-mcp-server"
+# token_env = "WORKER_GITHUB_TOKEN"
+```
+
+The feature defaults to off. Each eligible workspace must permit `github.com`
+or `api.github.com` in its network policy. Read-only workspaces get read tools;
+workspaces using scoped `fetch_repos` get no MCP server. Ambient MCP servers stay
+disabled. Explicit settings apply on the next worker job and restart a session
+whose configuration changed. The parent remains tool-less and delegates to an
+eligible worker.
+
+The selected tools read PRs/files/reviews, post general or inline comments,
+submit APPROVE/REQUEST_CHANGES/COMMENT reviews, create branches, change files,
+and create/update PRs. Merge, release, repository administration and force-push
+tools are not enabled. Enabling the integration preauthorizes these MCP tools
+without a second Fridica approval prompt; shell and file permissions retain their
+existing policy. Workers use a task branch or the PR branch named in the task.
+Tool selection is not a GitHub
+credential permission boundary: GitHub still enforces that credential's access
+and branch protection. Reviews of one's own PR may be rejected by GitHub.
+
+Run `fridica doctor` and `fridica start --check-ready` after installation. For
+configured eligible workspaces these initialize MCP, verify the exact tool list,
+and read the authenticated identity; they never publish anything. Worker admission
+also probes before starting a job. Allow enough probe time for server startup
+and authentication (for example `fridica doctor --timeout 30`). An incompatible
+server, unavailable credentials, or missing tools fails the check with a fixed,
+credential-free diagnostic. Pin the installed server release in your deployment
+and rerun these checks when upgrading it.
+
+GitHub reviews identify the commit inspected. Workers recheck the head before
+submission and inspect GitHub before retrying an uncertain write. These workflow
+steps are agent instructions; the official server and GitHub execute the operations.
+GitHub writes do not pass through Fridica's Slack outbox or its text egress filter.
+Use credentials appropriate for the repositories the worker may access.
+
 ## Run
 
 ```bash
@@ -548,8 +602,8 @@ It never prints message text, briefs or credentials. Set `FRIDICA_LOG=off` to si
   protocol must include approvals, `turn/interrupt` and `outputSchema`); a backend gets
   one line per role, listing every shortcoming at once;
 - the bubblewrap and socat sandbox, including user namespaces;
-- a warning when `~/.codex/config.toml` defines MCP servers, because `codex app-server`
-  cannot ignore the user config.
+- initialization, required tools and identity for explicitly configured GitHub MCP
+  servers on eligible worker placements. Ambient MCP servers are disabled at startup.
 
 Machines are probed at the same time, each over one shared SSH connection, and every
 result is printed the moment it is known, so a slow or unreachable host costs only its
@@ -582,14 +636,11 @@ Alice:   can you fix snowy and rerun?
   job's `report` is posted directly with no second parent call. Figures and PDFs
   a worker lists are uploaded after the reply. Long replies keep an executive
   summary in the thread and attach the rest as a Markdown file.
-- **Sign-offs.** A line `VERDICT <owner>/<repo>#<PR> <sha> <verdict>` (`approve`,
-  `approve (code review)` or `changes`) as the first or last line of a reply or
-  report, unindented, and for a PR a person's ask or the job's brief names, is not
-  posted as written: when it is sent, Fridica reads the PR's head and puts
-  `SIGN-OFF #<PR> <sha> <verdict>` first only if the head is still `<sha>`, else
-  says why it signs nothing (provision 04). It signs only if no other line
-  of the text sent (short details folded in) holds the word "verdict", in any
-  case, width or accent.
+- **GitHub reviews.** Workers publish authorized reviews and code changes directly
+  through the optional GitHub MCP integration. Slack summarizes the confirmed
+  GitHub URL, review outcome, reviewed commit and remaining work; it does not
+  create a second sign-off. Unavailable tools or failed publication produce
+  findings and an explicit failure report, never a claim of publication.
 - **No turn limit.** A thread can go on as long as people keep talking to you.
   Runaway exchanges are stopped by the loop protections below instead: clarifying
   questions (`max_wait_replies`) and turns without progress (`max_no_progress`)

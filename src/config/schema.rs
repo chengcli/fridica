@@ -47,6 +47,11 @@ impl Slack {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GitHub {
+    #[serde(
+        default,
+        skip_serializing_if = "super::github_mcp::Settings::is_default"
+    )]
+    pub mcp: super::github_mcp::Settings,
     pub enabled: bool,
     pub token_env: String,
     pub cache_seconds: f64,
@@ -54,6 +59,7 @@ pub struct GitHub {
 impl Default for GitHub {
     fn default() -> Self {
         Self {
+            mcp: Default::default(),
             enabled: true,
             token_env: "FRIDICA_GITHUB_TOKEN".into(),
             cache_seconds: 60.,

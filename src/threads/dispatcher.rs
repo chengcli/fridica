@@ -191,7 +191,17 @@ impl<D: Delivery> Dispatcher<D> {
                 let meta = post.post.meta.as_ref().map(|m| m["review"].clone());
                 let review: Vec<String> =
                     serde_json::from_value(meta.unwrap_or_default()).unwrap_or_default();
-                sending.post.text = self.sign(&post.post.text, &review).await;
+                sending.post.text = if post
+                    .post
+                    .meta
+                    .as_ref()
+                    .is_some_and(|m| m["github_reviews"] == true)
+                {
+                    github_summary(&post.post.text)
+                } else {
+                    // Compatibility for already queued legacy review reports.
+                    self.sign(&post.post.text, &review).await
+                };
                 let text = sending.post.text.clone();
                 // Every broken rule is recorded, each as `egress_<rule>`, so
                 // the owner sees all of them in one pass.
@@ -270,4 +280,29 @@ fn check(post: &ClaimedPost, rules: &DenyList) -> Vec<String> {
     broken.sort();
     broken.dedup();
     broken
+}
+
+/// GitHub review mode never turns a worker's legacy protocol line into a Slack
+/// approval. Keep the factual prose/links and explicitly label discarded claims.
+pub fn github_summary(text: &str) -> String {
+    let mut removed = false;
+    let mut kept: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            let upper = line.trim_start().to_ascii_uppercase();
+            let legacy = upper.starts_with("SIGN-OFF") || upper.starts_with("VERDICT ");
+            removed |= legacy;
+            !legacy
+        })
+        .collect();
+    if removed {
+        kept.push(
+            "Legacy Slack sign-off omitted; that line does not establish GitHub publication.",
+        );
+    }
+    if removed {
+        kept.join("\n")
+    } else {
+        text.to_owned()
+    }
 }

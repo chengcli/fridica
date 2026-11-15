@@ -128,4 +128,5 @@ without creating a Slack message.
 - **Approvals.** Claude's `can_use_tool` control protocol is internal to the Agent
   SDK. `policy.claude_prompts = "none"` falls back to deny-all prompts.
 - **Codex configuration.** `codex app-server` loads the machine owner's
-  `~/.codex/config.toml`; doctor warns when it defines MCP servers.
+  `~/.codex/config.toml`; the startup helper disables ambient MCP servers before
+  applying explicitly configured worker servers. GitHub MCP is opt-in per machine.

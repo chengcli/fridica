@@ -78,7 +78,12 @@ pub(super) fn render(
         reply.text = combined;
         reply.details.clear();
     }
-    reply.text = super::dispatcher::hoist(&reply.text);
+    if request.session["github_reviews"] == true {
+        reply.text = super::dispatcher::github_summary(&reply.text);
+        reply.details = super::dispatcher::github_summary(&reply.details);
+    } else {
+        reply.text = super::dispatcher::hoist(&reply.text);
+    }
     (reply.text, reply.details) = crate::core::render::reply(
         &reply.text,
         &reply.details,

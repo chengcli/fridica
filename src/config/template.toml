@@ -114,6 +114,17 @@ enabled = true                    # show the parent the state of linked GitHub p
 token_env = "FRIDICA_GITHUB_TOKEN" # legacy credential name to scrub from worker environments
 cache_seconds = 60
 
+# Optional direct GitHub reviews, comments and task-branch commits by workers.
+# Install github-mcp-server on each target; authenticate there with gh auth login
+# or set the configured worker token variable. No token values belong here.
+# [github.mcp]
+# enabled = true
+# [github.mcp.machines.local]
+# command = "github-mcp-server"
+# token_env = "GH_TOKEN"
+# Workspace network policy must include github.com or api.github.com.
+# Read-only placements get read tools; scoped-fetch placements get no MCP.
+
 [state]
 path = "~/.local/state/fridica/state.sqlite3"
 # archive_after_days = 7          # quiet, finished threads move to weekly archives beside the database; 0 keeps them

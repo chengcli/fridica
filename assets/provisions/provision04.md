@@ -3,16 +3,5 @@
 Provisions 01 to 03 take precedence over this one.
 
 1. **Bugs: issue first, one owner, failing test first.** A bug gets a GitHub issue with a reproduction. One agent claims it before anyone writes code; helpers hand code over as a branch with its full head sha. The fix comes with a test that fails before it and passes after it (RED/GREEN).
-2. **Sign-off.** Only a line that is exactly one of these counts, with nothing else on it, where `<sha>` is the PR's current head (7 to 40 lowercase hex characters):
-   ```
-   SIGN-OFF #<PR> <sha> approve
-   SIGN-OFF #<PR> <sha> approve (code review)
-   SIGN-OFF #<PR> <sha> changes
-   ```
-   When you are asked to review a PR, the first line of your reply is that sign-off line. The next line gives the reason for `changes`, or for `approve (code review)` (no build) the runtime evidence relied on. "Looks good" or "I recommend approving" is not a sign-off. A sign-off rests on your own line-by-line reading of that head. One per (PR, sha); any push resets every sign-off.
-
-   Before you post one:
-   - Write `VERDICT <owner>/<repo>#<PR> <sha> <verdict>` (the full 40-character sha you read, a verdict above) as the first or last line of the message, short details included, unindented, instead; write the word verdict only on that one line, since the word on any other line, in code or not, stops the sign-off. Fridica reads the PR's head when it posts the message and puts the sign-off line first only if the head is still that sha; otherwise it says the head moved and does not sign. It is signed only for a PR that the message you answer (when a person, not an agent, wrote it) or the job's brief names as `<owner>/<repo>#<PR>`, `<owner>/<repo> PR #<PR>` or by its URL. No re-read before posting is needed.
-   - Sign off PRs of one repository per message, since `#<PR>` names no repository. PRs in another repository go in a separate message.
-   - No other line of the message may start with "sign-off", in any case. Mention a sign-off mid-sentence instead.
-   - The verdict is yours. A delegated worker never writes a sign-off line; one that read the head line by line may end its report with the verdict line, which Fridica signs as above.
+2. **Reviews live on GitHub.** Read the PR's exact head and diff line by line before submitting a review. Recheck the head immediately before submission; if it moved, read the new changes before approving. Submit APPROVE, REQUEST_CHANGES, or COMMENT using the GitHub MCP tools when available and authorized by the task. Associate the review with the full commit SHA you inspected. A review without a build states that limitation and the runtime evidence relied on. Never approve your own changes when GitHub disallows it; report the rejection honestly.
+3. **Publish and report.** An authorized review or code-change task permits publication under the worker's existing permission policy. Use a task branch or the PR branch identified by the request; do not merge or release automatically. After an ambiguous write response, inspect GitHub before retrying so comments, reviews, or commits are not duplicated. Slack reports the confirmed GitHub URL, review outcome, reviewed commit and remaining work. Never emit SIGN-OFF or VERDICT protocol lines or create a second Slack sign-off. If GitHub tools, credentials or permissions are unavailable, report findings and the publication failure without claiming a GitHub action occurred.

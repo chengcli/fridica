@@ -599,6 +599,7 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
     }
     let same_backend = w.backend == config.parent.backend;
     Ok(WorkerSpec {
+        mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy),
         worker_id: w.id.clone(),
         machine: m.for_slot(w.slot),
         workspace: space.for_slot(w.slot),
@@ -750,13 +751,26 @@ async fn fork_header(t: &Task) -> Result<String, WorkerFailure> {
 }
 async fn fresh_unless_same_instructions(t: &Task, resume: String) -> Result<String, WorkerFailure> {
     use sha2::{Digest, Sha256};
-    let fingerprint = format!("{:x}", Sha256::digest(t.spec.instructions.as_bytes()));
+    let mut digest = Sha256::new();
+    digest.update(t.spec.instructions.as_bytes());
+    // Preserve the legacy fingerprint when MCP is disabled. Explicit server
+    // changes invalidate resumed sessions, including after a daemon restart.
+    if !t.spec.mcp_servers.is_empty() {
+        digest.update(b"\0mcp_servers\0");
+        digest.update(serde_json::json!(t.spec.mcp_servers).to_string().as_bytes());
+    }
+    let fingerprint = format!("{:x}", digest.finalize());
+    let legacy_without_tools = t.spec.mcp_servers.is_empty();
     let worker = t.record.id.clone();
     t.store
         .transact(move |u| {
             let started = u.instructions_fingerprint(&worker)?;
-            // No fingerprint means the session predates this check: keep it.
-            let resume = if started.as_deref().is_none_or(|f| f == fingerprint) {
+            // A legacy session without a fingerprint is reusable only when
+            // there are no explicit tools whose old configuration is unknown.
+            let resume = if started
+                .as_deref()
+                .map_or(legacy_without_tools, |f| f == fingerprint)
+            {
                 resume
             } else {
                 String::new()

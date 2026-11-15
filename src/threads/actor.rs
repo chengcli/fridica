@@ -122,6 +122,9 @@ impl<P: Parent> Actor<P> {
         if let Some(config) = &self.config {
             let busy = serde_json::from_value(request.session["work"]["busy"].clone())?;
             request.session["machines"] = json!(config.machines.payload(&busy));
+            if config.github.mcp.enabled {
+                request.session["github_reviews"] = json!(true);
+            }
         }
         let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
         // Read after the turn's input: a driver change bumps the thread's
@@ -884,7 +887,8 @@ async fn commit(
                 // The PRs its jobs were dispatched to review, or a person's ask (no agent meta) names: only these are signed.
                 let review:Vec<String>=request.trigger["results"].as_array().into_iter().flatten().filter_map(|r|r["brief"].as_str()).chain(request.trigger["message"]["text"].as_str().filter(|_|request.trigger["message"]["meta"].is_null())).flat_map(super::dispatcher::subjects).collect();
                 let mut meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":worker,"v":2});
-                if !review.is_empty() {meta["review"]=json!(review);}
+                if request.session["github_reviews"] == true { meta["github_reviews"] = json!(true); }
+                else if !review.is_empty() {meta["review"]=json!(review);}
                 u.label_post(post,&meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).or_else(||request.trigger["refused"]["trigger_event"].as_str()).unwrap_or(""),is_result)?;
                 super::results::attachments(u, &request, reply, &session, id, now)?;
                 if cooldown.is_some() {

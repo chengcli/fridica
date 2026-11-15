@@ -294,3 +294,40 @@ async fn discovery_runs_at_each_process_start_and_does_not_cache_constructed_lau
     assert_eq!(out.returncode, 97);
     assert!(!f.home.join("session-state").exists());
 }
+
+#[tokio::test]
+async fn explicit_server_overrides_a_colliding_ambient_alias_after_sanitization() {
+    let mut f = Fixture::new();
+    f.write("home/.codex/config.toml", "[mcp_servers.fridica_github]\nurl='https://ambient.invalid'\nenv={SECRET='ambient-secret'}\n");
+    f.env
+        .insert("DANGEROUS_ALIASES".into(), "[\"fridica_github\"]".into());
+    f.spec.mcp_servers = vec![fridica_agent::McpServer {
+        name: "fridica_github".into(),
+        command: "/trusted/server".into(),
+        args: vec!["stdio".into()],
+        env_vars: vec!["WORKER_TOKEN".into()],
+        auto_approve: true,
+    }];
+    let out = f.run().await;
+    assert_eq!(
+        out.returncode,
+        0,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let data: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let args = data["args"].as_array().unwrap();
+    let disabled = args
+        .iter()
+        .position(|v| v == "mcp_servers.\"fridica_github\".enabled=false")
+        .unwrap();
+    let configured = args
+        .iter()
+        .position(|v| {
+            v.as_str()
+                .is_some_and(|s| s.starts_with("mcp_servers.\"fridica_github\"={"))
+        })
+        .unwrap();
+    assert!(disabled < configured);
+    assert!(!args[configured].as_str().unwrap().contains("ambient"));
+}

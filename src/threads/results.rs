@@ -76,13 +76,15 @@ pub(super) fn direct(
     else {
         return Ok(None);
     };
-    // A sign-off is the parent's own verdict (provision04): a report that
-    // carries one goes to the parent instead of being posted as is.
-    if report.lines().any(|line| {
-        line.trim_start()
-            .to_ascii_uppercase()
-            .starts_with("SIGN-OFF")
-    }) {
+    // Preserve parent escalation for legacy Slack sign-offs. GitHub review
+    // reports use publication summaries instead.
+    if request.session["github_reviews"] != true
+        && report.lines().any(|line| {
+            line.trim_start()
+                .to_ascii_uppercase()
+                .starts_with("SIGN-OFF")
+        })
+    {
         return Ok(None);
     }
     let event = request.trigger["origin"]["event_id"].as_str();
@@ -97,7 +99,12 @@ pub(super) fn direct(
         })
         .map(|o| o["id"].clone())
         .collect();
-    let report: &str = &super::dispatcher::hoist(report);
+    let rendered = if request.session["github_reviews"] == true {
+        super::dispatcher::github_summary(report)
+    } else {
+        super::dispatcher::hoist(report)
+    };
+    let report: &str = &rendered;
     let (text, details) = if report.chars().count() > limit {
         let text: String = report.chars().take(limit.saturating_sub(40)).collect();
         (format!("{text}\n\nFull report attached."), report)

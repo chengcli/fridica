@@ -29,7 +29,7 @@ pub struct Target {
 pub struct Report {
     pub build_version: &'static str,
     pub config_fingerprint: String,
-    /// Host paths and the owner's contract and repository files.
+    /// Host paths and the owner's contract.
     pub host: Vec<Check>,
     pub parent_backend: String,
     pub parent: Vec<Check>,
@@ -143,6 +143,22 @@ pub async fn check(
                         )
                         .await,
                     );
+                    if !*stop.borrow()
+                        && crate::github::mcp::target(config, &machine.name, &workspace.policy)
+                            .is_some()
+                        && !crate::github::mcp::probe(
+                            config,
+                            &context.home,
+                            environment.clone(),
+                            machine,
+                            workspace,
+                            timeout,
+                        )
+                        .await
+                        .unwrap_or(false)
+                    {
+                        refusals.push(Check::GithubMcpFailed);
+                    }
                     refusals.sort();
                     refusals.dedup();
                 }

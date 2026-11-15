@@ -5974,3 +5974,36 @@ async fn an_externally_driven_parent_answers_but_may_not_delegate() {
     );
     h.runtime.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn github_mcp_reports_keep_the_review_url_without_a_slack_signoff() {
+    let head = "ab".repeat(20);
+    let url = "https://github.com/owner/project/pull/7#pullrequestreview-1";
+    let h = Harness::with_machines(
+        vec![json!({"delegations":[{"brief":"Review owner/project#7", "machine":"local", "workspace":"project"}]})],
+        false, Arc::new(NoJobIo), "[github.mcp]\nenabled=true", None,
+    ).await;
+    h.worker.outcomes.lock().unwrap().push_back(Ok(Outcome {
+        result: serde_json::from_value(json!({"status":"done","summary":"reviewed",
+            "report":format!("VERDICT owner/project#7 {head} approve\nPublished review: {url}; reviewed commit {head}.")})).unwrap(),
+        backend_session_id:"b".into(),
+    }));
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+    let sent = h
+        .sink
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|p| p.post.meta.as_ref().is_some_and(|m| m["kind"] == "report"))
+        .unwrap()
+        .clone();
+    assert_eq!(sent.post.meta.as_ref().unwrap()["github_reviews"], true);
+    assert!(sent.post.text.contains(url) && sent.post.text.contains(&head));
+    assert!(!sent.post.text.contains("SIGN-OFF") && !sent.post.text.contains("VERDICT"));
+    h.runtime.close().await.unwrap();
+}

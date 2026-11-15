@@ -91,8 +91,10 @@ def main():
     preflight_stage = "settings"
     snapshots, aliases = settings_snapshots(home, workspace, selected, state, request, environment, command)
     if os.path.basename(command[0]) == "codex" and command[1:2] == ["app-server"]:
+        disabled = []
         for alias in aliases:
-            command += ["-c", "mcp_servers." + json.dumps(alias, ensure_ascii=False) + ".enabled=false"]
+            disabled += ["-c", "mcp_servers." + json.dumps(alias, ensure_ascii=False) + ".enabled=false"]
+        command = command[:2] + disabled + command[2:]
 
     preflight_stage = "inventory"
     fds = []

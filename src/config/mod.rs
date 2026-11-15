@@ -2,6 +2,7 @@
 pub mod contract;
 pub mod editor;
 pub mod egress;
+pub mod github_mcp;
 pub mod isolation;
 pub mod loader;
 pub mod prompts;

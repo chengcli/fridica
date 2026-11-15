@@ -348,6 +348,22 @@ async fn machine(
                 result == "passed",
                 "workspace is not an accessible directory on this target",
             );
+            if crate::github::mcp::target(&probe.config, &machine.name, &workspace.policy).is_some()
+                && !*probe.stop.borrow()
+            {
+                let passed = crate::github::mcp::probe(
+                    &probe.config,
+                    &probe.context.home,
+                    probe.environment.clone(),
+                    machine,
+                    workspace,
+                    probe.timeout,
+                )
+                .await
+                .unwrap_or(false);
+                report.test(format!("GitHub MCP {}:{}", machine.name, workspace.name), passed,
+                    "GitHub MCP executable, authentication, initialization or required tools unavailable");
+            }
         }
         let auto = machine
             .workspaces

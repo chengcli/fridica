@@ -2,7 +2,7 @@
 
 Uses the helper's no-follow file opens. Never executes a discovery command or
 prints source text. Unsupported/ambiguous inputs refuse admission. Every MCP
-server found in a backend settings layer is disabled: workers run without MCP.
+server found in a backend settings layer is disabled before explicit host servers are applied.
 """
 
 
@@ -95,7 +95,7 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
     aliases = set()
 
     def recognized(alias, server):
-        # Every server, whatever it points at: a worker gets no MCP at all.
+        # Every ambient server, whatever it points at, is disabled.
         command = server.get("command", "")
         args = server.get("args", [])
         if not isinstance(command, str) or not isinstance(args, list):
