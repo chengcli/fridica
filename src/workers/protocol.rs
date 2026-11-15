@@ -84,6 +84,10 @@ pub trait Worker: Send + Sync {
     fn close(&self) -> AdapterFuture<'_, Result<(), WorkerFailure>>;
 }
 pub trait Factory: Send + Sync {
+    /// Mutating slot preparation after admission and before job inputs/backend.
+    fn prepare(&self, _spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        Box::pin(async {})
+    }
     /// Reject snapshots incompatible with immutable adapter settings before
     /// publishing configuration or changing approval policy. No external I/O.
     fn validate_config(&self, _config: &crate::config::Config) -> anyhow::Result<()> {

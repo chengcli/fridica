@@ -30,6 +30,7 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "dashboard/fridica-logo.png" => "../../assets/dashboard/fridica-logo.png",
         "helpers/settings_paths.py" => "../exec/settings_paths.py",
         "helpers/artifact_read.py" => "../exec/artifact_read.py",
+        "helpers/cleanup.py" => "../exec/cleanup.py",
         "helpers/isolation_bootstrap.py" => "../exec/isolation_bootstrap.py",
         "helpers/fetch_helper.py" => "../exec/fetch_helper.py",
         "helpers/isolation_settings.py" => "../exec/isolation_settings.py",

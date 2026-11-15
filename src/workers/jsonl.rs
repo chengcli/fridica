@@ -24,6 +24,10 @@ use std::{collections::BTreeMap, ffi::OsString, io, path::PathBuf, sync::Arc, ti
 use tokio::sync::Semaphore;
 
 pub trait Launcher: Send + Sync {
+    /// Mutating setup, called only after read-only admission succeeds.
+    fn prepare(&self, _spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        Box::pin(async {})
+    }
     fn validate_config(&self, _config: &Config) -> anyhow::Result<()> {
         Ok(())
     }
@@ -47,8 +51,8 @@ pub struct SystemLauncher {
     probes: Arc<Semaphore>,
 }
 impl SystemLauncher {
-    /// Best-effort retention at the admission boundary, before inputs or backend
-    /// work begin. The supervisor holds the slot exclusively through admission.
+    /// Best-effort retention after admission, before inputs or backend work
+    /// begin. The supervisor holds the slot exclusively through preparation.
     async fn cleanup(&self, spec: &WorkerSpec) {
         if !spec.create_cwd()
             || spec.workspace.policy.mode == "read-only"
@@ -86,6 +90,9 @@ impl SystemLauncher {
     }
 }
 impl Launcher for SystemLauncher {
+    fn prepare(&self, spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        Box::pin(async move { self.cleanup(&spec).await })
+    }
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         let current = crate::exec::isolation::Isolation::new(config, &[])?;
         if current != self.isolation {
@@ -125,7 +132,6 @@ impl Launcher for SystemLauncher {
                 }
             }
             if !spec.confined() {
-                self.cleanup(&spec).await;
                 return Ok(());
             }
             // Probe the configured base: slot directories can be absent until
@@ -182,10 +188,7 @@ impl Launcher for SystemLauncher {
             .await;
             use crate::exec::isolation::Check;
             let code = match check {
-                Check::Passed => {
-                    self.cleanup(&spec).await;
-                    return Ok(());
-                }
+                Check::Passed => return Ok(()),
                 Check::InventoryRefused => "worker_isolation_inventory_refused",
                 Check::SettingsRefused => "worker_isolation_settings_refused",
                 Check::NamespaceFailed => "worker_isolation_namespace_failed",
@@ -405,6 +408,9 @@ pub struct BackendFactory {
     pub recorder: Arc<dyn WireRecorder>,
 }
 impl Factory for BackendFactory {
+    fn prepare(&self, spec: WorkerSpec) -> AdapterFuture<'_, ()> {
+        self.launcher.prepare(spec)
+    }
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         self.launcher.validate_config(config)
     }

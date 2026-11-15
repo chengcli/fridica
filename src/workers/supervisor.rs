@@ -796,6 +796,7 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
     let in_backend = AtomicBool::new(false);
     let mut operation = Box::pin(async {
         t.factory.admit(t.config.clone(), t.spec.clone()).await?;
+        t.factory.prepare(t.spec.clone()).await;
         let prepared = t.io.prepare(t.spec.clone(), t.job.clone()).await?;
         let resume = fresh_unless_same_instructions(&t, resume).await?;
         // A worker that already has its own session (a retry) resumes it; only
