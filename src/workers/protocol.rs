@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct WorkerSpec {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub python_env: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<fridica_agent::McpServer>,
     pub worker_id: String,

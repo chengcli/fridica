@@ -264,7 +264,15 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     };
     let machine_table = table(root.get("machines"))?.context("machines must be a table")?;
     let mut machines = Vec::new();
+    let mut python_envs = std::collections::BTreeMap::new();
     for (name, item) in machine_table.iter() {
+        if let Some(env) = string(item.get("python_env"))? {
+            if env.chars().any(char::is_control) {
+                bail!("python_env contains a control character");
+            }
+            let env = remote_path(&env)?;
+            python_envs.insert(name.to_owned(), env.to_string_lossy().into_owned());
+        }
         machines.push(machine(
             name,
             item,
@@ -309,6 +317,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         limits,
         policy,
         machines: registry,
+        python_envs,
         state: State {
             path: state_path,
             control_socket,
@@ -361,6 +370,7 @@ fn machine(
             "slurm",
             "description",
             "workspaces",
+            "python_env",
         ],
         "machine",
     )?;

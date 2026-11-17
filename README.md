@@ -552,6 +552,31 @@ variables, and Slack token values remain excluded. Scoped-fetch helpers still
 receive no credentials. Integration-token forwarding does not change workspace
 network permissions or automatically enable additional MCP servers.
 
+### Python environments for workers
+
+Select an existing virtual environment in the master’s `config.toml`:
+
+```toml
+[machines.dart10]
+transport = "ssh"
+host = "dart10"
+python_env = "~/pyenv"
+```
+
+`python_env` is the environment directory, not its `activate` file. Use an absolute
+path or `~/...`; the latter resolves on the execution target. Fridica sources
+`bin/activate` before launching the worker, so Python, pip, MCP servers and child
+commands inherit that environment. Local worker machines support the same setting.
+Doctor and worker readiness checks use it too. A missing or unusable environment
+fails the launch instead of falling back to system Python. Create/install the
+environment on the target first; Fridica does not install Python or packages.
+
+This does not require sourcing `.bashrc`, `.bash_profile`, or enabling shell
+startup output. Omitting `python_env` keeps the target’s inherited environment.
+Changing it restarts reusable workers without resuming sessions from the old
+environment. Existing Fridica 0.8.1 and earlier do not recognize this setting;
+upgrade to a release containing this support before editing a live configuration.
+
 ## GitHub MCP for workers
 
 Fridica includes a Rust GitHub MCP server in every wheel and native installation,

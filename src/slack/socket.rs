@@ -18,6 +18,7 @@ pub fn socket_mode(
     app_token: String,
     options: Options,
 ) -> Result<SocketMode, Failure> {
+    crate::exec::tls::initialize();
     if !super::web::matches_scope(&web, &receiver.config) {
         return Err(Failure::Configuration);
     }

@@ -79,6 +79,7 @@ pub fn client(
     token: String,
     timeout: Duration,
 ) -> Result<WebClient, Failure> {
+    crate::exec::tls::initialize();
     WebClient::new(
         scope(config),
         Arc::new(StoreJournal {

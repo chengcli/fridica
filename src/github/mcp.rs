@@ -133,6 +133,11 @@ pub async fn probe(
         control.path().to_owned(),
     )?;
     let spec = crate::workers::protocol::WorkerSpec {
+        python_env: config
+            .python_envs
+            .get(&machine.name)
+            .cloned()
+            .unwrap_or_default(),
         mcp_servers: servers(config, &machine.name, &workspace.policy),
         worker_id: String::new(),
         machine: machine.clone(),

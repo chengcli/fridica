@@ -181,6 +181,13 @@ impl Launcher for SystemLauncher {
                 }
             }
             .map_err(|_| failure(Failure::Refusal, "worker_isolation_launch_refused", ""))?;
+            let launch = crate::exec::python::activate(
+                launch,
+                &spec.machine.transport,
+                &spec.python_env,
+                Some(&self.home),
+            )
+            .map_err(|_| failure(Failure::Refusal, "worker_python_environment_invalid", ""))?;
             let check = crate::exec::isolation::run_probe_with_permit(
                 launch,
                 Duration::from_secs(30),
@@ -299,6 +306,12 @@ impl Launcher for SystemLauncher {
         };
         launch
             .and_then(|launch| {
+                let launch = crate::exec::python::activate(
+                    launch,
+                    &spec.machine.transport,
+                    &spec.python_env,
+                    Some(&self.home),
+                )?;
                 if spec.machine.transport == "ssh" {
                     let names = spec
                         .mcp_servers
@@ -545,6 +558,9 @@ impl Child for ProcessChild {
         Box::pin(async move { self.0.terminate(grace).await.map_err(io::Error::other) })
     }
     fn refusal(&self, status: Option<i32>, stderr: &[u8]) -> Option<String> {
+        if crate::exec::python::refused(status.unwrap_or(-1), stderr) {
+            return Some("worker_python_environment_unavailable".into());
+        }
         // The worker MCP startup wrapper's own refusal.
         (status == Some(97) && stderr == b"fridica worker MCP: setup refused\n")
             .then(|| "worker_mcp_settings_refused".into())

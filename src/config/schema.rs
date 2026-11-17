@@ -129,6 +129,9 @@ pub struct Config {
     pub limits: Limits,
     pub policy: Policy,
     pub machines: Registry,
+    /// Host-only runtime settings, keyed by machine; absent in legacy snapshots.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub python_envs: std::collections::BTreeMap<String, String>,
     pub state: State,
     pub github: GitHub,
     #[serde(default, skip_serializing_if = "super::alphaxiv::Settings::is_default")]

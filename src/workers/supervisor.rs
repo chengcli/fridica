@@ -599,6 +599,7 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
     }
     let same_backend = w.backend == config.parent.backend;
     Ok(WorkerSpec {
+        python_env: config.python_envs.get(&m.name).cloned().unwrap_or_default(),
         mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy)
             .into_iter()
             .chain(crate::alphaxiv::servers(config, &m.name, &space.policy))
@@ -762,8 +763,12 @@ async fn fresh_unless_same_instructions(t: &Task, resume: String) -> Result<Stri
         digest.update(b"\0mcp_servers\0");
         digest.update(serde_json::json!(t.spec.mcp_servers).to_string().as_bytes());
     }
+    if !t.spec.python_env.is_empty() {
+        digest.update(b"\0python_env\0");
+        digest.update(t.spec.python_env.as_bytes());
+    }
     let fingerprint = format!("{:x}", digest.finalize());
-    let legacy_without_tools = t.spec.mcp_servers.is_empty();
+    let legacy_without_tools = t.spec.mcp_servers.is_empty() && t.spec.python_env.is_empty();
     let worker = t.record.id.clone();
     t.store
         .transact(move |u| {

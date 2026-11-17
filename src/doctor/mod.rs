@@ -103,6 +103,18 @@ pub async fn isolation_backend(
             return Ok(report);
         }
     };
+    let launch = launch.and_then(|launch| {
+        crate::exec::python::activate(
+            launch,
+            &machine.transport,
+            config
+                .python_envs
+                .get(&machine.name)
+                .map(String::as_str)
+                .unwrap_or(""),
+            Some(&context.home),
+        )
+    });
     if let Ok(launch) = launch {
         report.check = run_probe(launch, timeout).await;
     }
