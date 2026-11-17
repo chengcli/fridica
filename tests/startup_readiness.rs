@@ -392,7 +392,10 @@ async fn active_host_fixture_child() {
 async fn prepared_active_host_checks_backend_auth_then_drains_without_model_sessions() {
     use fridica::control::client::Client;
     use rustix::process::{kill_process, Pid, Signal};
-    use tokio::{io::AsyncReadExt, net::TcpListener};
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+        net::TcpListener,
+    };
     let f = Fixture::new();
     let backend = r#"#!/usr/bin/python3
 import json, sys
@@ -455,12 +458,21 @@ else:
         .await
         .unwrap()
         .unwrap();
-    let mut request = [0; 1024];
-    let count = tokio::time::timeout(Duration::from_secs(3), connection.read(&mut request))
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(String::from_utf8_lossy(&request[..count]).starts_with("CONNECT slack.com:443 "));
+    // TCP may split CONNECT across reads; wait for the bounded request line.
+    let mut reader = BufReader::new((&mut connection).take(1024));
+    let mut request = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        reader.read_until(b'\n', &mut request),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let request = String::from_utf8_lossy(&request);
+    assert!(
+        request.starts_with("CONNECT slack.com:443 "),
+        "unexpected proxy request: {request:?}"
+    );
     let client = Client::new(&f.config.state.control_socket, None).unwrap();
     assert_eq!(
         client.request("GET", "/status", None).await.unwrap()["observe_only"],

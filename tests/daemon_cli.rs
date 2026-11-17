@@ -1,7 +1,11 @@
 use fridica::control::client::Client;
 use rusqlite::Connection;
 use std::{path::PathBuf, process::Stdio, time::Duration};
-use tokio::{io::AsyncReadExt, net::TcpListener, process::Command};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    net::TcpListener,
+    process::Command,
+};
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -123,13 +127,21 @@ async fn signals_drain_real_observer_and_database_lock_rejects_second_launch() {
             .await
             .unwrap()
             .unwrap();
-        let mut request = [0; 1024];
-        let count = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut request))
-            .await
-            .unwrap()
-            .unwrap();
-        let request = String::from_utf8_lossy(&request[..count]);
-        assert!(request.starts_with("CONNECT slack.com:443 "));
+        // TCP may split CONNECT across reads; wait for the bounded request line.
+        let mut reader = BufReader::new((&mut stream).take(1024));
+        let mut request = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            reader.read_until(b'\n', &mut request),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let request = String::from_utf8_lossy(&request);
+        assert!(
+            request.starts_with("CONNECT slack.com:443 "),
+            "unexpected proxy request: {request:?}"
+        );
         assert!(!request.contains("synthetic"));
         let client = Client::new(&f.socket, None).unwrap();
         assert_eq!(
