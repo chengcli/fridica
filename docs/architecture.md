@@ -139,3 +139,8 @@ Finished discussions end with the final reply. The retired debrief workflow no
 longer schedules parent turns or channel posts. Legacy queued turns are settled
 without model calls, and queued posts fail with `debrief_removed` before delivery.
 Historical database fields and event projections remain readable for compatibility.
+
+The alphaXiv adapter sits beside GitHub at the worker integration layer. Its
+settings live in config, and fridica-agent owns the MCP protocol and research
+instructions. Fridica gates attachment by workspace network policy and explicit
+`alphaxiv.enabled`; credential values remain in the process environment.

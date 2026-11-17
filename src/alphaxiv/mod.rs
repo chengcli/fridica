@@ -1,18 +1,5 @@
 //! Bundled literature tools, enabled explicitly and constrained by placement policy.
 use crate::config::{registry::Policy, Config};
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Settings {
-    pub enabled: bool,
-}
-impl Settings {
-    pub fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
-}
-
 pub fn available(config: &Config, machine: &str, policy: &Policy) -> bool {
     config.alphaxiv.enabled
         && config

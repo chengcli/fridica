@@ -131,8 +131,8 @@ pub struct Config {
     pub machines: Registry,
     pub state: State,
     pub github: GitHub,
-    #[serde(default, skip_serializing_if = "crate::alphaxiv::Settings::is_default")]
-    pub alphaxiv: crate::alphaxiv::Settings,
+    #[serde(default, skip_serializing_if = "super::alphaxiv::Settings::is_default")]
+    pub alphaxiv: super::alphaxiv::Settings,
     pub attention: Attention,
     #[serde(default, skip_serializing_if = "super::isolation::Settings::is_empty")]
     pub isolation: super::isolation::Settings,
