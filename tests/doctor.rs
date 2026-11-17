@@ -528,3 +528,27 @@ async fn codex_parent_owner_inputs_and_sandbox_failures_are_independent() {
     assert!(!report.text().contains("private-secret"));
     fixture.pristine();
 }
+
+#[tokio::test]
+async fn missing_python_environment_is_reported_without_running_worker_backends() {
+    let f = Fixture::new();
+    let source = std::fs::read_to_string(&f.path).unwrap();
+    std::fs::write(
+        &f.path,
+        source.replace(
+            "[machines.local]",
+            "[machines.local]\npython_env='~/missing-env'",
+        ),
+    )
+    .unwrap();
+    let report = f.run().await;
+    assert_eq!(status(&report, "Machine local"), Status::Fail);
+    assert!(report
+        .text()
+        .contains("configured Python environment is missing or failed to activate"));
+    assert!(!report
+        .checks
+        .iter()
+        .any(|c| c.name.contains("worker on local")));
+    f.pristine();
+}

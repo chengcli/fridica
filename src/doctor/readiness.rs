@@ -247,6 +247,22 @@ async fn probe(
         }
         launch
     };
+    let launch = launch.and_then(|launch| {
+        crate::exec::python::activate(
+            launch,
+            &machine.transport,
+            if parent {
+                ""
+            } else {
+                config
+                    .python_envs
+                    .get(&machine.name)
+                    .map(String::as_str)
+                    .unwrap_or("")
+            },
+            Some(&context.home),
+        )
+    });
     match launch {
         Ok(launch) => helpers::run_readiness(launch, timeout).await,
         Err(_) => vec![Check::LaunchConfigurationRefused],

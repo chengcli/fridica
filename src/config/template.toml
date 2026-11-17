@@ -59,6 +59,7 @@ approval_timeout = 1800
 auto_approve = []                 # command prefixes approved without asking, e.g. ["pytest", "git status"]
 
 [machines.local]
+# python_env = "~/pyenv" # existing virtual environment; also supported on SSH machines
 transport = "local"
 backends = ["claude", "codex"]
 # max_workers = 4                 # live worker processes on this machine (default 4)

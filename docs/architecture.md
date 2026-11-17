@@ -144,3 +144,10 @@ The alphaXiv adapter sits beside GitHub at the worker integration layer. Its
 settings live in config, and fridica-agent owns the MCP protocol and research
 instructions. Fridica gates attachment by workspace network policy and explicit
 `alphaxiv.enabled`; credential values remain in the process environment.
+
+Python environment paths are host-only machine settings carried in worker specs.
+Activation wraps the transport launch before isolation and credential forwarding;
+doctor and readiness use the same wrapper. Environment changes invalidate warm
+workers and resumed sessions. Core machine payloads and store schemas stay unchanged.
+Fridica also selects a Rustls crypto provider before TLS client startup, since
+GitHub and alphaXiv dependencies can enable both Ring and AWS-LC.

@@ -324,7 +324,11 @@ async fn machine(
         report.test(
             name,
             matches!(system.as_str(), "linux" | "darwin"),
-            "unsupported system or failed transport; SSH must connect without a prompt",
+            if system == "python_environment_unavailable" {
+                "configured Python environment is missing or failed to activate"
+            } else {
+                "unsupported system or failed transport; SSH must connect without a prompt"
+            },
         );
         if !matches!(system.as_str(), "linux" | "darwin") {
             return report;
@@ -512,9 +516,26 @@ impl Probe {
             shared_ssh_probe(&mut launch);
             launch
         };
+        let launch = crate::exec::python::activate(
+            launch,
+            &machine.transport,
+            if parent {
+                ""
+            } else {
+                self.config
+                    .python_envs
+                    .get(&machine.name)
+                    .map(String::as_str)
+                    .unwrap_or("")
+            },
+            Some(&self.context.home),
+        )?;
         let result =
             process::run_with_open_stdin(launch, self.timeout + Duration::from_secs(3), 4096)
                 .await?;
+        if crate::exec::python::refused(result.returncode, &result.stderr) {
+            return Ok("python_environment_unavailable".into());
+        }
         if result.returncode != 0 {
             bail!("diagnostic transport failed");
         }

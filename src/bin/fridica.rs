@@ -123,6 +123,7 @@ struct GithubMcpArgs {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    fridica::exec::tls::initialize();
     match run(Cli::parse()).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
