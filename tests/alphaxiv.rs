@@ -6,6 +6,9 @@ use fridica::{
 #[test]
 fn research_tools_follow_configuration_and_network_policy() {
     let dir = tempfile::tempdir().unwrap();
+    for name in ["home", "project", "private"] {
+        std::fs::create_dir(dir.path().join(name)).unwrap();
+    }
     let config = loader::parse(
         "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CROOM']\n[alphaxiv]\nenabled=true\n[machines.local.policy]\ngpu_confine=false\nmode='write'\nnetwork=['api.alphaxiv.org']\n[machines.local.workspaces]\nproject='project'\n[state]\npath='private/db'\ncontrol_socket='private/control.sock'\n",
         &dir.path().join("config.toml"),
