@@ -465,14 +465,14 @@ Only text under `##` headings reaches a model:
 | `## Replies` (required) | the parent's voice and reply rules |
 | `## Delegation` | when and how the parent delegates, fans out, follows up, and composes results |
 | `## Worker reports` | standing instructions every worker receives |
-| `## Debriefs` | the closing debrief of a finished discussion |
 | any other `##` section | given to both the parent and the workers (the packaged `## Repo rules` is an example) |
 
-Missing optional sections fall back to the packaged ones.
+Missing optional sections fall back to the packaged ones. Legacy `## Debriefs`
+sections are ignored.
 
 The fixed instructions Fridica adds around the contract are packaged too, in
 [`assets/prompts`](assets/prompts): the parent's action rules
-(`parent-action.md`), the triage and debrief answer formats, and the
+(`parent-action.md`), the triage answer format, and the
 untrusted-data line that closes every parent and worker prompt. They are not
 read from `config.toml`'s directory; changing them is a pull request.
 
@@ -531,34 +531,63 @@ Fridica fetches it into a new bare repository and supplies its path and commit S
 This requires write mode without GPU confinement. Push requires separate approval;
 private repository credentials are not supported by scoped fetch.
 
+## Worker credentials
+
+Local workers inherit the master's environment after master-only credentials are
+removed. SSH workers receive integration variables ending in `_TOKEN`, `_KEY`, `_PAT`,
+`_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_SECRET`, or `_PASSWORD` (also the exact
+names `TOKEN`, `API_KEY`, `SECRET`, and `PASSWORD`), plus explicitly
+named MCP environment variables (excluding local `GH_CONFIG_DIR` paths). This
+covers `GH_TOKEN`, `ALPHAXIV_TOKEN`, model API keys, and cloud session credentials.
+
+Set these in the environment used to start the Fridica daemon; a token exported
+in another terminal after startup is not in the daemon's snapshot. Restart the
+daemon after changing its environment. Forwarded values override target values;
+missing/empty master values preserve target-local credentials. Values travel in
+a bounded frame on encrypted SSH stdin, not command arguments, temporary files,
+or saved worker specifications. SSH `AcceptEnv` configuration is not required.
+
+Configured master-only secret variables, all `FRIDICA_*` variables, Slack-named
+variables, and Slack token values remain excluded. Scoped-fetch helpers still
+receive no credentials. Integration-token forwarding does not change workspace
+network permissions or automatically enable additional MCP servers.
+
 ## GitHub MCP for workers
 
-Install [GitHub's official MCP server](https://github.com/github/github-mcp-server)
-as `github-mcp-server` on each worker machine. Configure that machine's existing
-`gh auth login --hostname github.com`, or provide a worker credential in the
-named environment variable. Fridica does not install the server or copy daemon
-credentials to SSH targets.
+Fridica includes a Rust GitHub MCP server in every wheel and native installation,
+implemented in `fridica-agent` through its `github` feature using octocrab and
+gitoxide. Fridica enables that feature in its dependency. Workers launch `fridica github-mcp`; no separate MCP installation or
+Python launcher is needed for the bundled server. Install Fridica on SSH worker
+machines as well, with `fridica` available in their noninteractive PATH.
+
+The integration is enabled by default on local and SSH workspaces whose network
+policy allows `github.com` or `api.github.com`. Read-only workspaces expose only
+read tools; scoped `fetch_repos` placements get no MCP server. Existing explicit
+`enabled = false` settings remain disabled. To opt out:
 
 ```toml
 [github.mcp]
-enabled = true
-
-[github.mcp.machines.local]
-command = "github-mcp-server" # executable name or absolute path on this target
-token_env = "GH_TOKEN"       # name only; defaults to GH_TOKEN
-
-# Add other configured machine names in the same way:
-# [github.mcp.machines.snowy]
-# command = "/opt/bin/github-mcp-server"
-# token_env = "WORKER_GITHUB_TOKEN"
+enabled = false
 ```
 
-The feature defaults to off. Each eligible workspace must permit `github.com`
-or `api.github.com` in its network policy. Read-only workspaces get read tools;
-workspaces using scoped `fetch_repos` get no MCP server. Ambient MCP servers stay
-disabled. Explicit settings apply on the next worker job and restart a session
-whose configuration changed. The parent remains tool-less and delegates to an
-eligible worker.
+Authenticate on each worker machine as its execution user with
+`gh auth login --hostname github.com`, or set `GH_TOKEN` in its process environment.
+Fridica forwards master-process integration tokens to SSH workers over encrypted
+SSH stdin. A forwarded value takes precedence over the target value; when absent,
+the target keeps its existing environment and `gh` authentication. Slack and
+Fridica control credentials remain private to the master. To select another token
+variable (name only):
+
+```toml
+[github.mcp.machines.snowy]
+token_env = "WORKER_GITHUB_TOKEN"
+```
+
+An optional `command = "/opt/bin/github-mcp-server"` retains support for an external
+server with the official server's CLI and tool set. Omitting `command` selects
+the bundled Rust implementation. Ambient MCP servers stay disabled. Explicit
+settings apply on the next job and restart sessions when changed. The parent
+remains tool-less and delegates to eligible workers.
 
 The selected tools read PRs/files/reviews, post general or inline comments,
 submit APPROVE/REQUEST_CHANGES/COMMENT reviews, create branches, change files,
@@ -571,17 +600,23 @@ credential permission boundary: GitHub still enforces that credential's access
 and branch protection. Reviews of one's own PR may be rejected by GitHub.
 
 Run `fridica doctor` and `fridica start --check-ready` after installation. For
-configured eligible workspaces these initialize MCP, verify the exact tool list,
-and read the authenticated identity; they never publish anything. Worker admission
+eligible workspaces these read the authenticated identity using the bundled
+server; external overrides also verify MCP initialization and the exact tool list.
+They never publish anything. Worker admission
 also probes before starting a job. Allow enough probe time for server startup
 and authentication (for example `fridica doctor --timeout 30`). An incompatible
 server, unavailable credentials, or missing tools fails the check with a fixed,
-credential-free diagnostic. Pin the installed server release in your deployment
-and rerun these checks when upgrading it.
+credential-free diagnostic. Rerun these checks when upgrading Fridica or an
+external server override.
 
-GitHub reviews identify the commit inspected. Workers recheck the head before
-submission and inspect GitHub before retrying an uncertain write. These workflow
-steps are agent instructions; the official server and GitHub execute the operations.
+The bundled server checks the PR head against the supplied commit ID before
+creating or submitting a review. Multi-file commits require the inspected branch
+head and use a non-force reference update. GitHub still decides whether a write
+is authorized. There is no atomic transaction spanning a head check and review
+submission; workers must inspect the returned review and report its commit.
+Writes are never retried automatically; workers inspect GitHub before retrying
+an uncertain write. `git_context` uses gitoxide to read a repository's HEAD and
+branch within the worker directory without invoking a shell.
 GitHub writes do not pass through Fridica's Slack outbox or its text egress filter.
 Use credentials appropriate for the repositories the worker may access.
 
@@ -613,8 +648,9 @@ It never prints message text, briefs or credentials. Set `FRIDICA_LOG=off` to si
   protocol must include approvals, `turn/interrupt` and `outputSchema`); a backend gets
   one line per role, listing every shortcoming at once;
 - the bubblewrap and socat sandbox, including user namespaces;
-- initialization, required tools and identity for explicitly configured GitHub MCP
-  servers on eligible worker placements. Ambient MCP servers are disabled at startup.
+- authenticated identity for the bundled GitHub MCP on eligible worker placements;
+  external overrides also check initialization and required tools. Ambient MCP
+  servers are disabled at startup.
 
 Machines are probed at the same time, each over one shared SSH connection, and every
 result is printed the moment it is known, so a slow or unreachable host costs only its
@@ -648,7 +684,7 @@ Alice:   can you fix snowy and rerun?
   a worker lists are uploaded after the reply. Long replies keep an executive
   summary in the thread and attach the rest as a Markdown file.
 - **GitHub reviews.** Workers publish authorized reviews and code changes directly
-  through the optional GitHub MCP integration. Slack summarizes the confirmed
+  through the bundled GitHub MCP integration. Slack summarizes the confirmed
   GitHub URL, review outcome, reviewed commit and remaining work; it does not
   create a second sign-off. Unavailable tools or failed publication produce
   findings and an explicit failure report, never a claim of publication.
@@ -698,11 +734,11 @@ Alice:   can you fix snowy and rerun?
   attached, and the asking thread gets a short pointer. A posted hand-off settles
   the asks it names once delivered. At most three per turn, only to linked threads,
   never straight back, and a chain stops after two hops.
-- **Debrief.** When the parent marks a discussion finished, a debrief is posted to
-  the channel.
+- **Finished discussions.** The final reply contains the closing summary; no
+  separate channel post or follow-up model turn is generated.
 - **Several owners' Fridicas in one thread.** Every post carries metadata:
   `{owner, session, turn, status, kind}`, plus `task_id` for older versions. A
-  peer's finished reply or debrief is ignored unless it addresses you, and a
+  peer's finished reply or legacy debrief is ignored unless it addresses you, and a
   thread pauses after repeated questions or turns without progress, so agents
   cannot talk to each other forever.
 - Your own messages never trigger your agent. The echo of Fridica's own posts is
@@ -817,7 +853,7 @@ The daemon owns a single SQLite database, kept by
 - **One serial actor per thread, threads in parallel.** An inbox item's effects
   commit in one transaction: posts, jobs, workers, session changes, and parent-call
   records. A crash either retries the item from scratch or leaves it fully applied.
-- **Every post goes through the outbox**, including notices, reports, debriefs,
+- **Every post goes through the outbox**, including notices, reports,
   and uploads. Each has an idempotency key, and posts go out in order
   within each thread.
   - A rate limit reschedules the post.
@@ -874,6 +910,16 @@ The daemon owns a single SQLite database, kept by
 
 ## Development
 
+For coordinated changes to an unpublished sibling `fridica-agent` checkout,
+use a command-local Cargo override:
+
+```sh
+cargo test --config 'patch.crates-io.fridica-agent.path="../fridica-agent"' --test bundled_github_mcp --test github_mcp
+```
+
+After publishing coordinated agent changes, run `cargo check` without the
+override to restore registry resolution in `Cargo.lock` before releasing Fridica.
+
 ```bash
 cargo nextest run --locked --all-targets   # the native daemon (cargo install cargo-nextest)
 cargo test --locked --doc                  # doctests, which nextest does not run
@@ -896,6 +942,24 @@ to rebuild it.
 
 **Continuous integration** (`.github/workflows/ci.yml`) runs the Rust suite, pytest and
 the node test on Ubuntu and macOS, and builds and smoke-tests a manylinux wheel and the sdist.
+
+**alphaXiv literature research:** Fridica bundles the alphaXiv MCP bridge from
+`fridica-agent` 0.4.3. Enable it in `config.toml`:
+
+```toml
+[alphaxiv]
+enabled = true
+```
+
+Allow `api.alphaxiv.org` in the worker workspace's network policy (or use its
+existing unrestricted network policy). Offline and scoped-fetch-only placements
+cannot use this server. Set `ALPHAXIV_TOKEN` in the daemon environment; SSH workers
+receive it through integration credential forwarding. Install the updated Fridica
+on every worker so `fridica alphaxiv-mcp` is available on PATH. No separate MCP
+binary is required. Verify authentication and tool discovery on a worker with
+`fridica alphaxiv-mcp --probe`; this does not run a search or consume analysis quota.
+Research calls use the backend's approval policy. Workers receive literature
+research instructions, and the parent sees eligible alphaXiv workspaces.
 
 **Releases:**
 - When a pull request is merged, `cd.yml` tags the next version using its

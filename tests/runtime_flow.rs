@@ -3154,59 +3154,6 @@ async fn owner_note_edit_fences_all_late_parent_effects() {
     );
 }
 
-#[tokio::test]
-async fn debrief_in_flight_is_fenced_by_owner_pause_or_clean() {
-    for clean in [false, true] {
-        let h = Harness::new(
-            vec![
-                json!({"reply":{"text":"Finished","status":"complete","discussion":"finished"}}),
-                json!({"debrief":"Late closing text"}),
-            ],
-            false,
-        )
-        .await;
-        h.intake(false).await;
-        let gate = Arc::new(Semaphore::new(1));
-        *h.parent.gate.lock().unwrap() = Some(gate.clone());
-        let runtime = h.runtime.clone();
-        let pass = tokio::spawn(async move { runtime.pass().await });
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while h.parent.calls.lock().unwrap().len() < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        h.runtime
-            .control(
-                SESSION.into(),
-                if clean {
-                    Control::Clean
-                } else {
-                    Control::Pause {
-                        reason: "Hold".into(),
-                    }
-                },
-                Authority::Owner,
-            )
-            .await
-            .unwrap();
-        gate.add_permits(1);
-        pass.await.unwrap().unwrap();
-        assert_eq!(
-            h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE kind='debrief_root'")
-                .await,
-            "0"
-        );
-        assert_eq!(
-            h.scalar("SELECT CAST(debriefed_turn AS TEXT) FROM threads")
-                .await,
-            "0"
-        );
-        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM reply_reservations WHERE state='reserved' AND outbox_id IS NULL").await,"0");
-    }
-}
-
 fn control_actor(h: &Harness) -> fridica::threads::actor::Actor<ParentScript> {
     fridica::threads::actor::Actor {
         config: Some(h.config.clone()),
@@ -5981,7 +5928,7 @@ async fn github_mcp_reports_keep_the_review_url_without_a_slack_signoff() {
     let url = "https://github.com/owner/project/pull/7#pullrequestreview-1";
     let h = Harness::with_machines(
         vec![json!({"delegations":[{"brief":"Review owner/project#7", "machine":"local", "workspace":"project"}]})],
-        false, Arc::new(NoJobIo), "[github.mcp]\nenabled=true", None,
+        false, Arc::new(NoJobIo), "[github.mcp]\nenabled=true\n[machines.local.policy]\nnetwork=['api.github.com']", None,
     ).await;
     h.worker.outcomes.lock().unwrap().push_back(Ok(Outcome {
         result: serde_json::from_value(json!({"status":"done","summary":"reviewed",
@@ -6006,4 +5953,41 @@ async fn github_mcp_reports_keep_the_review_url_without_a_slack_signoff() {
     assert!(sent.post.text.contains(url) && sent.post.text.contains(&head));
     assert!(!sent.post.text.contains("SIGN-OFF") && !sent.post.text.contains("VERDICT"));
     h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn legacy_debrief_posts_are_rejected_before_delivery_even_when_retried() {
+    let h = Harness::new(
+        vec![json!({"reply":{"text":"Finished","status":"complete","discussion":"finished"}})],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+    assert_eq!(h.sink.calls.lock().unwrap().len(), 1);
+    h.store.call(|c| {
+        c.execute("INSERT INTO outbox(idem_key,session_id,kind,channel,text,created) VALUES('legacy-debrief',?,'debrief_root','CROOM','Old closing post',20)",[SESSION])?;
+        Ok(())
+    }).await.unwrap();
+    for _ in 0..2 {
+        h.runtime.pass().await.unwrap();
+        assert_eq!(h.sink.calls.lock().unwrap().len(), 1);
+        assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+        assert_eq!(
+            h.scalar("SELECT state||':'||error FROM outbox WHERE kind='debrief_root'")
+                .await,
+            "failed:debrief_removed"
+        );
+        let id = h
+            .scalar("SELECT CAST(id AS TEXT) FROM outbox WHERE kind='debrief_root'")
+            .await
+            .parse()
+            .unwrap();
+        assert!(
+            fridica::store::outbox::requeue(&h.store, id, Authority::Owner, 20.)
+                .await
+                .unwrap()
+        );
+    }
 }

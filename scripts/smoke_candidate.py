@@ -66,6 +66,8 @@ def smoke(archive, expected, report):
             return run(binary, *args, env=environment, cwd=root, ok=ok)
         assert json.loads(command("build-info")) == manifest["build"]
         assert manifest["build"]["version"] in command("--version")
+        assert "read-only" in command("github-mcp", "--help")
+        assert "probe" in command("alphaxiv-mcp", "--help")
         for line in command("assets", "--list").splitlines():
             digest, name = line.split("  ", 1)
             assert hashlib.sha256((installation / "share/assets" / name).read_bytes()).hexdigest() == digest

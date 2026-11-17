@@ -3,11 +3,19 @@ use super::Config;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub enabled: bool,
     pub machines: BTreeMap<String, Target>,
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            machines: BTreeMap::new(),
+        }
+    }
 }
 impl Settings {
     pub fn is_default(&self) -> bool {
@@ -23,7 +31,8 @@ pub struct Target {
 impl Default for Target {
     fn default() -> Self {
         Self {
-            command: "github-mcp-server".into(),
+            // Empty selects the bundled `fridica github-mcp` subcommand.
+            command: String::new(),
             token_env: "GH_TOKEN".into(),
         }
     }
@@ -35,8 +44,7 @@ pub fn validate(config: &Config) -> anyhow::Result<()> {
             "github.mcp names an unknown machine"
         );
         anyhow::ensure!(
-            !target.command.is_empty()
-                && !target.command.chars().any(char::is_control)
+            !target.command.chars().any(char::is_control)
                 && (!target.command.contains('/')
                     || target.command.starts_with('/')
                     || target.command.starts_with("~/")),

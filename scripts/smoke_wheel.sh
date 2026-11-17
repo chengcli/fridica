@@ -16,6 +16,22 @@ if [[ -n $expected ]]; then
   [[ $version == "fridica $expected" ]] || { echo "expected fridica $expected" >&2; exit 1; }
 fi
 "$bin/fridica" build-info
+"$bin/fridica" alphaxiv-mcp --help > /dev/null
+"$bin/python" - "$bin/fridica" <<'PY'
+import json, subprocess, sys
+requests = [
+    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}},
+    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+]
+result = subprocess.run([sys.argv[1], "github-mcp", "--read-only"],
+                        input="".join(json.dumps(r) + "\n" for r in requests),
+                        text=True, capture_output=True, check=True, timeout=15)
+replies = [json.loads(line) for line in result.stdout.splitlines()]
+names = {t["name"] for t in replies[-1]["result"]["tools"]}
+assert {"get_me", "git_context", "pull_request_read"} <= names
+assert "push_files" not in names
+PY
 [[ $("$bin/fridica" assets --list | wc -l) -gt 0 ]]
 # A fresh configuration is created without network, credentials or a source checkout.
 cd "$work"

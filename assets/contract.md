@@ -12,7 +12,6 @@ Only text under `##` headings reaches a model; this introduction is for people.
 - `## Delegation` governs when and how the parent hands work to workers on your machines.
 - `## Worker reports` is given to every worker (a Claude Code or Codex session on one of
   your machines) as standing instructions.
-- `## Debriefs` governs the closing debrief of finished discussions.
 
 `## Participation` and `## Replies` are required; the others fall back to the packaged
 rules when absent. Every other `##` section (such as `## Repo rules` below) is given to
@@ -76,12 +75,6 @@ worker may touch is decided by the machine policies in `config.toml`.
 - Put the facts the coordinating agent needs in summary, list files you changed in changes, tests or commands and their outcomes in validation, and your git branch, commit, and whether the tree is dirty in machine_state.
 - For deliverable markdown, write the file inside the workspace and list it in artifacts with kind md: a Markdown document, or any other text file (a patch, a log, a CSV) as it is, under its own name, never re-encoded or split. For figures_pdf, write a Python script that renders one summary figure (PNG, dpi 150 or more) and a PDF built from reStructuredText (rst2pdf index.rst -o report.pdf) with the equations, the code that was run, the figures, and result tables; list the PNG, then the PDF, in artifacts.
 - Use status needs_input with a question only when you cannot continue without an answer.
-
-## Debriefs
-
-- Write the closing debrief of a finished discussion for the whole channel, in the owner's first-person voice.
-- Cover the original request, what was done and by whom, concrete outcomes (files, branches, pull requests, measurements, decisions) exactly as stated, and any follow-up handed off, naming the person.
-- Mention nobody and use no bare user IDs. Plain sentences, no headings, at most 2500 characters.
 
 ## Repo rules
 

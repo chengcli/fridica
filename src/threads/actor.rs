@@ -122,7 +122,7 @@ impl<P: Parent> Actor<P> {
         if let Some(config) = &self.config {
             let busy = serde_json::from_value(request.session["work"]["busy"].clone())?;
             request.session["machines"] = json!(config.machines.payload(&busy));
-            if config.github.mcp.enabled {
+            if crate::github::mcp::available(config) {
                 request.session["github_reviews"] = json!(true);
             }
         }
@@ -156,7 +156,15 @@ impl<P: Parent> Actor<P> {
             .await;
         }
         if kind == "debrief" {
-            return super::debrief::handle(self, request).await;
+            // Drain work queued by an older daemon without a parent call or post.
+            return settle(
+                &self.store,
+                id,
+                &request,
+                "observe: debrief feature removed".into(),
+                None,
+            )
+            .await;
         }
         if kind == "worker_progress" {
             return super::progress::handle(self, request).await;
@@ -958,7 +966,6 @@ async fn commit(
         }).collect();
         u.record_parent_calls(&session,id,&action,&calls,now)?;
         u.close_turn(&TurnClose{session:session.clone(),status,reply_key:format!("{id}:reply"),turn:sql_turn,waiting,quiet,hash,summary:decision.summary.clone(),now})?;
-        super::debrief::enqueue(u,&decision,&session,id,now)?;
         u.finish_turn(id,request.trigger["message"]["event_id"].as_str(),&verdict)?;
         u.record("actor_commit",now,&json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string(),true)?;
         Ok(Step::Committed)

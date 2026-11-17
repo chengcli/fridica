@@ -118,9 +118,14 @@ impl Fixture {
 }
 
 #[test]
-fn configuration_is_opt_in_validated_and_placement_policy_filters_tools() {
+fn configuration_defaults_to_bundled_and_placement_policy_filters_tools() {
     let mut f = Fixture::new();
     let policy = f.config.machines.machines[0].workspaces[0].policy.clone();
+    let bundled = mcp::servers(&f.config, "local", &policy);
+    assert_eq!(bundled.len(), 1);
+    assert_eq!(bundled[0].args[0], "github-mcp");
+    assert_eq!(bundled[0].command, "fridica");
+    f.config.github.mcp.enabled = false;
     assert!(mcp::servers(&f.config, "local", &policy).is_empty());
     f.config.github.mcp.enabled = true;
     f.config
@@ -296,16 +301,16 @@ fn worker_and_parent_instructions_describe_available_tools_without_claiming_publ
     };
     let mut f = Fixture::new();
     let worker = serde_json::from_value(json!({"id":"w","session_id":"s","machine":"local","workspace":"project","backend":"codex"})).unwrap();
+    assert!(OwnerInstructions
+        .build(&f.config, &worker)
+        .unwrap()
+        .contains(GITHUB_TOOLS));
+    f.config.github.mcp.enabled = false;
     assert!(!OwnerInstructions
         .build(&f.config, &worker)
         .unwrap()
         .contains(GITHUB_TOOLS));
     f.config.github.mcp.enabled = true;
-    f.config
-        .github
-        .mcp
-        .machines
-        .insert("local".into(), f.target.clone());
     let prompt = OwnerInstructions.build(&f.config, &worker).unwrap();
     assert!(prompt.contains(GITHUB_TOOLS));
     assert!(prompt.contains("inspect GitHub before retrying"));
@@ -321,7 +326,7 @@ fn worker_and_parent_instructions_describe_available_tools_without_claiming_publ
 }
 
 #[tokio::test]
-async fn ssh_probe_authenticates_on_the_target_without_forwarding_daemon_credentials() {
+async fn ssh_probe_forwards_worker_credentials_over_stdin() {
     let mut f = Fixture::new();
     f.config.github.mcp.enabled = true;
     f.config
@@ -332,14 +337,14 @@ async fn ssh_probe_authenticates_on_the_target_without_forwarding_daemon_credent
     f.config.machines.machines[0].transport = "ssh".into();
     f.config.machines.machines[0].host = "owner@fixture".into();
     let ssh = f.dir.path().join("bin/ssh");
-    std::fs::write(&ssh, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\ntest \"$1\" = owner@fixture || exit 255\nshift\nexport WORKER_GITHUB_TOKEN=test-private-token\nexec /bin/sh -c \"$1\"\n").unwrap();
+    std::fs::write(&ssh, "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\ntest \"$1\" = owner@fixture || exit 255\nshift\nexport WORKER_GITHUB_TOKEN=stale-target-token\nexec /bin/sh -c \"$1\"\n").unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut env = f.environment();
     env.insert(
         "PATH".into(),
         format!("{}:/usr/bin:/bin", f.dir.path().join("bin").display()).into(),
     );
-    env.insert("WORKER_GITHUB_TOKEN".into(), "wrong-local-token".into());
+    env.insert("WORKER_GITHUB_TOKEN".into(), "test-private-token".into());
     let machine = &f.config.machines.machines[0];
     assert!(mcp::probe(
         &f.config,

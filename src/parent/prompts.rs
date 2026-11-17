@@ -1,5 +1,5 @@
 pub use crate::config::prompts::UNTRUSTED;
-use crate::config::prompts::{ACTION, DEBRIEF, TRIAGE};
+use crate::config::prompts::{ACTION, TRIAGE};
 use crate::{
     config::{contract, Config},
     core::parent::ParentRequest,
@@ -30,11 +30,6 @@ pub fn build(
             }),
             &config.parent.model,
         ),
-        "debrief" => (
-            format!("{}\n{}\n{DEBRIEF}", rules.debriefs, rules.extra),
-            super::schema::debrief(),
-            &config.parent.model,
-        ),
         _ => bail!("unsupported parent call"),
     };
     let (mut history, trigger) = super::context::prepare(
@@ -46,6 +41,10 @@ pub fn build(
         history.drain(..history.len() - 15);
     }
     let mut session = request.session.clone();
+    // Retained in persisted snapshots for compatibility, not an active parent input.
+    if let Some(session) = session.as_object_mut() {
+        session.remove("debriefed_turn");
+    }
     let channel = session
         .as_object_mut()
         .and_then(|s| s.remove("channel_context"));
@@ -58,7 +57,19 @@ pub fn build(
         "delegation_allowed":request.session["channel"].as_str().is_some_and(|c|config.slack.may_delegate(c)) && request.session["driver"]!="external",
         "limits":{"reply_chars":config.limits.reply_chars,"max_delegations":config.limits.max_delegations_per_turn,"max_workers":config.limits.max_workers_per_thread},
         "repair":{"errors":request.errors,"previous_answer":request.previous}});
-    if config.github.mcp.enabled {
+    if config.alphaxiv.enabled {
+        data["alphaxiv_workspaces"] = json!(config
+            .machines
+            .machines
+            .iter()
+            .flat_map(|m| m
+                .workspaces
+                .iter()
+                .filter(|w| crate::alphaxiv::available(config, &m.name, &w.policy))
+                .map(|w| json!({"machine":m.name,"workspace":w.name})))
+            .collect::<Vec<_>>());
+    }
+    if crate::github::mcp::available(config) {
         data["github_mcp_workspaces"] = json!(config.machines.machines.iter().flat_map(|m|
             m.workspaces.iter().filter_map(|w| crate::github::mcp::target(config, &m.name, &w.policy)
                 .map(|_| json!({"machine":m.name,"workspace":w.name,"read_only":w.policy.mode=="read-only"}))))

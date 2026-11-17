@@ -28,9 +28,14 @@ impl super::jsonl::Instructions for OwnerInstructions {
         } else {
             "GitHub MCP is unavailable for this placement. Report review findings without claiming GitHub publication."
         };
+        let research = if crate::alphaxiv::available(config, &machine.name, &workspace.policy) {
+            fridica_agent::alphaxiv::INSTRUCTIONS
+        } else {
+            ""
+        };
         let data = json!({"owner_id":config.owner.slack_user,"profile":config.owner.profile,"machine":machine.payload(0),"workspace":worker.workspace});
         Ok(format!(
-            "{}\n\n{}\n{UNTRUSTED}\n{NO_SIGN_OFF}\n{tools}\n\nWorker data:\n{}",
+            "{}\n\n{}\n{UNTRUSTED}\n{NO_SIGN_OFF}\n{tools}\n{research}\n\nWorker data:\n{}",
             crate::config::provisions::shared(),
             contract.worker(),
             serde_json::to_string(&data)?

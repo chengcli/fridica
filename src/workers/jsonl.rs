@@ -113,14 +113,15 @@ impl Launcher for SystemLauncher {
                     "",
                 )
             })?;
-            if let Some(target) =
-                crate::github::mcp::target(&config, &spec.machine.name, &spec.workspace.policy)
+            if crate::github::mcp::target(&config, &spec.machine.name, &spec.workspace.policy)
+                .is_some()
             {
                 let launch = self.launch(
                     &spec,
-                    crate::github::mcp::probe_command(
-                        target,
-                        spec.workspace.policy.mode == "read-only",
+                    crate::github::mcp::configured_probe_command(
+                        &config,
+                        &spec.machine.name,
+                        &spec.workspace.policy,
                     ),
                 )?;
                 if !crate::github::mcp::probe_launch(launch, Duration::from_secs(30)).await {
@@ -296,7 +297,20 @@ impl Launcher for SystemLauncher {
             }
             _ => return Err(failure(Failure::Refusal, "transport_unavailable", "")),
         };
-        launch.map_err(|_| failure(Failure::Refusal, "backend_launch_configuration_failed", ""))
+        launch
+            .and_then(|launch| {
+                if spec.machine.transport == "ssh" {
+                    let names = spec
+                        .mcp_servers
+                        .iter()
+                        .flat_map(|s| s.env_vars.iter().cloned())
+                        .collect::<Vec<_>>();
+                    crate::exec::credentials::forward(launch, &spec.excluded_env, &names)
+                } else {
+                    Ok(launch)
+                }
+            })
+            .map_err(|_| failure(Failure::Refusal, "backend_launch_configuration_failed", ""))
     }
 }
 #[derive(Clone)]

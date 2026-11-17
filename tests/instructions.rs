@@ -41,7 +41,6 @@ fn owner_overrides_inherit_only_optional_sections_and_reload_without_restart() {
     let defaults = contract::load(None).unwrap();
     assert_eq!(owner.delegation, defaults.delegation);
     assert_eq!(owner.workers, defaults.workers);
-    assert_eq!(owner.debriefs, defaults.debriefs);
     assert_eq!(owner.extra, "## Lab rules\n\nprivate rule");
     let corpus: Value = serde_json::from_str(include_str!("corpus/placement.json")).unwrap();
     let mut config = loader::parse(
@@ -149,7 +148,7 @@ fn shared_provisions_lead_every_parent_call_and_worker_prompt_in_order() {
         .build(&config, &worker)
         .unwrap()
         .starts_with(&shared));
-    for call in ["triage", "decide", "repair", "debrief"] {
+    for call in ["triage", "decide", "repair"] {
         let request: fridica::core::parent::ParentRequest = serde_json::from_value(json!({
             "inbox_id":1,"call":call,"session":{"id":"T:C:1","channel":"C","work":{"workers":[]}},
             "trigger":{},"history":[],"obligations":[],"previous":null,"errors":[]}))
@@ -163,4 +162,14 @@ fn shared_provisions_lead_every_parent_call_and_worker_prompt_in_order() {
             "{call}"
         );
     }
+}
+
+#[test]
+fn retired_contract_sections_are_ignored_instead_of_becoming_shared_rules() {
+    let rules = contract::parse("## Participation\nParticipate.\n## Replies\nReply.\n## Debriefs\nObsolete closing rule.\n## Debrief\nAnother obsolete rule.\n## Extra\nKeep this rule.").unwrap();
+    assert!(!rules.parent().contains("obsolete"));
+    assert!(!rules.parent().contains("Obsolete"));
+    assert!(!rules.worker().contains("obsolete"));
+    assert!(rules.parent().contains("Keep this rule."));
+    assert!(!contract::DEFAULT.contains("## Debriefs"));
 }

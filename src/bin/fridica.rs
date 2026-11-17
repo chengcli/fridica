@@ -17,6 +17,14 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Serve the bundled GitHub MCP tools over stdio on a worker machine.
+    GithubMcp(GithubMcpArgs),
+    /// Serve the bundled alphaXiv literature research MCP tools over stdio.
+    AlphaxivMcp {
+        /// Check authentication and tool discovery without running a search.
+        #[arg(long)]
+        probe: bool,
+    },
     /// Print the version, source fingerprint and native target.
     BuildInfo,
     /// Initialize fresh v6 state offline; existing legacy databases require migrate.
@@ -100,6 +108,19 @@ enum Command {
         export: Option<PathBuf>,
     },
 }
+#[derive(clap::Args)]
+struct GithubMcpArgs {
+    /// Restrict the server to read tools.
+    #[arg(long)]
+    read_only: bool,
+    /// Target-local environment variable holding the GitHub token.
+    #[arg(long, default_value = "GH_TOKEN")]
+    token_env: String,
+    /// Read authenticated identity and exit without publishing.
+    #[arg(long)]
+    probe: bool,
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     match run(Cli::parse()).await {
@@ -126,6 +147,22 @@ fn database_path(database: Option<PathBuf>, config: &Path) -> Result<PathBuf> {
 }
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::AlphaxivMcp { probe } => {
+            if probe {
+                fridica_agent::alphaxiv::probe().await?;
+                println!("fridica-alphaxiv-mcp:ready");
+            } else {
+                fridica_agent::alphaxiv::run().await?;
+            }
+        }
+        Command::GithubMcp(options) => {
+            fridica_agent::github::run(fridica_agent::github::Options {
+                read_only: options.read_only,
+                token_env: options.token_env,
+                probe: options.probe,
+            })
+            .await?;
+        }
         Command::BuildInfo => println!(
             "{}",
             serde_json::to_string_pretty(&fridica::cli::candidate::Build::current())?

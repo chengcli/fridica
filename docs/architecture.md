@@ -129,4 +129,13 @@ without creating a Slack message.
   SDK. `policy.claude_prompts = "none"` falls back to deny-all prompts.
 - **Codex configuration.** `codex app-server` loads the machine owner's
   `~/.codex/config.toml`; the startup helper disables ambient MCP servers before
-  applying explicitly configured worker servers. GitHub MCP is opt-in per machine.
+  applying trusted worker servers. GitHub MCP defaults to the bundled Rust
+  `fridica github-mcp` subcommand on eligible local/SSH placements. The optional
+  `fridica-agent::github` module owns its protocol, octocrab API calls and gitoxide
+  repository reads; it has no dependency on the daemon or database. Fridica owns
+  CLI parsing, placement policy and default enablement.
+
+Finished discussions end with the final reply. The retired debrief workflow no
+longer schedules parent turns or channel posts. Legacy queued turns are settled
+without model calls, and queued posts fail with `debrief_removed` before delivery.
+Historical database fields and event projections remain readable for compatibility.

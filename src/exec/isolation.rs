@@ -358,8 +358,9 @@ fn probe_result(result: Result<process::Completed>) -> Check {
 /// First option wins in OpenSSH: probes must not reuse/persist a master or
 /// enroll a host key. Shared by explicit doctor and automatic job admission.
 pub fn read_only_ssh_probe(launch: &mut Launch) {
+    let index = super::credentials::ssh_options_index(launch);
     launch.argv.splice(
-        1..1,
+        index..index,
         [
             "-o",
             "ControlMaster=no",
@@ -381,8 +382,9 @@ pub fn read_only_ssh_probe(launch: &mut Launch) {
 /// `ControlMaster=auto` there), closed 30 s after the last probe. Options
 /// spliced first win over the transport's defaults.
 pub fn shared_ssh_probe(launch: &mut Launch) {
+    let index = super::credentials::ssh_options_index(launch);
     launch.argv.splice(
-        1..1,
+        index..index,
         [
             "-o",
             "ControlPersist=30",
