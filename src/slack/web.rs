@@ -144,7 +144,6 @@ async fn deliver(web: &WebClient, claim: ClaimedPost) -> Result<String, Failure>
         "reply"
             | "notice"
             | "report"
-            | "debrief_root"
             | "approval_notice"
             | "study_claim"
             | "study_result"

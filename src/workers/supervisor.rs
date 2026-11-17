@@ -599,7 +599,10 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
     }
     let same_backend = w.backend == config.parent.backend;
     Ok(WorkerSpec {
-        mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy),
+        mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy)
+            .into_iter()
+            .chain(crate::alphaxiv::servers(config, &m.name, &space.policy))
+            .collect(),
         worker_id: w.id.clone(),
         machine: m.for_slot(w.slot),
         workspace: space.for_slot(w.slot),

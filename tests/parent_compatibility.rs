@@ -299,7 +299,7 @@ async fn first_decision_gets_only_prior_channel_roots_and_repair_keeps_the_snaps
         assert_eq!(channel[0]["event_id"], "prior3");
         assert_eq!(channel[9]["event_id"], "prior12");
         assert_eq!(calls[1].session["channel_context"], *channel);
-        for kind in ["decide", "repair", "triage", "debrief"] {
+        for kind in ["decide", "repair", "triage"] {
             let mut request = calls[0].clone();
             request.call = kind.into();
             let prompt = fridica::parent::prompts::build(&f.config, &request)

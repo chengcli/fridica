@@ -136,7 +136,7 @@ pub fn project(seq: i64, time: f64, kind: &str, p: &Value, lookup: &Lookup<'_>) 
                 }),
             )
         }
-        // The closing debrief is its own record: the finishing reply has
+        // Historical debrief records remain readable after removal. The finishing reply has
         // already been committed, and this turn posts nothing new itself.
         "debrief_commit" => (
             session(names, text(&p["request"]["session"]["id"])),

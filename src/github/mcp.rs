@@ -1,5 +1,6 @@
-//! Explicit, target-local GitHub MCP configuration. Credentials are resolved only
-//! by the child helper; configuration, commands and replay contain names only.
+//! Explicit GitHub MCP configuration. Workers resolve credentials from their
+//! environment (including forwarded integration tokens) or target-local gh auth.
+//! Configuration, commands and replay contain names only.
 use crate::config::{registry::Policy, Config};
 use std::os::unix::fs::PermissionsExt;
 
@@ -9,7 +10,7 @@ pub const SERVER_NAME: &str = "fridica_github";
 
 /// No server for offline or scoped-fetch-only placements. The backend's shell
 /// network settings do not constrain MCP subprocesses, so gate them here too.
-pub fn target<'a>(config: &'a Config, machine: &str, policy: &Policy) -> Option<&'a Target> {
+pub fn target(config: &Config, machine: &str, policy: &Policy) -> Option<Target> {
     let transport = &config.machines.get(machine)?.transport;
     let network = policy.any_network()
         || policy.network.iter().any(|domain| {
@@ -26,14 +27,64 @@ pub fn target<'a>(config: &'a Config, machine: &str, policy: &Policy) -> Option<
     {
         return None;
     }
-    config.github.mcp.machines.get(machine)
+    Some(
+        config
+            .github
+            .mcp
+            .machines
+            .get(machine)
+            .cloned()
+            .unwrap_or_default(),
+    )
+}
+pub fn available(config: &Config) -> bool {
+    config.machines.machines.iter().any(|m| {
+        m.workspaces
+            .iter()
+            .any(|w| target(config, &m.name, &w.policy).is_some())
+    })
 }
 pub fn servers(config: &Config, machine: &str, policy: &Policy) -> Vec<fridica_agent::McpServer> {
     target(config, machine, policy)
-        .map(|target| vec![server(target, policy.mode == "read-only")])
+        .map(|target| {
+            let mut server = server(&target, policy.mode == "read-only");
+            if target.command.is_empty()
+                && config
+                    .machines
+                    .get(machine)
+                    .is_some_and(|m| m.transport == "local")
+            {
+                if let Ok(exe) = std::env::current_exe() {
+                    if exe
+                        .file_name()
+                        .is_some_and(|n| n == "fridica" || n == "fridica-candidate")
+                    {
+                        server.command = exe.to_string_lossy().into_owned();
+                    }
+                }
+            }
+            vec![server]
+        })
         .unwrap_or_default()
 }
 pub fn server(target: &Target, readonly: bool) -> fridica_agent::McpServer {
+    if target.command.is_empty() {
+        let mut args = vec![
+            "github-mcp".into(),
+            "--token-env".into(),
+            target.token_env.clone(),
+        ];
+        if readonly {
+            args.push("--read-only".into());
+        }
+        return fridica_agent::McpServer {
+            name: SERVER_NAME.into(),
+            command: "fridica".into(),
+            args,
+            env_vars: vec![target.token_env.clone(), "GH_CONFIG_DIR".into()],
+            auto_approve: true,
+        };
+    }
     fridica_agent::McpServer {
         name: SERVER_NAME.into(), command: "/usr/bin/python3".into(),
         args: vec!["-I".into(), "-S".into(), "-c".into(), HELPER.into(),
@@ -44,6 +95,13 @@ pub fn server(target: &Target, readonly: bool) -> fridica_agent::McpServer {
 }
 pub fn probe_command(target: &Target, readonly: bool) -> Vec<String> {
     let server = server(target, readonly);
+    let mut command = vec![server.command];
+    command.extend(server.args);
+    command.push("--probe".into());
+    command
+}
+pub fn configured_probe_command(config: &Config, machine: &str, policy: &Policy) -> Vec<String> {
+    let server = servers(config, machine, policy).remove(0);
     let mut command = vec![server.command];
     command.extend(server.args);
     command.push("--probe".into());
@@ -61,9 +119,9 @@ pub async fn probe(
     timeout: std::time::Duration,
 ) -> anyhow::Result<bool> {
     use crate::workers::jsonl::{Launcher, SystemLauncher};
-    let Some(target) = target(config, &machine.name, &workspace.policy) else {
+    if target(config, &machine.name, &workspace.policy).is_none() {
         return Ok(true);
-    };
+    }
     let control = tempfile::Builder::new()
         .prefix("fridica-mcp-")
         .permissions(std::fs::Permissions::from_mode(0o700))
@@ -91,7 +149,7 @@ pub async fn probe(
     let mut launch = launcher
         .launch(
             &spec,
-            probe_command(target, workspace.policy.mode == "read-only"),
+            configured_probe_command(config, &machine.name, &workspace.policy),
         )
         .map_err(|_| anyhow::anyhow!("GitHub MCP launch refused"))?;
     if machine.transport == "ssh" {

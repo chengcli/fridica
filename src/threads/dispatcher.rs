@@ -187,6 +187,24 @@ impl<D: Delivery> Dispatcher<D> {
                     continue;
                 };
                 attempted += 1;
+                // Old durable posts must not revive the retired channel debrief workflow.
+                if post.post.kind == "debrief_root" {
+                    let owner = self.owner.clone();
+                    self.store
+                        .transact(move |u| {
+                            u.finish_delivery(
+                                &post,
+                                &DeliveryOutcome::Rejected {
+                                    code: "debrief_removed".into(),
+                                },
+                                &owner,
+                                now,
+                            )
+                        })
+                        .await?;
+                    progressed = true;
+                    continue;
+                }
                 let mut sending = post.clone();
                 let meta = post.post.meta.as_ref().map(|m| m["review"].clone());
                 let review: Vec<String> =

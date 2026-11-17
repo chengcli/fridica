@@ -262,8 +262,7 @@ if mode=='exit':
  print('PRIVATE xoxp-sensitive',file=sys.stderr);sys.exit(7)
 if mode=='flood': print('x'*5000000);sys.exit(0)
 if mode=='tools' and backend=='codex':print(json.dumps({'type':'item.started','item':{'type':'command_execution'}}))
-if 'debrief' in schema['properties']: result={'debrief':'Review completed.'}
-elif 'decision' in schema['properties']: result={'decision':'ignore' if mode in ('ignore','gate_ignore') else 'respond'}
+if 'decision' in schema['properties']: result={'decision':'ignore' if mode in ('ignore','gate_ignore') else 'respond'}
 else:
  result={'reply':{'text':'Done.','status':'complete','answers':[]}}
  if mode=='repair' and not json.loads(prompt.split('\n\nData:\n')[1])['repair']['errors']:result={'unknown':'force repair'}
@@ -511,7 +510,6 @@ fn owner_prompt_inputs_reload_and_schema_matches_the_implemented_actions() {
         }
     }
     strict(&parent::schema::decision(&Default::default()));
-    strict(&parent::schema::debrief());
 }
 
 async fn logs(h: &Harness, n: usize) -> Vec<Value> {
@@ -1484,25 +1482,6 @@ async fn clean_restore_followup_does_not_download_or_render_old_attachments() {
     h.clean();
 }
 
-#[tokio::test]
-async fn debrief_uses_its_contract_and_strict_schema_through_both_cli_adapters() {
-    for backend in ["codex", "claude"] {
-        let h = Harness::new(backend, FAKE, "ok", 5.).await;
-        let response = h.parent.decide(request("debrief")).await.unwrap();
-        assert_eq!(response, json!({"debrief":"Review completed."}));
-        let log = logs(&h, 1).await;
-        assert!(log[0]["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("at most 2500 characters"));
-        assert!(log[0]["prompt"]
-            .as_str()
-            .unwrap()
-            .contains(parent::prompts::UNTRUSTED));
-        assert_eq!(h.scalar("SELECT json_extract(payload_json,'$.schema.properties.debrief.type') FROM replay_events WHERE kind='parent_transport_call'").await,"string");
-    }
-}
-
 #[test]
 fn decision_schema_allows_only_known_workers_and_granted_fetches() {
     let session = json!({"id":"T:C:1","work":{"workers":[
@@ -1639,4 +1618,13 @@ fn a_usage_limit_envelope_is_recognized() {
         br#"{"type":"result","is_error":false,"api_error_status":429}"#
     ));
     assert!(!rate_limited("claude", b"not json"));
+}
+
+#[tokio::test]
+async fn retired_debrief_calls_are_rejected_before_backend_execution() {
+    for backend in ["codex", "claude"] {
+        let h = Harness::new(backend, FAKE, "ok", 5.).await;
+        assert!(h.parent.decide(request("debrief")).await.is_err());
+        assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_transport_call'").await,"0");
+    }
 }

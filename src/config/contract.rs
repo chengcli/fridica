@@ -26,7 +26,6 @@ pub struct Contract {
     pub replies: String,
     pub delegation: String,
     pub workers: String,
-    pub debriefs: String,
     pub extra: String,
 }
 impl Contract {
@@ -85,7 +84,8 @@ pub fn parse(text: &str) -> Result<Contract> {
             "replies" | "reply" => "replies",
             "delegation" => "delegation",
             "worker reports" | "workers" | "worker" => "workers",
-            "debriefs" | "debrief" => "debriefs",
+            // Ignore retired sections in existing owner contracts.
+            "debriefs" | "debrief" => continue,
             _ => "",
         };
         if key.is_empty() {
@@ -112,7 +112,6 @@ pub fn parse(text: &str) -> Result<Contract> {
         replies: found.remove("replies").unwrap_or_default(),
         delegation: found.remove("delegation").unwrap_or_default(),
         workers: found.remove("workers").unwrap_or_default(),
-        debriefs: found.remove("debriefs").unwrap_or_default(),
         extra: extra.join("\n\n"),
     })
 }
@@ -128,9 +127,6 @@ pub fn load(path: Option<&Path>) -> Result<Contract> {
     }
     if contract.workers.is_empty() {
         contract.workers = defaults.workers;
-    }
-    if contract.debriefs.is_empty() {
-        contract.debriefs = defaults.debriefs;
     }
     Ok(contract)
 }

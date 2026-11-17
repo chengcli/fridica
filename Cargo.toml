@@ -18,7 +18,7 @@ path = "src/bin/fridica.rs"
 [dependencies]
 fridica-core = "0.6.0"
 fridica-store-sqlite = "0.4.0"
-fridica-agent = "0.4.0"
+fridica-agent = { version = "0.4.3", features = ["github", "alphaxiv"] }
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

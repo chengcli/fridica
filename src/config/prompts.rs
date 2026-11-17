@@ -6,7 +6,5 @@
 pub const ACTION: &str = include_str!("../../assets/prompts/parent-action.md").trim_ascii_end();
 /// The triage call's answer.
 pub const TRIAGE: &str = include_str!("../../assets/prompts/parent-triage.md").trim_ascii_end();
-/// The debrief call's answer.
-pub const DEBRIEF: &str = include_str!("../../assets/prompts/parent-debrief.md").trim_ascii_end();
 /// Closes every parent and worker prompt, before the data.
 pub const UNTRUSTED: &str = include_str!("../../assets/prompts/untrusted.md").trim_ascii_end();

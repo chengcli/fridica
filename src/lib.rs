@@ -1,3 +1,4 @@
+pub mod alphaxiv;
 pub mod approvals;
 pub mod attention;
 pub mod cli;

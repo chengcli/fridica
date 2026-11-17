@@ -76,6 +76,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             "machines",
             "state",
             "github",
+            "alphaxiv",
             "attention",
             "isolation",
             "placement",
@@ -316,6 +317,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             record,
         },
         github,
+        alphaxiv: decode(root.get("alphaxiv"))?,
         attention,
         isolation,
         placement,
@@ -324,6 +326,10 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };
     super::github_mcp::validate(&config)?;
+    anyhow::ensure!(
+        !config.alphaxiv.enabled || !config.secret_env().contains(&"ALPHAXIV_TOKEN"),
+        "ALPHAXIV_TOKEN cannot also be a master credential"
+    );
     protect(&config, context)?;
     Ok(config)
 }
