@@ -859,6 +859,13 @@ daemon's owner-only control socket, so the page can do what the CLI can: read
 threads, workers, jobs and posts, send instructions, decide approvals, retry posts
 and edit the parent and limits settings. Stop it with Ctrl-C.
 
+In **Work**, select a parent to see its workers, their tasks and where they run.
+Select **Conversation** to see who mentioned whom, or **History → Play replay**
+to follow the recorded messages and job changes. If you set display names in the
+graph, use a fixed port (e.g. `fridica dashboard --port 8877`) to keep them in this browser.
+
+![Dashboard showing a parent and three workers on two servers](docs/images/dashboard-demo.jpg)
+
 ## State, recovery, and guarantees
 
 The daemon owns a single SQLite database, kept by
@@ -951,7 +958,7 @@ cargo test --locked --doc                  # doctests, which nextest does not ru
 pip install -r requirements-dev.txt
 python -m pytest -q                   # no network; fake Slack, fake claude/codex/ssh/bwrap executables
 maturin build --release --out dist    # a wheel for this machine; scripts/smoke_wheel.sh dist/*.whl
-node --test tests/dashboard.test.cjs
+node --test tests/dashboard*.cjs
 ruff check src tests
 ```
 

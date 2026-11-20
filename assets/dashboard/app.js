@@ -1,10 +1,13 @@
 "use strict";
+const graph = typeof module !== "undefined" ? require("./graph.js") : FridicaGraph;
 
 const state = {
   view: "overview", thread: null, key: "", auto: true, data: {},
   query: "", workFilter: "current", threadFilter: "active", threadLayout: "list", threadLimit: 200,
   refreshing: false, pending: false, instructionDraft: null, lastSync: null,
   selectedParent: null, historyOpen: false, descriptionOpen: false,
+  graphMode: "workers", graphViewport: null, workDetail: null, workLoading: null, workAttempted: null,
+  workRequest: 0, workError: "", workLimit: 200, replayIndex: null, replayPlaying: false,
 };
 
 function readKey() {
@@ -61,8 +64,11 @@ function inlineMarkdown(text) {
   return parts;
 }
 
+function slackText(text) {
+  return String(text || "").replace(/&(amp|lt|gt);/g, (_, name) => ({ amp: "&", lt: "<", gt: ">" })[name]);
+}
 function markdown(text) {
-  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = slackText(text).replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   const listLine = (line) => line.match(/^(?:([-*])|(\d+)\.)\s+(.+)$/);
   for (let i = 0; i < lines.length;) {
@@ -121,9 +127,10 @@ function statusPill(value) {
 function button(label, handler, extra = "") {
   return el("button", { class: extra, onclick: async (event) => {
     event.stopPropagation();
-    event.currentTarget.disabled = true;
+    const target = event.currentTarget;
+    target.disabled = true;
     try { await handler(); } catch (error) { toast(error.message, true); }
-    finally { event.currentTarget.disabled = false; }
+    finally { target.disabled = false; }
   } }, label);
 }
 
@@ -146,6 +153,7 @@ function confirmAction(title, body, detail = "", dangerous = false) {
   const submit = document.getElementById("dialog-confirm");
   submit.textContent = dangerous ? "Confirm action" : "Continue";
   submit.className = dangerous ? "danger" : "primary";
+  dialog.returnValue = "cancel";
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
     dialog.showModal();
@@ -161,6 +169,7 @@ async function act(method, path, body, title, explanation, detail = "", dangerou
 }
 
 function go(view, thread = null) {
+  state.replayPlaying = false;
   state.view = view;
   state.thread = thread;
   state.query = "";
@@ -185,17 +194,19 @@ function empty(message) { return el("div", { class: "empty" }, message); }
 function threadTitle(thread) {
   return thread.summary || [thread.context?.repo, thread.context?.workspace].filter(Boolean).join(" · ") || "Slack conversation";
 }
-function shortTitle(text) {
-  const full = (text || "").trim();
-  const first = full.split("\n")[0].match(/^.*?[.!?](?=\s|$)/)?.[0] || full.split("\n")[0];
-  return first.length > 105 ? first.slice(0, 102).trimEnd() + "…" : first + (first.length < full.length ? "…" : "");
+function taskTitle(value) {
+  const words = String(value || "").replace(/^(?:Home thread|THREAD)\s+\S+\s*/i, "")
+    .split("\n")[0].split(/\s+/).slice(0, 7);
+  while (words.length > 1 && words.join(" ").length > 44) words.pop();
+  return words.join(" ") || "Worker task";
 }
 function workTitle(thread) {
-  const summary = threadTitle(thread).replace(/\s+/g, " ").trim();
-  const repo = thread.context?.repo || thread.context?.workspace;
+  const summary = threadTitle(thread).replace(/^(?:Home thread|THREAD)\s+\S+\s*/i, "").replace(/\s+/g, " ").trim();
+  const repos = String(thread.context?.repo || thread.context?.workspace || "").split(/[;,]/).map(value => value.trim()).filter(Boolean);
+  const repo = repos[0] ? repos[0] + (repos.length > 1 ? " +" + (repos.length - 1) + " repos" : "") : "";
   const refs = [...new Set(summary.match(/#\d+/g) || [])];
   if (repo && refs.length) return `${repo} · ${refs.slice(0, 2).join(", ")}${refs.length > 2 ? ` +${refs.length - 2}` : ""}`;
-  return summary.split(/[.!?;:]/)[0].split(" ").slice(0, 7).join(" ");
+  return summary.split(/[.!?;:]/)[0].split(" ").slice(0, 7).join(" ") || repo || "Slack conversation";
 }
 function threadContext(thread) {
   return [thread.context?.repo || thread.context?.workspace, thread.context?.branch, ago(thread.updated)].filter(Boolean).join(" · ");
@@ -232,26 +243,21 @@ function attentionCard(item) {
 
 function latestJobs(jobs) {
   const latest = new Map();
-  const rank = (job) => job.status === "running" ? 2 : job.status === "queued" ? 1 : 0;
   for (const job of jobs) {
-    const previous = latest.get(job.worker_id);
-    if (!previous || rank(job) > rank(previous) ||
-      (rank(job) === rank(previous) && (job.queued_at || 0) > (previous.queued_at || 0))) latest.set(job.worker_id, job);
+    if (graph.preferJob(job, latest.get(job.worker_id))) latest.set(job.worker_id, job);
   }
   return latest;
 }
 function workerState(worker, job) {
   if (worker.status === "awaiting_approval") return "blocked";
-  const status = job?.status || worker.status;
-  if (["running", "queued"].includes(status)) return status;
-  if (["failed", "blocked", "lost"].includes(status)) return "blocked";
-  if (["done", "complete", "stopped"].includes(status)) return "done";
-  return "idle";
+  const status = graph.state(job?.status || worker.status);
+  if (status === "blocked" && job?.finished_at && ["idle", "stopped"].includes(worker.status)) return "done";
+  return status;
 }
 function workerPlace(worker, machines) {
   const machine = (machines || []).find((item) => item.name === worker.machine);
   const workspace = machine?.workspace_details?.find((item) => item.name === worker.workspace);
-  return { host: worker.machine || "Unknown host", environment: [machine?.transport?.toUpperCase() ||
+  return { host: worker.machine || "Unknown host", mode: workspace?.mode || "", transport: machine?.transport || "", environment: [machine?.transport?.toUpperCase() ||
     (worker.machine === "local" ? "LOCAL" : ""), worker.workspace, workspace?.mode].filter(Boolean).join(" · ") || "Environment not recorded" };
 }
 function workItems(thread, data, latest) {
@@ -265,13 +271,12 @@ function workFlags(thread, items) {
   const live = items.some((item) => ["running", "queued"].includes(item.status) ||
     item.worker?.status === "awaiting_approval");
   const completed = closed || (thread.control === "active" && thread.status === "complete" && !live);
-  const running = !completed && (items.some((item) => item.status === "running") ||
-    (thread.control === "active" && thread.status === "working"));
+  const running = !completed && items.some((item) => item.status === "running");
   const queued = !completed && items.some((item) => item.status === "queued");
-  const blocked = !completed && (thread.control === "paused" || thread.status === "blocked" ||
-    items.some((item) => item.status === "blocked"));
+  const blocked = !completed && (thread.control === "paused" || items.some((item) => item.status === "blocked") ||
+    (!running && !queued && thread.status === "blocked"));
   const waiting = !completed && thread.status === "waiting" && !running && !queued && !blocked;
-  return { current: running || queued || blocked || waiting, running, queued, blocked, waiting, completed };
+  return { current: running || queued || blocked || waiting || (!completed && thread.control === "active" && thread.status === "working"), running, queued, blocked, waiting, completed };
 }
 function workCounts(items) {
   const counts = { running: 0, queued: 0, blocked: 0, done: 0, idle: 0 };
@@ -286,8 +291,7 @@ function parentCard(thread, items, flags, selected) {
   const counts = workCounts(items);
   const hosts = [...new Set(items.map((item) => item.place.host))];
   return el("button", { class: "parent-card" + (selected ? " selected" : ""), "aria-pressed": String(selected),
-    onclick: () => { document.querySelector(".work-main").scrollTop = 0; state.selectedParent = thread.id;
-      state.historyOpen = state.workFilter === "completed"; state.descriptionOpen = false; render(); } },
+    title: threadTitle(thread), onclick: () => chooseParent(thread.id) },
     el("div", { class: "parent-card-top" }, el("span", { class: "eyebrow" }, "PARENT AGENT"),
       statusPill(parentStatus(thread, flags))),
     el("strong", { class: "parent-name" }, workTitle(thread)),
@@ -297,27 +301,30 @@ function parentCard(thread, items, flags, selected) {
         el("strong", {}, items.length)),
       el("span", { class: "graph-key" },
         ["running", "queued", "blocked", "done"].map((status) =>
-          el("span", {}, el("i", { class: "state-dot " + status }), status, el("b", {}, counts[status]))))),
+          el("span", {}, el("i", { class: "state-dot " + status }), status === "done" ? "finished" : status, el("b", {}, counts[status]))))),
     el("div", { class: "parent-card-foot" }, hosts.length ? hosts.slice(0, 2).join(" · ") + (hosts.length > 2 ? ` +${hosts.length - 2}` : "") : "No worker host",
       el("span", {}, "View →")));
 }
-function workerDetail(thread, item) {
+function workerLabel(worker) {
+  return (worker.role || "Worker") + (worker.id ? " · " + worker.id.slice(-4) : "");
+}
+function workerDetail(thread, item, readOnly = false) {
   const { worker, job, status, place } = item;
   return [el("div", { class: "eyebrow" }, "WORKER DETAIL"),
-    el("h2", {}, shortTitle(job?.brief || worker.summary || worker.role || "Worker")),
+    el("h2", {}, taskTitle(job?.brief || worker.summary || worker.role || "Worker")),
     el("p", { class: "sub" }, workTitle(thread)),
     el("div", { class: "worker-facts" },
-      [["Status", worker.status === "awaiting_approval" ? "awaiting approval" : job?.status || worker.status || "idle"], ["Role", worker.role || "Worker"],
-        ["Server", place.host], ["Environment", place.environment], ["Backend", worker.backend || "—"],
+      [["Status", !readOnly && worker.status === "awaiting_approval" ? "awaiting approval" : job?.status || worker.status || "idle"], ["Role", worker.role || "Worker"],
+        ["Server", place.host], ["Environment", place.environment], ["Backend", worker.backend || "—"], ["Runtime", job ? duration(graph.elapsed(job, item.observedAt)) || "—" : "—"],
         ["Started", job?.started_at ? when(job.started_at) : "—"], ["Finished", job?.finished_at ? when(job.finished_at) : "—"]]
         .map(([label, value]) => el("div", {}, el("small", {}, label), el("strong", {}, value)))),
-    status === "blocked" || thread.pause_reason ?
-      el("section", { class: "detail-note alert" }, el("h3", {}, worker.status === "awaiting_approval" ? "Approval pending" : "Why it stopped"),
-        markdown(worker.status === "awaiting_approval" ? "Review the request in Needs you." :
-          job?.error || thread.pause_reason || "No reason recorded.")) : null,
+    status === "blocked" || job?.status === "failed" || job?.error || (!readOnly && thread.pause_reason) ?
+      el("section", { class: "detail-note alert" }, el("h3", {}, !readOnly && worker.status === "awaiting_approval" ? "Approval pending" : "Why it stopped"),
+        markdown(!readOnly && worker.status === "awaiting_approval" ? "Review the request in Needs you." :
+          job?.error || (!readOnly && thread.pause_reason) || "No reason recorded.")) : null,
     job?.result?.summary ? el("section", { class: "detail-note" }, el("h3", {}, "Result"), markdown(job.result.summary)) : null,
     job?.brief ? el("section", { class: "detail-note" }, el("h3", {}, "Task"), markdown(job.brief)) : null,
-    worker.status !== "stopped" ? el("div", { class: "actions detail-note" },
+    !readOnly && worker.status !== "stopped" ? el("div", { class: "actions detail-note" },
       ["running", "awaiting_approval"].includes(worker.status) ? button("Interrupt", () => {
         document.getElementById("worker-dialog").close();
         return act("POST", `/workers/${encodeURIComponent(worker.id)}/interrupt`, {}, "Interrupt this worker?",
@@ -330,28 +337,209 @@ function workerDetail(thread, item) {
       }, "danger")) : null,
     el("div", { class: "detail-note" }, threadLink(thread.id, "Open conversation →"))];
 }
-function openWorker(thread, item) {
+function openWorker(thread, item, readOnly = false) {
   try {
-    document.getElementById("worker-detail").replaceChildren(...workerDetail(thread, item).filter(Boolean));
+    document.getElementById("worker-detail").replaceChildren(...workerDetail(thread, item, readOnly).filter(Boolean));
     const dialog = document.getElementById("worker-dialog");
     dialog.showModal();
     dialog.scrollTop = 0;
   } catch (error) { toast(`Could not show worker detail: ${error.message}`, true); }
 }
-function workerRow(thread, item) {
+function workerRow(thread, item, readOnly = false) {
   const { worker, job, status, place } = item;
-  const age = status === "running" || status === "queued" ? jobAge(job) :
+  const age = readOnly && item.observedAt ? "Elapsed " + (duration(graph.elapsed(job, item.observedAt)) || "—") :
+    status === "running" || status === "queued" ? jobAge(job) :
     job?.finished_at ? `Finished ${ago(job.finished_at)}` : worker.updated ? `Last active ${ago(worker.updated)}` : "";
-  return el("button", { class: "work-worker", onclick: () => openWorker(thread, item) },
+  return el("button", { class: "work-worker", onclick: () => openWorker(thread, item, readOnly) },
     el("span", { class: "worker-glyph " + status }, (worker.role || "W").slice(0, 1).toUpperCase()),
     el("span", { class: "worker-copy" },
-      el("strong", {}, shortTitle(job?.brief || worker.summary || "No recent job")),
-      el("small", {}, [worker.role || "Worker", age].filter(Boolean).join(" · "))),
+      el("strong", {}, taskTitle(job?.brief || worker.summary || "No recent job")),
+      el("small", {}, [workerLabel(worker), age].filter(Boolean).join(" · "))),
     el("span", { class: "worker-location" }, el("small", {}, "SERVER / ENVIRONMENT"),
       el("strong", {}, place.host), el("em", {}, place.environment)),
-    el("span", { class: "worker-status " + status }, status === "done" ? "Completed" : status),
+    el("span", { class: "worker-status " + status }, job?.status === "failed" ? "Failed" : status === "done" ? "Finished" : status),
     el("span", { class: "worker-chevron" }, "›"));
 }
+
+function chooseParent(id) {
+  document.querySelector(".work-main")?.scrollTo(0, 0);
+  state.selectedParent = id;
+  state.workDetail = null; state.workAttempted = null; state.workError = "";
+  state.workLimit = 200; state.replayIndex = null; state.replayPlaying = false;
+  state.graphViewport = null; state.descriptionOpen = false;
+  state.historyOpen = state.workFilter === "completed";
+  render();
+}
+async function loadWorkDetail(force = false) {
+  const id = state.selectedParent, limit = state.workLimit, key = id + ":" + limit;
+  if (!id || state.view !== "overview" || state.workLoading === key ||
+    (!force && state.workAttempted === key)) return;
+  const request = ++state.workRequest;
+  state.workLoading = key; state.workAttempted = key; state.workError = "";
+  try {
+    const detail = await api("GET", "/threads/" + encodeURIComponent(id) + "?limit=" + limit);
+    if (state.selectedParent !== id || request !== state.workRequest) return;
+    if (state.replayIndex !== null) {
+      const selected = graph.events(state.workDetail || {})[state.replayIndex];
+      const index = graph.events(detail).findIndex(event => event.id === selected?.id);
+      if (index < 0) { state.workError = "History changed. Return to live to refresh."; return; }
+      state.replayIndex = index;
+    }
+    state.workDetail = detail;
+  } catch (error) {
+    if (state.selectedParent === id && request === state.workRequest) state.workError = error.message;
+  } finally {
+    if (request === state.workRequest) {
+      state.workLoading = null;
+      if (state.view === "overview") render();
+    }
+  }
+}
+function duration(seconds) {
+  if (seconds === null) return "";
+  const value = Math.max(0, Math.floor(seconds));
+  return value < 60 ? value + "s" : value < 3600 ? Math.floor(value / 60) + "m " + value % 60 + "s" :
+    Math.floor(value / 3600) + "h " + Math.floor(value % 3600 / 60) + "m";
+}
+function blockReason(thread, item, replay = false) {
+  return !replay && item.worker.status === "awaiting_approval" ? "Waiting for owner approval" :
+    item.job?.error === "worker_isolation_runtime_or_transport_failed" ?
+      "Worker could not start: isolation runtime or transport failed." :
+      item.job?.error || (!replay && thread.pause_reason) || "No reason was recorded.";
+}
+function aliasKey(thread) { return "fridica-names:" + state.data.status.owner + ":" + (thread.key?.workspace || ""); }
+function graphAliases(thread) {
+  try { return JSON.parse(localStorage.getItem(aliasKey(thread)) || "{}"); } catch (_) { return {}; }
+}
+function openParticipant(thread, node, messages) {
+  const aliases = graphAliases(thread);
+  document.getElementById("worker-detail").replaceChildren(
+    el("div", { class: "eyebrow" }, "PARTICIPANT"), el("h2", {}, node.label),
+    el("p", { class: "sub" }, node.id),
+    field("Display name", "participant-name", aliases[node.id] || node.label),
+    button("Save display name", () => {
+      const value = document.getElementById("participant-name").value.trim().slice(0, 64);
+      if (value) aliases[node.id] = value; else delete aliases[node.id];
+      try { localStorage.setItem(aliasKey(thread), JSON.stringify(aliases)); }
+      catch (_) { toast("Display names cannot be saved in this browser.", true); return; }
+      document.getElementById("worker-dialog").close(); render();
+    }, "primary"),
+    el("div", { class: "participant-messages" }, messages.filter(m => Number(m.ts) > 0 &&
+      (m.sender || (m.source === "self" ? state.data.status.owner : "unknown")) === node.id)
+      .sort((a, b) => Number(b.ts) - Number(a.ts)).slice(0, 5).map(m => el("article", { class: "message" }, el("small", {}, when(Number(m.ts))), markdown(m.text)))));
+  document.getElementById("worker-dialog").showModal();
+}
+function openGuide(thread) {
+  if (state.replayIndex !== null) return;
+  const detail = state.workDetail?.session.id === thread.id ? state.workDetail : null;
+  document.getElementById("worker-detail").replaceChildren(
+    el("div", { class: "eyebrow" }, "GUIDE PARENT"), el("h2", {}, workTitle(thread)),
+    ...instructionPanel(thread, detail?.instructions || []).filter(Boolean),
+    el("div", { class: "detail-note" }, threadActions(thread)));
+  document.getElementById("worker-dialog").showModal();
+}
+function graphHistory(thread, detail, events) {
+  const aliases = graphAliases(thread);
+  const selected = state.replayIndex === null ? events.length - 1 : Math.min(state.replayIndex, events.length - 1);
+  const event = events[selected];
+  const jump = index => { state.replayIndex = Math.max(0, Math.min(index, events.length - 1)); render(); };
+  return el("section", { class: "orbit-history", "aria-label": "Recorded history" },
+    el("div", { class: "history-toolbar" },
+      el("div", {}, el("h2", {}, "History"), el("small", {}, events.length + " recorded events · idle time compressed")),
+      el("div", { class: "actions" },
+        button(state.replayPlaying ? "Pause replay" : "Play replay", () => {
+          if (!events.length) return;
+          if (state.replayIndex === null || state.replayIndex >= events.length - 1) state.replayIndex = 0;
+          state.replayPlaying = !state.replayPlaying; render();
+        }), button("Back to live", () => { state.replayPlaying = false; state.replayIndex = null; state.workError = ""; state.workAttempted = null; render(); }, "primary"))),
+    events.length ? [
+      el("input", { class: "replay-range", type: "range", min: "0", max: String(events.length - 1), value: String(selected),
+        "aria-label": "Replay position", onchange: event => jump(Number(event.target.value)) }),
+      el("div", { class: "replay-time" }, el("span", {}, when(events[0].time)), el("strong", {}, when(event.time)),
+        el("span", {}, when(events[events.length - 1].time))),
+      el("div", { class: "history-events" }, events.slice(Math.max(0, selected - 3), selected + 1).map(item =>
+        el("button", { class: "history-event" + (item.id === event.id ? " active" : ""), onclick: () => jump(events.indexOf(item)) },
+          el("small", {}, item.message ? (aliases[item.message.sender] || item.message.sender_name || item.message.sender || "Message") : item.kind),
+          el("strong", {}, slackText(item.text).split("\n")[0].slice(0, 130)), el("time", {}, when(item.time))))),
+      el("details", { class: "history-message" }, el("summary", {}, "Read full event"), markdown(event.text),
+        event.message ? el("a", { href: "https://app.slack.com/archives/" + encodeURIComponent(thread.key?.channel || "") +
+          "/p" + event.message.ts.replace(".", ""), target: "_blank", rel: "noopener noreferrer" }, "Open message in Slack ↗") : null)
+    ] : empty("No message or job history is stored."),
+    state.workLimit < 1000 && (detail.messages || []).length >= state.workLimit ? button("Load older messages", () => {
+      state.workLimit += 200; return loadWorkDetail(true);
+    }, "section-link") : null);
+}
+function workSnapshot(thread, items, data) {
+  const detail = state.workDetail?.session.id === thread.id ? state.workDetail : null;
+  const events = detail ? graph.events(detail) : [];
+  const replay = state.replayIndex !== null && events.length > 0;
+  const history = replay ? events.slice(0, state.replayIndex + 1) : [];
+  const at = replay ? history.at(-1).time : Infinity;
+  const messages = replay ? history.filter(e => e.message).map(e => e.message) : detail?.messages || [];
+  return { detail, events, replay, at, messages, items: replay ?
+    graph.snapshot(detail.workers || [], history, at).map(item => ({ ...item, place: workerPlace(item.worker, data.machines) })) : items };
+}
+function workerAge({ job, status }, at, replay) {
+  if (!job) return status;
+  const label = status === "done" || job.status === "failed" ? job.status : status;
+  const seconds = status === "queued" && job.queued_at ? at - job.queued_at : graph.elapsed(job, at);
+  const time = duration(seconds);
+  const finished = !replay && job.finished_at ? ago(job.finished_at) : "";
+  return [label, time && (job.finished_at ? time + " run" : time), finished].filter(Boolean).join(" · ");
+}
+
+function agentMap(thread, view, flags, shown, owner) {
+  const { messages, replay, at } = view;
+  let nodes, edges;
+  if (state.graphMode === "conversation") {
+    const conversation = graph.conversation(messages, owner, graphAliases(thread));
+    nodes = conversation.nodes.map(node => ({ ...node, kind: "person", status: "idle",
+      active: conversation.current?.sender === node.id, subtitle: node.count + (node.count === 1 ? " message" : " messages"), meta: node.label === node.id ? "" : node.id }));
+    edges = conversation.edges;
+  } else {
+    nodes = [{ id: thread.id, kind: "parent", label: "Parent", subtitle: workTitle(thread),
+      meta: replay ? "Historical view" : parentStatus(thread, flags), status: replay ? "idle" : parentStatus(thread, flags) },
+      ...shown.map(item => ({ id: item.worker.id, kind: "worker", item, label: workerLabel(item.worker),
+        subtitle: taskTitle(item.job?.brief || item.worker.summary || "No active job"),
+        meta: [item.place.host, [item.place.transport.toUpperCase(), item.place.mode].filter(Boolean).join(" / ")].filter(Boolean).join(" · "),
+        age: workerAge(item, replay ? at : Date.now() / 1000, replay),
+        status: item.status === "done" && item.job?.status === "failed" ? "failed" : item.status }))];
+    edges = shown.map(item => ({ source: thread.id, target: item.worker.id, active: item.status === "running" }));
+  }
+  return nodes.length ? graph.draw({ nodes, edges, viewport: state.graphViewport,
+    onViewport: value => { state.graphViewport = value; },
+    select: node => node.kind === "worker" ? openWorker(thread, node.item, replay) :
+      node.kind === "person" ? openParticipant(thread, node, messages) :
+      (state.descriptionOpen = !state.descriptionOpen, render()) }) : empty("No participants are recorded in the loaded messages.");
+}
+function workGraph(thread, view, flags, owner) {
+  const { detail, events, replay, at, items } = view;
+  const shown = items.filter(item => replay || state.historyOpen || !["done", "idle"].includes(item.status));
+  const guide = button("Guide parent", () => openGuide(thread), "guide-parent");
+  guide.disabled = replay;
+  return el("section", { class: "work-orbit " + state.graphMode + "-view" },
+    el("div", { class: "orbit-toolbar" },
+      el("div", { class: "segmented", "aria-label": "Graph view" }, ["workers", "conversation", "list"].map(mode =>
+        button({ workers: "Workers", conversation: "Conversation", list: "List" }[mode], () => {
+          state.graphMode = mode; state.graphViewport = null; render();
+        }, state.graphMode === mode ? "active" : ""))),
+      el("span", { class: "orbit-source" }, replay ? "Replay · " + when(at) : "Live state"),
+      replay ? null : button(state.historyOpen ? "Hide history" : "History", () => { state.historyOpen = !state.historyOpen; render(); }, "section-link"),
+      guide),
+    state.graphMode === "list" ? null : agentMap(thread, view, flags, shown, owner),
+    state.graphMode === "workers" && shown.length ? el("div", { class: "orbit-roster" },
+      shown.filter(item => !["done", "idle"].includes(item.status)).slice(0, 6).map(item => workerRow(thread, item, replay))) : null,
+    state.graphMode === "workers" && !shown.length ? el("p", { class: "orbit-empty-note" }, "No active delegated worker. Open History to inspect earlier work.") : null,
+    items.filter(item => item.status === "blocked").map(item => el("button", { class: "orbit-block",
+      onclick: () => openWorker(thread, item, replay) }, el("strong", {}, item.worker.role || "Worker"),
+      el("span", {}, blockReason(thread, item, replay)))),
+    state.workError ? el("div", { class: "orbit-load-error" }, "History unavailable: " + state.workError,
+      button("Retry history", () => loadWorkDetail(true))) : null,
+    !detail && !state.workError ? el("p", { class: "orbit-loading" }, "Loading recorded history…") : null,
+    state.graphMode === "conversation" ? el("div", { class: "orbit-foot" }, "Links show Slack @mentions.") : null,
+    (state.historyOpen || replay) && detail ? graphHistory(thread, detail, events) : null);
+}
+
 function overview(data) {
   const latest = latestJobs(data.jobs || []);
   const all = (data.threads || []).map((thread) => {
@@ -359,25 +547,27 @@ function overview(data) {
     return { thread, workers, flags: workFlags(thread, workers) };
   });
   const query = state.query.toLowerCase();
-  const priority = ({ workers, flags }) => Number(flags.blocked) * 3 + Number(flags.running) * 2 +
+  const priority = ({ workers, flags }) => Number(flags.blocked) * 3 + Number(flags.running) * 6 +
     Number(flags.queued) + (workers.some((item) => item.status === "blocked") ? 2 : Number(workers.length > 0));
   const visible = all.filter(({ thread, workers, flags }) =>
     (state.workFilter === "all" || flags[state.workFilter]) && (!query ||
-      [threadTitle(thread), thread.context?.repo, ...workers.map((item) => item.job?.brief)]
+      [threadTitle(thread), thread.context?.repo, thread.context?.branch, thread.context?.workspace, ...workers.map((item) => item.job?.brief)]
         .some((value) => (value || "").toLowerCase().includes(query))))
     .sort((a, b) => priority(b) - priority(a) || (b.thread.updated || 0) - (a.thread.updated || 0));
-  if (!visible.some(({ thread }) => thread.id === state.selectedParent)) {
+  if (!all.some(({ thread }) => thread.id === state.selectedParent)) {
     state.selectedParent = visible[0]?.thread.id || null;
     state.historyOpen = state.workFilter === "completed";
     state.descriptionOpen = false;
+    state.replayIndex = null; state.replayPlaying = false; state.graphViewport = null;
   }
-  const selectedEntry = visible.find(({ thread }) => thread.id === state.selectedParent);
+  const selectedEntry = all.find(({ thread }) => thread.id === state.selectedParent);
   const selected = selectedEntry?.thread;
   const selectedFlags = selectedEntry?.flags;
   const selectedItems = selectedEntry?.workers || [];
-  const counts = workCounts(selectedItems);
-  const current = selectedFlags?.completed ? [] : selectedItems.filter((item) => !["done", "idle"].includes(item.status));
-  const past = selectedFlags?.completed ? selectedItems : selectedItems.filter((item) => ["done", "idle"].includes(item.status));
+  const view = selected ? workSnapshot(selected, selectedItems, data) : { items: [] };
+  const { replay, items: visibleItems } = view;
+  const current = selectedFlags?.completed && !replay ? [] : visibleItems.filter(item => !["done", "idle"].includes(item.status));
+  const past = selectedFlags?.completed && !replay ? visibleItems : visibleItems.filter(item => ["done", "idle"].includes(item.status));
   return [el("div", { class: "work-layout" },
     el("aside", { class: "parent-pane", "aria-label": "Parent agents" },
       el("div", { class: "eyebrow" }, "WORK GRAPH"), el("h1", {}, "Parents"),
@@ -386,11 +576,13 @@ function overview(data) {
         [["current", "Current"], ["running", "Running"], ["queued", "Queued"],
           ["blocked", "Blocked"], ["waiting", "Waiting"], ["completed", "Completed"], ["all", "All loaded"]]
           .map(([key, label]) => [key, `${label} (${all.filter((entry) => key === "all" || entry.flags[key]).length})`]),
-        (value) => { state.workFilter = value; state.historyOpen = value === "completed"; render(); window.scrollTo(0, 0); }, "Filter parents")),
+        (value) => { state.workFilter = value; state.selectedParent = null; state.historyOpen = value === "completed"; render(); window.scrollTo(0, 0); }, "Filter parents")),
+      selectedEntry && !visible.includes(selectedEntry) ? el("p", { class: "sub small" },
+        "Selected parent no longer matches this filter.") : null,
       el("div", { class: "parent-cards" }, visible.length ? visible.map(({ thread, workers, flags }) =>
         parentCard(thread, workers, flags, thread.id === state.selectedParent)) :
         empty("No matching parent agents.")),
-      data.threads.length === state.threadLimit ? button("Load older", () => { state.threadLimit += 200; return refresh(true); }, "button") : null),
+      state.threadLimit < 1000 && data.threads.length === state.threadLimit ? button("Load older", () => { state.threadLimit += 200; return refresh(true); }, "button") : null),
     el("div", { class: "work-main" }, selected ? [
       el("div", { class: "work-main-head" },
         el("div", {}, el("div", { class: "eyebrow" }, state.workFilter === "completed" ? "PARENT / WORK HISTORY" : "PARENT / CURRENT WORK"),
@@ -400,29 +592,21 @@ function overview(data) {
             el("button", { class: "section-link", onclick: () => { state.descriptionOpen = !state.descriptionOpen; render(); } },
               state.descriptionOpen ? "Hide full description −" : "Read full description +"),
             state.descriptionOpen ? markdown(threadTitle(selected)) : null)),
-        el("span", { class: "head-count" }, el("strong", {}, selectedItems.length), " workers")),
-      el("section", { class: "work-summary" },
-        el("div", { class: "work-summary-head" },
-          el("div", {}, el("h2", {}, "At a glance"),
-            el("p", { class: "sub small" }, "Worker states, not percent complete.")),
-          statusPill(parentStatus(selected, selectedFlags))),
-        el("div", { class: "work-track" },
-          selectedItems.length ? selectedItems.map((item) => el("span", { class: item.status })) : el("span", { class: "idle" })),
-        el("div", { class: "work-legend" }, ["running", "queued", "blocked", "done", "idle"].filter((status) => counts[status]).map((status) =>
-          el("span", {}, el("i", { class: "state-dot " + status }), `${counts[status]} ${status}`)))),
-      selectedFlags.blocked ? el("div", { class: "parent-alert" },
-        el("strong", {}, selected.control === "paused" ? "Parent paused" : "Parent blocked"),
-        el("span", {}, selected.pause_reason || "Open a blocked worker for the error, or review the conversation."),
+        el("span", { class: "head-count" }, el("strong", {}, visibleItems.filter(item => ["running", "queued"].includes(item.status)).length), " active", el("small", {}, visibleItems.length + (visibleItems.length === 1 ? " total worker" : " total workers")))),
+      workGraph(selected, view, selectedFlags, data.status.owner),
+      selectedFlags.blocked && state.replayIndex === null ? el("div", { class: "parent-alert" },
+        el("strong", {}, selected.control === "paused" ? "Parent paused" : "Parent reports blocked"),
+        el("span", {}, selected.pause_reason || selected.control_detail?.reason || "No reason is stored in the parent record."),
         threadLink(selected.id, "Review →")) : null,
-      state.workFilter !== "completed" || current.length ? [
-        el("div", { class: "work-section-head" }, el("h2", {}, "Current workers"),
+      state.graphMode === "list" && (state.workFilter !== "completed" || current.length) ? [
+        el("div", { class: "work-section-head" }, el("h2", {}, replay ? "Workers at this time" : "Current workers"),
           el("span", {}, `${current.length} shown`)),
-        el("div", { class: "work-worker-list" }, current.length ? current.map((item) => workerRow(selected, item)) :
+        el("div", { class: "work-worker-list" }, current.length ? current.map((item) => workerRow(selected, item, replay)) :
           empty("No worker is running, queued, or blocked."))] : null,
-      el("button", { class: "history-toggle", "aria-expanded": String(state.historyOpen),
+      state.graphMode === "list" && !replay ? el("button", { class: "history-toggle", "aria-expanded": String(state.historyOpen),
         onclick: () => { state.historyOpen = !state.historyOpen; render(); } },
-        `Completed & idle workers · ${past.length}`, state.historyOpen ? "−" : "+"),
-      state.historyOpen ? el("div", { class: "work-worker-list" }, past.map((item) => workerRow(selected, item))) : null,
+        `Completed & idle workers · ${past.length}`, state.historyOpen ? "−" : "+") : null,
+      (state.historyOpen || replay) && state.graphMode === "list" ? el("div", { class: "work-worker-list" }, past.map((item) => workerRow(selected, item, replay))) : null,
       el("div", { class: "work-footer" }, threadLink(selected.id, "Open conversation →"))
     ] : empty("No parents match this filter. Try All loaded.")))];
 }
@@ -472,7 +656,7 @@ function select(value, options, change, label = "") {
 }
 function searchBox() {
   return el("input", { class: "search", type: "search", placeholder: "Search, then press Enter", value: state.query,
-    onkeydown: (event) => { if (event.key === "Enter") { state.query = event.target.value.trim(); render();
+    onkeydown: (event) => { if (event.key === "Enter") { state.query = event.target.value.trim(); state.selectedParent = null; render();
       if (state.view === "overview") window.scrollTo(0, 0); event.preventDefault(); } } });
 }
 function filteredThreads(threads, filter, query) {
@@ -505,7 +689,7 @@ function threadsView(data) {
     [el("span", { class: "small muted" }, `${threads.length} shown`), button("Activity log →", () => go("activity"), "section-link")]), toolbar,
     threads.length ? (state.threadLayout === "cards" ? el("div", { class: "grid-cards" }, cards) : panel("Conversations", list))
       : empty("No conversations match these filters."),
-    data.threads.length === state.threadLimit ? el("div", { class: "form-actions" },
+    state.threadLimit < 1000 && data.threads.length === state.threadLimit ? el("div", { class: "form-actions" },
       button("Load older conversations", () => { state.threadLimit += 200; return refresh(true); }, "button")) : null];
 }
 
@@ -533,7 +717,8 @@ function instructionPanel(session, instructions) {
       el("textarea", { id: "owner-instruction", rows: "4", maxlength: "4000", placeholder: "What should Fridica do next?",
         oninput: (event) => { state.instructionDraft = { thread: session.id, text: event.target.value }; } }, draft),
       el("div", { class: "form-actions" }, button("Send instruction", async () => {
-        const text = document.getElementById("owner-instruction").value.trim();
+        const input = document.getElementById("owner-instruction");
+        const text = input.value.trim();
         if (!text) { toast("Enter an instruction first.", true); return; }
         const current = state.instructionDraft;
         const clientId = current?.thread === session.id && current.text.trim() === text && current.id
@@ -542,7 +727,10 @@ function instructionPanel(session, instructions) {
         if (!await confirmAction("Send instruction?",
           "Fridica may delegate work or reply in Slack. Access and approval rules still apply.", text)) return;
         await api("POST", `/threads/${encodeURIComponent(session.id)}/instruct`, { text, client_id: clientId });
-        state.instructionDraft = null;
+        if (state.instructionDraft?.id === clientId) {
+          state.instructionDraft = null;
+          input.value = "";
+        }
         toast("Instruction queued for this conversation.");
         await refresh(true);
       }, "primary")));
@@ -555,9 +743,7 @@ function instructionPanel(session, instructions) {
 }
 function threadDetail(detail) {
   const session = detail.session;
-  const members = new Map();
-  for (const message of detail.messages) if (message.source !== "self" && !members.has(message.sender))
-    members.set(message.sender, `Member ${members.size + 1}`);
+  const aliases = graphAliases(session);
   return [el("div", { class: "detail-head" }, button("← Conversations", () => go("threads"), "button"), statusPill(session.control === "active" ? session.status : session.control)),
     page(threadTitle(session), threadContext(session) || "Slack conversation"),
     el("div", { class: "detail-grid" },
@@ -566,7 +752,7 @@ function threadDetail(detail) {
           session.decisions?.length ? el("div", {}, el("h3", {}, "Decisions"), el("ul", {}, session.decisions.map((decision) => el("li", {}, decision)))) : null]),
         panel(`Messages · ${detail.messages.length}`, detail.messages.length ? detail.messages.map((message) =>
           el("div", { class: "message" + (message.source === "self" ? " self" : "") },
-            el("div", { class: "small" }, message.source === "self" ? "Fridica" : members.get(message.sender), " · ", when(Number(message.ts))), markdown(message.text || "[No text]"))) : empty("No message text is stored.")),
+            el("div", { class: "small", title: message.sender }, aliases[message.sender] || message.sender_name || (message.source === "self" ? "Fridica" : message.sender), " · ", when(Number(message.ts))), markdown(message.text || "[No text]"))) : empty("No message text is stored.")),
         detail.jobs.length ? panel("Jobs", table(["Work", "Status", "Result"], detail.jobs.map((job) =>
           el("tr", {}, el("td", {}, job.brief), el("td", {}, statusPill(job.status)),
             el("td", {}, job.result?.summary || job.error || "—"))))) : null),
@@ -647,7 +833,13 @@ function settingsView(data) {
 }
 
 function showUnlock() {
-  state.data = {};
+  state.data = {}; state.workDetail = null; state.workAttempted = null; state.workLoading = null;
+  state.workRequest++; state.replayPlaying = false; state.replayIndex = null;
+  for (const id of ["worker-dialog", "confirm-dialog"]) {
+    const dialog = document.getElementById(id);
+    if (dialog?.open) dialog.close("cancel");
+  }
+  document.getElementById("worker-detail").replaceChildren();
   document.getElementById("view").replaceChildren();
   document.getElementById("unlock").hidden = false;
   document.getElementById("status").textContent = "Locked";
@@ -657,12 +849,17 @@ function render() {
   const data = state.data;
   if (!data.status) return;
   const detailScroll = document.querySelector(".work-main")?.scrollTop || 0;
+  const parentScroll = document.querySelector(".parent-pane")?.scrollTop || 0;
   const selected = state.selectedParent;
   const content = state.view === "threads" && state.thread ? (data.detail ? threadDetail(data.detail) : [empty("Loading conversation…")])
     : ({ overview, inbox, threads: threadsView, machines: machinesView,
       activity: activityView, settings: settingsView })[state.view](data);
   document.getElementById("view").replaceChildren(...content.flat().filter(Boolean));
   if (selected === state.selectedParent && state.view === "overview") document.querySelector(".work-main")?.scrollTo(0, detailScroll);
+  if (state.view === "overview") {
+    document.querySelector(".parent-pane")?.scrollTo(0, parentScroll);
+    void loadWorkDetail();
+  }
 }
 async function refresh(force = false) {
   if (state.refreshing) { if (force) state.pending = true; return; }
@@ -688,6 +885,7 @@ async function refresh(force = false) {
     document.getElementById("last-sync").textContent = "Updated " + state.lastSync.toLocaleTimeString();
     document.getElementById("unlock").hidden = true;
     render();
+    if (view === "overview" && (state.historyOpen || state.graphMode === "conversation") && state.replayIndex === null) await loadWorkDetail(true);
   } catch (error) {
     if (error.message !== "locked") {
       document.getElementById("status").textContent = "Offline";
@@ -724,6 +922,13 @@ function start() {
   document.getElementById("worker-close").addEventListener("click", () => document.getElementById("worker-dialog").close());
   if (state.key) refresh(true);
   setInterval(() => refresh(), 10000);
+  setInterval(() => {
+    if (!state.replayPlaying || document.hidden || state.view !== "overview") return;
+    const events = graph.events(state.workDetail || {});
+    if (state.replayIndex >= events.length - 1) state.replayPlaying = false;
+    else state.replayIndex++;
+    render();
+  }, 1200);
 }
 
 if (typeof document !== "undefined") start();
