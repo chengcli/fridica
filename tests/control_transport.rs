@@ -416,6 +416,8 @@ fn frozen_python_control_views_preserve_legacy_fields_and_attention_selection() 
         )
         .unwrap();
     }
+    fridica::slack::names::record_user(&mut fridica::store::Sqlite(&db), "UASKER", "Alice")
+        .unwrap();
     let f = Fixture::new();
     let processes = std::collections::BTreeMap::from([("worker-1".into(), "busy".into())]);
     for case in corpus["cases"].as_array().unwrap() {
@@ -432,6 +434,16 @@ fn frozen_python_control_views_preserve_legacy_fields_and_attention_selection() 
         .unwrap()
         .unwrap();
         legacy(&actual, &case["expected"], path);
+        if let Some(messages) = actual["messages"].as_array() {
+            for message in messages {
+                let expected = if message["sender"] == "UASKER" {
+                    json!("Alice")
+                } else {
+                    Value::Null
+                };
+                assert_eq!(message["sender_name"], expected);
+            }
+        }
     }
     db.execute("UPDATE jobs SET status='done' WHERE id='job-2'", [])
         .unwrap();

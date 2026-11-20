@@ -210,6 +210,7 @@ fn thread(
     let mut messages = rows(u.thread_messages(id, limit)?)?;
     for message in &mut messages {
         message["generated"] = json!(!message["meta"].is_null());
+        message["sender_name"] = json!(names.users.get(message["sender"].as_str().unwrap_or("")));
     }
     let notes = rows(u.thread_notes(id)?.into_iter().collect())?
         .pop()

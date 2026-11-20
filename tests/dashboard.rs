@@ -75,7 +75,13 @@ async fn the_page_is_served_and_api_calls_need_the_runs_key() {
         .unwrap()
         .contains("default-src 'self'"));
     assert!(page.text().await.unwrap().contains("app.js"));
-    for asset in ["/app.js", "/app.css", "/fridica-logo.png", "/index.html"] {
+    for asset in [
+        "/app.js",
+        "/graph.js",
+        "/app.css",
+        "/fridica-logo.png",
+        "/index.html",
+    ] {
         assert_eq!(
             http.get(format!("{base}{asset}"))
                 .send()

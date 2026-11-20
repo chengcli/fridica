@@ -1,6 +1,6 @@
 //! `fridica dashboard`: the embedded control-room page, served on loopback.
 //!
-//! A small HTTP server on `127.0.0.1` serves the page's four files and
+//! A small HTTP server on `127.0.0.1` serves the page and its assets, and
 //! forwards `/api/<route>` to the daemon's owner-only control socket. Each
 //! run makes a fresh random key; the printed URL carries it in its fragment
 //! (`#key=…`, never sent to a server or kept in history logs), and every API
@@ -21,7 +21,7 @@ use std::{convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc, time::
 use tokio::net::TcpListener;
 
 /// The page and its assets, as embedded in this build.
-const FILES: [(&str, &str, &[u8]); 4] = [
+const FILES: [(&str, &str, &[u8]); 5] = [
     (
         "/",
         "text/html; charset=utf-8",
@@ -31,6 +31,11 @@ const FILES: [(&str, &str, &[u8]); 4] = [
         "/app.js",
         "text/javascript; charset=utf-8",
         include_bytes!("../../assets/dashboard/app.js"),
+    ),
+    (
+        "/graph.js",
+        "text/javascript; charset=utf-8",
+        include_bytes!("../../assets/dashboard/graph.js"),
     ),
     (
         "/app.css",

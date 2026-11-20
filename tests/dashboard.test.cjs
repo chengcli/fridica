@@ -5,15 +5,16 @@ const assert = require("node:assert");
 
 class Node {
   constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.className = ""; this.listeners = {}; }
-  append(child) { this.children.push(child); }
+  append(...children) { this.children.push(...children); }
   setAttribute(name, value) { this.attributes[name] = value; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
+  set textContent(value) { this.children = [new Text(value)]; }
   get textContent() { return this.children.map((child) => (child instanceof Node ? child.textContent : child.text)).join(""); }
 }
 class Text { constructor(text) { this.text = text; } }
 global.Node = Node;
 global.document = undefined;
-const documentStub = { createElement: (tag) => new Node(tag), createTextNode: (text) => new Text(text) };
+const documentStub = { createElement: (tag) => new Node(tag), createElementNS: (_ns, tag) => new Node(tag), createTextNode: (text) => new Text(text) };
 
 const app = (() => { global.document = undefined; const exported = require("../assets/dashboard/app.js"); return exported; })();
 global.document = documentStub;
@@ -37,6 +38,7 @@ test("long text renders basic Markdown as safe DOM", () => {
   assert(!nodes(blocked).some((node) => ["a", "img"].includes(node.tag)));
   assert(blocked.textContent.includes("[click](javascript:alert(1)) <img src=x>"));
   assert.strictEqual(app.markdown("# ").textContent, "# ");
+  assert.strictEqual(app.markdown("wave&lt;N&gt; -&gt; &amp;").textContent, "wave<N> -> &");
 });
 
 test("statusPill picks a tone", () => {
@@ -101,7 +103,7 @@ test("work graph shows parent, worker, server and environment; detail explains f
     threads: [{ id: "t1", summary: "Review snapy", status: "working", control: "active", updated: now - 60,
       context: { repo: "snapy" } }],
     workers: [{ id: "w1", session_id: "t1", role: "reviewer", machine: "dungeon3", workspace: "snapy",
-      status: "idle", updated: now - 30 }],
+      status: "lost", updated: now - 30 }],
     machines: [{ name: "dungeon3", transport: "ssh", workspace_details: [{ name: "snapy", mode: "sandbox" }] }],
     jobs: [{ id: "j1", worker_id: "w1", session_id: "t1", brief: "Check CUDA regression",
       status: "failed", error: "worker_401", queued_at: now - 900, started_at: now - 800, finished_at: now - 120 }],
@@ -109,7 +111,7 @@ test("work graph shows parent, worker, server and environment; detail explains f
   const content = app.overview(data).filter(Boolean).map((node) => node.textContent).join(" ");
   for (const expected of ["Review snapy", "Parent", "reviewer", "Check CUDA regression", "dungeon3", "SSH",
     "sandbox", "blocked"]) assert(content.includes(expected), expected);
-  assert(!content.includes("worker_401"), "keep full error in worker detail");
+  assert(content.includes("worker_401"), "show a recorded block reason before opening detail");
   const item = app.workItems(data.threads[0], data, app.latestJobs(data.jobs))[0];
   const detail = app.workerDetail(data.threads[0], item).filter(Boolean).map((node) => node.textContent).join(" ");
   assert(detail.includes("worker_401"));
@@ -141,7 +143,7 @@ test("work graph uses the latest job and keeps completed workers collapsed", () 
     ],
   };
   const content = app.overview(data).filter(Boolean).map((node) => node.textContent).join(" ");
-  assert(content.includes("Completed & idle workers · 1"));
+  assert(content.includes("History"));
   assert(!content.includes("Retry passed"));
   assert(!content.includes("old_error"));
   const item = app.workItems(data.threads[0], data, app.latestJobs(data.jobs))[0];
@@ -183,4 +185,35 @@ test("parent filters follow worker state without marking paused work as running"
   const queued = app.workerDetail(complete, { worker: { status: "queued" }, job: { status: "queued" },
     status: "queued", place: { host: "local", environment: "local" } }).filter(Boolean).map((node) => node.textContent).join(" ");
   assert(!queued.includes("Interrupt"));
+});
+
+test("running filter requires a live job and retired failures remain in history", () => {
+  const thread = { id: "t1", control: "active", status: "working" };
+  assert.equal(app.workFlags(thread, [{ status: "done" }]).running, false);
+  const data = { workers: [{ id: "old", session_id: "t1", status: "stopped" }], machines: [],
+    jobs: [{ id: "j", worker_id: "old", status: "failed", finished_at: 20, queued_at: 10, error: "old transport failure" }] };
+  for (const status of ["idle", "stopped"]) {
+    data.workers[0].status = status;
+    const item = app.workItems(thread, data, app.latestJobs(data.jobs))[0];
+    assert.equal(item.status, "done");
+    assert(app.workerDetail(thread, item).some(node => node?.textContent.includes("old transport failure")));
+  }
+  assert.equal(app.workFlags({ ...thread, status: "blocked" }, [{ status: "running" }]).blocked, false);
+});
+
+test("a live refresh keeps the selected parent when its job completes", () => {
+  const data = { status: {}, approvals: [], outbox: [], machines: [],
+    threads: [
+      { id: "stable", summary: "Active build", status: "working", control: "active" },
+      { id: "other", summary: "Another parent", status: "blocked", control: "active" }],
+    workers: [{ id: "build", session_id: "stable", status: "running" }],
+    jobs: [{ id: "run", worker_id: "build", status: "running", queued_at: 10, started_at: 11 }] };
+  app.overview(data);
+  data.threads[0].status = "complete";
+  data.workers[0].status = "stopped";
+  data.jobs[0].status = "done";
+  const nodes = node => [node, ...node.children.filter(child => child instanceof Node).flatMap(nodes)];
+  const main = app.overview(data).flatMap(nodes).find(node => node.className === "work-main");
+  assert(main.textContent.includes("Active build"));
+  assert(!main.textContent.includes("Another parent"));
 });
