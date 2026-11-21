@@ -54,7 +54,3 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-
-# Keep the store, agent and daemon on the same core types until the next core release.
-[patch.crates-io]
-fridica-core = { git = "https://github.com/chengcli/fridica-core", rev = "36cf69f96868ad6fd829c969ba62ebe6807c1b35" }
