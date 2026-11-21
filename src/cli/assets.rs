@@ -23,10 +23,6 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "prompts/parent-action.md" => "../../assets/prompts/parent-action.md",
         "prompts/parent-triage.md" => "../../assets/prompts/parent-triage.md",
         "prompts/untrusted.md" => "../../assets/prompts/untrusted.md",
-        "dashboard/index.html" => "../../assets/dashboard/index.html",
-        "dashboard/app.js" => "../../assets/dashboard/app.js",
-        "dashboard/app.css" => "../../assets/dashboard/app.css",
-        "dashboard/fridica-logo.png" => "../../assets/dashboard/fridica-logo.png",
         "helpers/settings_paths.py" => "../exec/settings_paths.py",
         "helpers/artifact_read.py" => "../exec/artifact_read.py",
         "helpers/cleanup.py" => "../exec/cleanup.py",
@@ -39,6 +35,11 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "helpers/readiness.py" => "../exec/readiness.py",
         "helpers/diagnostics.py" => "../exec/diagnostics.py",
     ]);
+    // Whatever the dashboard serves, so a new page asset cannot be left out.
+    entries.extend(crate::dashboard::FILES.iter().map(|(path, _, data)| {
+        let name = if *path == "/" { "/index.html" } else { path };
+        (format!("dashboard{name}"), *data)
+    }));
     entries.extend(
         crate::config::provisions::FILES
             .iter()

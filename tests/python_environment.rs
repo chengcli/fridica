@@ -161,7 +161,7 @@ async fn configured_environment_reaches_a_real_ssh_worker() {
     use fridica::{
         config::{loader, LoadContext},
         workers::{
-            jsonl::{Launcher, SystemLauncher},
+            launcher::{Launcher, SystemLauncher},
             protocol::WorkerSpec,
         },
     };

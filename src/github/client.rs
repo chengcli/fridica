@@ -249,14 +249,6 @@ fn environment(
     (env, secrets)
 }
 impl Gh {
-    pub fn new(
-        config: &Config,
-        store: Shared,
-        clock: Arc<dyn Clock>,
-        options: Options,
-    ) -> Result<Self, Failure> {
-        Self::with_environment(config, store, clock, options, std::env::vars_os())
-    }
     /// Explicit owner environment snapshot for deterministic daemon construction.
     pub fn with_environment(
         config: &Config,

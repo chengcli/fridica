@@ -507,7 +507,7 @@ async fn intent_precedes_fetch_and_control_changes_fence_context_delivery() {
 struct BackendLaunch {
     root: PathBuf,
 }
-impl fridica::workers::jsonl::Launcher for BackendLaunch {
+impl fridica::workers::launcher::Launcher for BackendLaunch {
     fn launch(
         &self,
         spec: &WorkerSpec,
@@ -544,8 +544,8 @@ async fn supervisor_fetches_before_both_backends_and_records_the_exact_commit() 
         core::time::SequenceIds,
         workers::{
             artifacts::LocalJobIo,
+            backend::{BackendFactory, Options, StoreWireRecorder},
             instructions::OwnerInstructions,
-            jsonl::{BackendFactory, Options, StoreWireRecorder},
             protocol::DenyApprovals,
             supervisor::{Options as SupervisorOptions, Supervisor},
         },

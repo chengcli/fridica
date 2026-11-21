@@ -66,24 +66,16 @@ pub fn forward(mut launch: Launch, excluded: &[String], mcp_names: &[String]) ->
         .argv
         .last_mut()
         .ok_or_else(|| anyhow::anyhow!("missing SSH command"))?;
-    *script = shell::join(&[
-        "/usr/bin/python3".into(),
-        "-I".into(),
-        "-S".into(),
-        "-c".into(),
+    *script = shell::join(&crate::exec::helper::argv(vec![
         HELPER.into(),
         "receive".into(),
         script.clone(),
-    ]);
-    let mut wrapper = vec![
-        "/usr/bin/python3".into(),
-        "-I".into(),
-        "-S".into(),
-        "-c".into(),
+    ]));
+    let mut wrapper = crate::exec::helper::argv(vec![
         HELPER.into(),
         "send".into(),
         serde_json::to_string(&names)?,
-    ];
+    ]);
     wrapper.extend(launch.argv);
     launch.argv = wrapper;
     Ok(launch)

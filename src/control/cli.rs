@@ -27,9 +27,7 @@ impl Connection {
             Some(path) => path,
             None => {
                 let context = crate::config::LoadContext::current()?;
-                let path = self
-                    .config
-                    .unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
+                let path = self.config.unwrap_or_else(|| context.default_config());
                 crate::config::load(&path, &context)?.state.control_socket
             }
         };
@@ -56,10 +54,7 @@ impl Connection {
                     .read_to_string(&mut token)
                     .context("invalid capability file")?;
                 let token = token.trim_end_matches('\n');
-                if m.len() > 65
-                    || token.len() != 64
-                    || !token.bytes().all(|c| c.is_ascii_hexdigit())
-                {
+                if m.len() > 65 || !super::is_secret(token) {
                     bail!("invalid capability file");
                 }
                 Ok(token.to_string())
@@ -75,9 +70,7 @@ impl Connection {
             );
         }
         let context = crate::config::LoadContext::current()?;
-        let path = self
-            .config
-            .unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
+        let path = self.config.unwrap_or_else(|| context.default_config());
         Ok(crate::config::load(&path, &context)?.state.path)
     }
 }

@@ -61,6 +61,16 @@ fn exported_assets_are_complete_and_never_overwrite() {
             );
         }
     }
+    let dashboard = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/dashboard");
+    for entry in fs::read_dir(dashboard).unwrap() {
+        let file = entry.unwrap().path();
+        assert_eq!(
+            fs::read(path.join("dashboard").join(file.file_name().unwrap())).ok(),
+            fs::read(&file).ok(),
+            "{}",
+            file.display()
+        );
+    }
     for (name, expected) in [
         ("result-format.txt", fridica::workers::result::FORMAT_NOTE),
         ("result-schema.json", fridica::workers::result::SCHEMA_JSON),

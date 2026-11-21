@@ -41,16 +41,17 @@ pub(super) async fn handle<P: Parent>(actor: &Actor<P>, request: ParentRequest) 
         };
         let step = if let Some(ProgressNote { text, worker }) = note {
             let post = Post {
-                idem_key: format!("{id}:progress"),
-                session_id: session.clone(),
-                kind: "notice".into(),
-                channel,
-                thread_ts: Some(root),
                 text,
-                meta: Some(json!({"owner":owner,"session":session,"kind":"progress","worker":worker,"job":job,"v":2})),
-                filename: String::new(),
-                blob: None,
-                after: String::new(),
+                meta: Some(
+                    json!({"owner":owner,"session":session,"kind":"progress","worker":worker,"job":job,"v":2}),
+                ),
+                ..super::posts::post(
+                    format!("{id}:progress"),
+                    &session,
+                    "notice",
+                    &channel,
+                    Some(root),
+                )
             };
             u.queue_post(&post, now)?;
             Step::Committed

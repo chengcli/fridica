@@ -20,8 +20,9 @@ use sha2::{Digest, Sha256};
 use std::{convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
-/// The page and its assets, as embedded in this build.
-const FILES: [(&str, &str, &[u8]); 5] = [
+/// The page and its assets, as embedded in this build: the path each is
+/// served at, its content type and its bytes.
+pub const FILES: [(&str, &str, &[u8]); 5] = [
     (
         "/",
         "text/html; charset=utf-8",
@@ -61,11 +62,7 @@ const SECURITY: [(&str, &str); 5] = [
 
 /// A fresh 256-bit key for one run, as 64 hex characters.
 pub fn key() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
+    crate::control::secret()
 }
 
 struct Server {

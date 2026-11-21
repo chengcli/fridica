@@ -203,60 +203,16 @@ async fn run(cli: Cli) -> Result<()> {
             );
             println!("Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
         }
-        Command::Configure(options) => {
-            if let Err(error) = options.run(&fridica::config::LoadContext::current()?).await {
-                eprintln!("fridica: {error}");
-                std::process::exit(2);
-            }
-        }
+        Command::Configure(options) => options
+            .run(&fridica::config::LoadContext::current()?)
+            .await
+            .map_err(fridica::cli::input_error)?,
         Command::Start {
             config,
             observe_only,
             check_ready,
             timeout,
-        } => {
-            let context = fridica::config::LoadContext::current()?;
-            let path = config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
-            let config =
-                fridica::config::load(&path, &context).map_err(fridica::cli::input_error)?;
-            if check_ready {
-                let report = with_shutdown(|stop| async move {
-                    fridica::doctor::readiness::check(
-                        &config,
-                        &context,
-                        std::env::vars_os().collect(),
-                        std::time::Duration::from_secs(timeout.unwrap_or(30)),
-                        stop,
-                    )
-                    .await
-                })
-                .await?;
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                if !report.startup_checks_passed {
-                    anyhow::bail!("startup readiness checks did not pass");
-                }
-            } else {
-                let credentials =
-                    fridica::daemon::Credentials::read(&config, |name| std::env::var(name).ok())
-                        .map_err(fridica::cli::input_error)?;
-                if !observe_only {
-                    // Active by default: readiness and doctor rerun before Slack I/O.
-                    with_shutdown(|stop| {
-                        fridica::daemon::active(
-                            config,
-                            context,
-                            std::env::vars_os().collect(),
-                            credentials,
-                            stop,
-                        )
-                    })
-                    .await?;
-                } else {
-                    with_shutdown(|stop| fridica::daemon::observe(config, credentials, stop))
-                        .await?;
-                }
-            }
-        }
+        } => fridica::cli::start::run(config, observe_only, check_ready, timeout).await?,
         Command::Control(command @ fridica::control::cli::Commands::Events { .. }) => command
             .events()
             .await
@@ -269,55 +225,7 @@ async fn run(cli: Cli) -> Result<()> {
             config,
             json,
             timeout,
-        } => {
-            let context = fridica::config::LoadContext::current()?;
-            let path = fridica::config::setup::path(config.as_deref(), &context)?;
-            use fridica::doctor::checks::{self, Progress};
-            // Each result is shown as soon as it is known: machines are probed
-            // at the same time, and a slow host should not look like a hang.
-            // JSON stays whole on stdout, so there the lines go to stderr.
-            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            let printer = tokio::spawn(async move {
-                while let Some(event) = receiver.recv().await {
-                    let line = match event {
-                        Progress::Configuration(c) => c.text(),
-                        Progress::Check(c) => c.text(),
-                    };
-                    if json {
-                        eprintln!("{line}");
-                    } else {
-                        println!("{line}");
-                    }
-                }
-            });
-            let report = with_shutdown(|stop| {
-                checks::run_with(
-                    &path,
-                    &context,
-                    std::env::vars_os().collect(),
-                    std::time::Duration::from_secs(timeout),
-                    stop,
-                    Some(sender),
-                )
-            })
-            .await;
-            // Every sender is gone once the report is detached: the printer
-            // then drains what is left and ends.
-            let report = report.map(|mut report| {
-                report.detach();
-                report
-            });
-            printer.await?;
-            let report = report?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("{}", report.summary());
-            }
-            if !report.passed() {
-                anyhow::bail!("doctor checks did not pass");
-            }
-        }
+        } => fridica::cli::doctor::run(config, json, timeout).await?,
         Command::Migrate {
             database,
             config,
@@ -342,40 +250,7 @@ async fn run(cli: Cli) -> Result<()> {
             config,
             socket,
             port,
-        } => {
-            let socket = match socket {
-                Some(socket) => socket,
-                None => {
-                    let context = fridica::config::LoadContext::current()?;
-                    let path =
-                        config.unwrap_or_else(|| context.home.join(".config/fridica/config.toml"));
-                    fridica::config::load(&path, &context)
-                        .map_err(fridica::cli::input_error)?
-                        .state
-                        .control_socket
-                }
-            };
-            let key = fridica::dashboard::key();
-            with_shutdown(|mut stopping| {
-                let key = key.clone();
-                async move {
-                    fridica::dashboard::serve(
-                        socket,
-                        port,
-                        &key,
-                        |address| {
-                            println!("Dashboard: http://{address}/#key={key}");
-                            println!("Open it in a browser on this machine. Ctrl-C stops it.");
-                        },
-                        async move {
-                            let _ = stopping.wait_for(|stop| *stop).await;
-                        },
-                    )
-                    .await
-                }
-            })
-            .await?;
-        }
+        } => fridica::cli::dashboard::run(config, socket, port).await?,
         Command::Assets { list: _, export } => {
             if let Some(path) = export {
                 fridica::cli::assets::export(&path)?;
@@ -387,25 +262,4 @@ async fn run(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Install handlers before starting probes or durable/network service effects.
-/// The operation owns cleanup after stop; never abandon its future on a signal.
-async fn with_shutdown<T, F, Fut>(run: F) -> Result<T>
-where
-    F: FnOnce(tokio::sync::watch::Receiver<bool>) -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let (stop, stopping) = tokio::sync::watch::channel(false);
-    let running = run(stopping);
-    tokio::pin!(running);
-    tokio::select! {
-        result=&mut running => result,
-        _=async { tokio::select! { _=interrupt.recv()=>{}, _=terminate.recv()=>{} } } => {
-            stop.send_replace(true);
-            running.await
-        },
-    }
 }

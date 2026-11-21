@@ -103,20 +103,26 @@ pub struct State {
     #[serde(default = "record_mode", skip_serializing_if = "is_record_default")]
     pub record: String,
 }
+impl State {
+    /// The defaults of the optional `[state]` settings.
+    pub const RECORD: &str = "summary";
+    pub const ARCHIVE_EVENTS_AFTER_HOURS: f64 = 24.;
+    pub const ARCHIVE_AFTER_DAYS: f64 = 7.;
+}
 fn record_mode() -> String {
-    "summary".into()
+    State::RECORD.into()
 }
 fn is_record_default(mode: &String) -> bool {
     *mode == record_mode()
 }
 fn archive_events_after_hours() -> f64 {
-    24.
+    State::ARCHIVE_EVENTS_AFTER_HOURS
 }
 fn is_events_default(hours: &f64) -> bool {
     *hours == archive_events_after_hours()
 }
 fn archive_after_days() -> f64 {
-    7.
+    State::ARCHIVE_AFTER_DAYS
 }
 fn is_archive_default(days: &f64) -> bool {
     *days == archive_after_days()

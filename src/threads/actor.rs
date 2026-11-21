@@ -1,13 +1,12 @@
 //! Durable message, owner-instruction, obligation-due and worker-result turns.
 //! Parent I/O never holds a database transaction. Version checks fence owner
 //! controls arriving during a call; all resulting state effects commit together.
+use super::commit::{commit, event_id, Outcome, Rules};
 use crate::{
-    attention::{self, Answer, Capacity},
+    attention::{self, Capacity},
     config::{Attention, Config},
     core::{
-        parent::{
-            Decision, Disposition, HandoffKind, NoteKind, Parent, ParentRequest, ReplyStatus,
-        },
+        parent::{Decision, Disposition, HandoffKind, Parent, ParentRequest, ReplyStatus},
         policy::{attention_gate, GateInput},
         time::{Clock, Identifiers},
     },
@@ -15,8 +14,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use fridica_core::store::{
-    Arrival, Fence, NewAsk, ObligationChange, ParentTurn, QueuedHandoff, Settlement,
-    Store as Backend, TriageSettlement, TurnClose, TurnFailure, TurnInput, TurnRetry,
+    ParentTurn, Settlement, Store as Backend, TriageSettlement, TurnFailure, TurnInput, TurnRetry,
 };
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc, time::Duration};
@@ -30,6 +28,119 @@ pub enum Step {
     Stale,
     Failed,
     Unsupported,
+}
+
+/// How an inbox item settles without a parent call.
+enum Quiet {
+    /// Settle with this verdict; `until` keeps the item pending until then.
+    Settle {
+        verdict: &'static str,
+        until: Option<f64>,
+    },
+    /// A worker's progress note goes to the thread as a notice.
+    Progress,
+    /// The thread's external driver acts on it.
+    External,
+    /// A kind this daemon does not know: kept, and looked at again later.
+    Unsupported,
+    /// It needs a turn.
+    No,
+}
+/// A turn that will answer: who it answers, and how it is counted.
+struct Respond {
+    /// `owner`, `human` or `peer`: the class reply limits are kept per.
+    class: String,
+    turn: u64,
+    verdict: String,
+    /// The first reply in a thread nobody addressed to the owner.
+    unsolicited: bool,
+}
+/// What the attention gate made of a message.
+enum Gate {
+    Respond(Respond),
+    /// Settled by the gate alone, with this verdict.
+    Settle(String),
+    /// The triage call failed temporarily: retry the turn later.
+    Retry((&'static str, f64)),
+    /// Settled by the triage call, with this verdict.
+    Triage(String),
+}
+/// The turns that answer without the attention gate: every kind but a message.
+fn respond_without_gate(kind: &str, request: &ParentRequest) -> Option<Respond> {
+    let turns = request.session["turns"].as_u64().unwrap_or(0);
+    let (class, turn) = match kind {
+        // A report continues the turn that started the work.
+        "worker_result" | "worker_interrupted" => (
+            request.trigger["origin"]["class"]
+                .as_str()
+                .unwrap_or("human"),
+            turns,
+        ),
+        "owner_instruction" => ("owner", turns.saturating_add(1)),
+        // The class of the turn that handed off or whose post was refused,
+        // so reply limits still hold.
+        "handoff" | "post_refused" => (
+            match request.trigger["payload"]["class"].as_str() {
+                Some("owner") => "owner",
+                Some("human") => "human",
+                _ => "peer",
+            },
+            turns.saturating_add(1),
+        ),
+        "obligation_due" => (
+            if request.trigger["source_peer"] == true {
+                "peer"
+            } else {
+                "human"
+            },
+            turns.saturating_add(1),
+        ),
+        _ => return None,
+    };
+    Some(Respond {
+        class: class.into(),
+        turn,
+        verdict: "respond: owner instruction or attention due".into(),
+        unsolicited: false,
+    })
+}
+
+/// One parent call of a turn, as `parent_turns` keeps it.
+pub(super) struct Call {
+    /// The request as it was sent.
+    pub(super) request: Value,
+    pub(super) response: Option<Value>,
+    /// The parent's own failure code (e.g. `parent_rate_limited`), never its
+    /// output.
+    pub(super) failure: Option<String>,
+    pub(super) created: f64,
+    /// Why the response was not a usable decision.
+    pub(super) validation_error: Option<String>,
+    /// Why the turn settled without a decision from this call.
+    pub(super) settlement_error: Option<&'static str>,
+}
+impl Call {
+    pub(super) fn is_triage(&self) -> bool {
+        self.request["call"] == "triage"
+    }
+    /// The request with the failure code, as the audit keeps it.
+    pub(super) fn context(&self) -> Value {
+        let mut context = self.request.clone();
+        if let Some(code) = &self.failure {
+            context["failure"] = json!(code);
+        }
+        context
+    }
+    pub(super) fn turn(&self, context: &Value, error: &str, blocked: Option<String>) -> ParentTurn {
+        ParentTurn {
+            call: self.request["call"].as_str().map(str::to_owned),
+            response: json!(self.response).to_string(),
+            context: context.to_string(),
+            error: error.into(),
+            created: json!(self.created).as_f64(),
+            blocked,
+        }
+    }
 }
 
 pub struct Actor<P: Parent> {
@@ -48,6 +159,44 @@ pub struct Actor<P: Parent> {
 }
 
 impl<P: Parent> Actor<P> {
+    /// An actor for a validated configuration: the owner, attention limits and
+    /// parent timeout are the configuration's. It acts (not observe-only) and
+    /// places by job counts until a caller sets those fields.
+    pub fn configured(
+        config: Arc<Config>,
+        store: Shared,
+        parent: Arc<P>,
+        clock: Arc<dyn Clock>,
+        ids: Arc<dyn Identifiers>,
+    ) -> Result<Self> {
+        Ok(Self {
+            owner: config.owner.slack_user.clone(),
+            limits: config.attention.clone(),
+            parent_timeout: Duration::try_from_secs_f64(config.parent.timeout)?,
+            config: Some(config),
+            store,
+            parent,
+            clock,
+            ids,
+            observe_only: false,
+            machine_load: None,
+        })
+    }
+    /// The same actor calling another parent.
+    pub fn with_parent<Q: Parent>(self, parent: Arc<Q>) -> Actor<Q> {
+        Actor {
+            config: self.config,
+            store: self.store,
+            parent,
+            clock: self.clock,
+            ids: self.ids,
+            owner: self.owner,
+            limits: self.limits,
+            observe_only: self.observe_only,
+            parent_timeout: self.parent_timeout,
+            machine_load: self.machine_load,
+        }
+    }
     /// Attach current machine readings next to `busy` so placement and the parent
     /// see them; they are recorded with the request, keeping replay exact.
     async fn attach_load(&self, request: &mut ParentRequest) -> Result<()> {
@@ -126,7 +275,6 @@ impl<P: Parent> Actor<P> {
                 request.session["github_reviews"] = json!(true);
             }
         }
-        let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
         // Read after the turn's input: a driver change bumps the thread's
         // version, so a turn that read the old driver commits nothing.
         let lookup = session.clone();
@@ -140,239 +288,48 @@ impl<P: Parent> Actor<P> {
             // parent-driven thread's recorded requests stay as they were.
             request.session["driver"] = json!("external");
         }
-        if self.observe_only || request.session["control"] != "active" {
-            let reason = if self.observe_only {
-                "observe-only mode"
-            } else {
-                "thread is paused or closed"
-            };
-            return settle(
-                &self.store,
-                id,
-                &request,
-                format!("observe: {reason}"),
-                worker_result.then(|| self.clock.now() + 60.),
-            )
-            .await;
-        }
-        if kind == "debrief" {
-            // Drain work queued by an older daemon without a parent call or post.
-            return settle(
-                &self.store,
-                id,
-                &request,
-                "observe: debrief feature removed".into(),
-                None,
-            )
-            .await;
-        }
-        if kind == "worker_progress" {
-            return super::progress::handle(self, request).await;
-        }
-        // An external driver (fridica#130) reads worker results and study
-        // posts on the event feed (`job_result`, `peer_post`) and acts on
-        // them itself: they are settled here, with no parent call and no
-        // reply. Anyone else addressing the owner still gets a parent turn,
-        // which may not delegate.
-        if external
-            && (worker_result
-                || (kind == "message"
-                    && request.trigger["message"]["meta"]["kind"]
-                        .as_str()
-                        .is_some_and(|k| k.starts_with("study_"))))
-        {
-            return settle_external(&self.store, id, &request).await;
-        }
-        if worker_result
-            && (request.trigger["pending"] == true
-                || request.trigger["results"]
-                    .as_array()
-                    .is_none_or(|r| r.is_empty()))
-        {
-            return settle(
-                &self.store,
-                id,
-                &request,
-                "observe: group still working or already reported".into(),
-                None,
-            )
-            .await;
-        }
-        if !matches!(
-            kind,
-            "message"
-                | "owner_instruction"
-                | "obligation_due"
-                | "worker_result"
-                | "worker_interrupted"
-                | "handoff"
-                | "post_refused"
-        ) {
-            let outcome = settle(
-                &self.store,
-                id,
-                &request,
-                String::new(),
-                Some(self.clock.now() + 60.),
-            )
-            .await?;
-            return Ok(if outcome == Step::Observed {
-                Step::Unsupported
-            } else {
-                outcome
-            });
-        }
-        if kind == "obligation_due" {
-            let ref_id = request.trigger["ref"].as_str().unwrap_or("");
-            if !request.obligations.iter().any(|o| {
-                o["id"] == ref_id
-                    && matches!(o["state"].as_str(), Some("open" | "deferred"))
-                    && o["due"].as_f64().is_some_and(|due| due <= self.clock.now())
-            }) {
-                return settle(
-                    &self.store,
-                    id,
-                    &request,
-                    "observe: obligation no longer due".into(),
-                    None,
-                )
-                .await;
+        match self.quiet(kind, external, &request) {
+            Quiet::Settle { verdict, until } => {
+                return settle(&self.store, id, &request, verdict.into(), until).await
             }
-            if request.session["parent_review_required"] == true {
-                return settle(
-                    &self.store,
-                    id,
-                    &request,
-                    "observe: parent failure needs owner review".into(),
-                    Some(self.clock.now() + 60.),
-                )
-                .await;
+            Quiet::Progress => return super::progress::handle(self, request).await,
+            Quiet::External => return settle_external(&self.store, id, &request).await,
+            Quiet::Unsupported => {
+                let until = Some(self.clock.now() + 60.);
+                let outcome = settle(&self.store, id, &request, String::new(), until).await?;
+                return Ok(if outcome == Step::Observed {
+                    Step::Unsupported
+                } else {
+                    outcome
+                });
             }
+            Quiet::No => {}
         }
-        let mut turn = request.session["turns"]
-            .as_u64()
-            .unwrap_or(0)
-            .saturating_add(1);
-        let mut verdict = "respond: owner instruction or attention due".to_owned();
         let mut calls = Vec::new();
-        let mut unsolicited = false;
-        let trigger = if worker_result {
-            turn = request.session["turns"].as_u64().unwrap_or(0);
-            request.trigger["origin"]["class"]
-                .as_str()
-                .unwrap_or("human")
-        } else if kind == "owner_instruction" {
-            "owner"
-        } else if matches!(kind, "handoff" | "post_refused") {
-            // The class of the turn that handed off or whose post was refused,
-            // so reply limits still hold.
-            match request.trigger["payload"]["class"].as_str() {
-                Some("owner") => "owner",
-                Some("human") => "human",
-                _ => "peer",
-            }
-        } else if kind == "obligation_due" {
-            if request.trigger["source_peer"] == true {
-                "peer"
-            } else {
-                "human"
-            }
-        } else {
-            let m = &request.trigger["message"];
-            let gate = GateInput {
-                owner: self.owner.clone(),
-                text: m["text"].as_str().unwrap_or("").into(),
-                sender: m["sender"].as_str().unwrap_or("").into(),
-                generated: !m["meta"].is_null(),
-                meta_kind: m["meta"]["kind"].as_str().unwrap_or("").into(),
-                meta_status: m["meta"]["status"].as_str().unwrap_or("").into(),
-                peer_turn: m["meta"]["turn"].as_u64().unwrap_or(0),
-                control: "active".into(),
-                status: request.session["status"].as_str().unwrap_or("new").into(),
-                turns: request.session["turns"].as_u64().unwrap_or(0),
-                reset_at: request.session["reset_at"].as_f64().unwrap_or(0.),
-                ts: m["ts"].as_str().unwrap_or("0").parse()?,
-                general_messages: self
-                    .config
-                    .as_ref()
-                    .is_some_and(|c| c.slack.general_messages),
-                cooling: request.session["last_unsolicited"]
-                    .as_f64()
-                    .is_some_and(|last| {
-                        self.config
-                            .as_ref()
-                            .is_some_and(|c| self.clock.now() - last < c.slack.cooldown)
-                    }),
-                observe_only: false,
-                resumed: request.trigger["payload"]["resumed"] == true,
-            };
-            // Addressed messages in a blocked thread reach the parent so it can
-            // decide whether the new instruction actually resolves the blocker.
-            let outcome = attention_gate(&gate, gate.text.contains(&format!("<@{}>", self.owner)));
-            turn = outcome.turn;
-            verdict = format!("{}: {}", outcome.kind, outcome.reason);
-            if matches!(outcome.kind.as_str(), "ignore" | "observe") {
-                return settle(&self.store, id, &request, verdict, None).await;
-            }
-            if outcome.kind == "triage" {
-                request.call = "triage".into();
-                let (raw, call) = self.call(&request).await?;
-                calls.push(call);
-                if let Some(temporary) = temporary(&calls) {
+        let respond = match respond_without_gate(kind, &request) {
+            Some(respond) => respond,
+            None => match self.gate(id, &session, &mut request, &mut calls).await? {
+                Gate::Respond(respond) => respond,
+                Gate::Settle(verdict) => {
+                    return settle(&self.store, id, &request, verdict, None).await
+                }
+                Gate::Retry(temporary) => {
                     return self
                         .retry_later(id, session, request, calls, temporary)
+                        .await
+                }
+                Gate::Triage(verdict) => {
+                    let now = self.clock.now();
+                    return settle_triage(&self.store, id, session, request, verdict, calls, now)
                         .await;
                 }
-                let choice = raw
-                    .as_ref()
-                    .and_then(|r| r.as_object())
-                    .filter(|r| r.len() == 1)
-                    .and_then(|r| r.get("decision"))
-                    .and_then(Value::as_str)
-                    .filter(|s| matches!(*s, "respond" | "observe" | "ignore"))
-                    .unwrap_or("observe");
-                if choice != "respond" {
-                    return settle_triage(
-                        &self.store,
-                        id,
-                        session,
-                        request,
-                        format!("{choice}: triage"),
-                        calls,
-                        self.clock.now(),
-                    )
-                    .await;
-                }
-                // Avoid another external call after a pause/resume changed the
-                // decision context while triage was in flight.
-                if !current(&self.store, id, &session, &request).await? {
-                    return settle_triage(
-                        &self.store,
-                        id,
-                        session,
-                        request,
-                        "observe: stale triage".into(),
-                        calls,
-                        self.clock.now(),
-                    )
-                    .await;
-                }
-                verdict = format!("respond: {}", outcome.reason);
-                unsolicited = gate.turns == 0;
-            }
-            if request.trigger["payload"]["owner_trigger"] == true {
-                "owner"
-            } else if gate.generated {
-                "peer"
-            } else {
-                "human"
-            }
+            },
         };
         if let Capacity::Deferred(_) = attention::reserve(
             &self.store,
             session.clone(),
             id,
-            trigger.into(),
+            respond.class,
             self.clock.now(),
             self.ids.next("reply"),
             self.limits.clone(),
@@ -382,6 +339,7 @@ impl<P: Parent> Actor<P> {
             return Ok(Step::Deferred);
         }
         let reply_limit = self.config.as_ref().map_or(7000, |c| c.limits.reply_chars);
+        let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
         let mut result = if worker_result {
             super::results::direct(
                 &request,
@@ -400,55 +358,20 @@ impl<P: Parent> Actor<P> {
                 result = super::results::recover_local(&self.store, scope, &mut request).await?;
             }
         }
-        if result.is_none() {
-            self.attach_load(&mut request).await?;
-        }
-        for round in 0..2 {
-            if result.is_some() {
-                break;
-            }
-            request.call = if round == 0 { "decide" } else { "repair" }.into();
-            let (raw, call) = self.call(&request).await?;
-            let now = self.clock.now();
-            calls.push(call);
-            if let Some(temporary) = temporary(&calls) {
-                return self
-                    .retry_later(id, session, request, calls, temporary)
-                    .await;
-            }
-            let Some(raw) = raw else {
-                calls.last_mut().unwrap()["settlement_error"] = json!("parent_unavailable");
-                result = Some(super::failure::blocked(false));
-                break;
-            };
-            match validate(&raw, &request, now).and_then(|d| {
-                super::delegation::prepare(
-                    &d,
-                    &request,
-                    delegation_scope(self.config.as_deref(), &request),
-                    None,
-                )?;
-                Ok(d)
-            }) {
-                Ok(decision) => {
-                    result = Some(decision);
-                    break;
-                }
-                Err(error) => {
-                    // Kept with the call, so both the decide and the repair
-                    // errors are in parent_turns.
-                    calls.last_mut().unwrap()["validation_error"] = json!(error.to_string());
-                    request.previous = Some(raw);
-                    request.errors = vec![error.to_string()];
-                    if round == 1 {
-                        calls.last_mut().unwrap()["settlement_error"] =
-                            json!("parent_invalid_after_repair");
-                        result = Some(super::failure::blocked(true));
+        let decision = match result {
+            Some(decision) => decision,
+            None => {
+                self.attach_load(&mut request).await?;
+                match self.decide(&mut request, &mut calls).await? {
+                    Ok(decision) => decision,
+                    Err(temporary) => {
+                        return self
+                            .retry_later(id, session, request, calls, temporary)
+                            .await
                     }
                 }
             }
-        }
-        let decision = result.context("parent action remained invalid after repair")?;
+        };
         let work = super::delegation::prepare(
             &decision,
             &request,
@@ -459,23 +382,245 @@ impl<P: Parent> Actor<P> {
             &self.store,
             id,
             session,
-            request,
-            decision,
-            work,
-            calls,
-            verdict,
-            turn,
-            &self.owner,
-            self.clock.now(),
-            self.limits.streak_signal,
-            reply_limit,
-            if unsolicited {
-                self.config.as_ref().map(|c| c.slack.cooldown)
-            } else {
-                None
+            Outcome {
+                request,
+                decision,
+                work,
+                calls,
+                verdict: respond.verdict,
+                turn: respond.turn,
+                cooldown: if respond.unsolicited {
+                    self.config.as_ref().map(|c| c.slack.cooldown)
+                } else {
+                    None
+                },
+            },
+            Rules {
+                owner: self.owner.clone(),
+                now: self.clock.now(),
+                signal: self.limits.streak_signal,
+                reply_limit,
             },
         )
         .await
+    }
+    /// Whether the item settles without a parent call, and how. The checks
+    /// run in this order; the first that applies decides.
+    fn quiet(&self, kind: &str, external: bool, request: &ParentRequest) -> Quiet {
+        let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
+        let now = self.clock.now();
+        if self.observe_only || request.session["control"] != "active" {
+            return Quiet::Settle {
+                verdict: if self.observe_only {
+                    "observe: observe-only mode"
+                } else {
+                    "observe: thread is paused or closed"
+                },
+                until: worker_result.then_some(now + 60.),
+            };
+        }
+        if kind == "debrief" {
+            // Drain work queued by an older daemon without a parent call or post.
+            return Quiet::Settle {
+                verdict: "observe: debrief feature removed",
+                until: None,
+            };
+        }
+        if kind == "worker_progress" {
+            return Quiet::Progress;
+        }
+        // An external driver (fridica#130) reads worker results and study
+        // posts on the event feed (`job_result`, `peer_post`) and acts on
+        // them itself: they are settled here, with no parent call and no
+        // reply. Anyone else addressing the owner still gets a parent turn,
+        // which may not delegate.
+        if external
+            && (worker_result
+                || (kind == "message"
+                    && request.trigger["message"]["meta"]["kind"]
+                        .as_str()
+                        .is_some_and(|k| k.starts_with("study_"))))
+        {
+            return Quiet::External;
+        }
+        if worker_result
+            && (request.trigger["pending"] == true
+                || request.trigger["results"]
+                    .as_array()
+                    .is_none_or(|r| r.is_empty()))
+        {
+            return Quiet::Settle {
+                verdict: "observe: group still working or already reported",
+                until: None,
+            };
+        }
+        if !matches!(
+            kind,
+            "message"
+                | "owner_instruction"
+                | "obligation_due"
+                | "worker_result"
+                | "worker_interrupted"
+                | "handoff"
+                | "post_refused"
+        ) {
+            return Quiet::Unsupported;
+        }
+        if kind == "obligation_due" {
+            let ref_id = request.trigger["ref"].as_str().unwrap_or("");
+            if !request.obligations.iter().any(|o| {
+                o["id"] == ref_id
+                    && matches!(o["state"].as_str(), Some("open" | "deferred"))
+                    && o["due"].as_f64().is_some_and(|due| due <= now)
+            }) {
+                return Quiet::Settle {
+                    verdict: "observe: obligation no longer due",
+                    until: None,
+                };
+            }
+            if request.session["parent_review_required"] == true {
+                return Quiet::Settle {
+                    verdict: "observe: parent failure needs owner review",
+                    until: Some(now + 60.),
+                };
+            }
+        }
+        Quiet::No
+    }
+    /// The attention gate for a message, with the triage call when the gate
+    /// asks for one.
+    async fn gate(
+        &self,
+        id: i64,
+        session: &str,
+        request: &mut ParentRequest,
+        calls: &mut Vec<Call>,
+    ) -> Result<Gate> {
+        let m = &request.trigger["message"];
+        let gate = GateInput {
+            owner: self.owner.clone(),
+            text: m["text"].as_str().unwrap_or("").into(),
+            sender: m["sender"].as_str().unwrap_or("").into(),
+            generated: !m["meta"].is_null(),
+            meta_kind: m["meta"]["kind"].as_str().unwrap_or("").into(),
+            meta_status: m["meta"]["status"].as_str().unwrap_or("").into(),
+            peer_turn: m["meta"]["turn"].as_u64().unwrap_or(0),
+            control: "active".into(),
+            status: request.session["status"].as_str().unwrap_or("new").into(),
+            turns: request.session["turns"].as_u64().unwrap_or(0),
+            reset_at: request.session["reset_at"].as_f64().unwrap_or(0.),
+            ts: m["ts"].as_str().unwrap_or("0").parse()?,
+            general_messages: self
+                .config
+                .as_ref()
+                .is_some_and(|c| c.slack.general_messages),
+            cooling: request.session["last_unsolicited"]
+                .as_f64()
+                .is_some_and(|last| {
+                    self.config
+                        .as_ref()
+                        .is_some_and(|c| self.clock.now() - last < c.slack.cooldown)
+                }),
+            observe_only: false,
+            resumed: request.trigger["payload"]["resumed"] == true,
+        };
+        // Addressed messages in a blocked thread reach the parent so it can
+        // decide whether the new instruction actually resolves the blocker.
+        let outcome = attention_gate(&gate, gate.text.contains(&format!("<@{}>", self.owner)));
+        let mut verdict = format!("{}: {}", outcome.kind, outcome.reason);
+        if matches!(outcome.kind.as_str(), "ignore" | "observe") {
+            return Ok(Gate::Settle(verdict));
+        }
+        let mut unsolicited = false;
+        if outcome.kind == "triage" {
+            request.call = "triage".into();
+            let (raw, call) = self.call(request).await?;
+            calls.push(call);
+            if let Some(temporary) = temporary(calls) {
+                return Ok(Gate::Retry(temporary));
+            }
+            let choice = raw
+                .as_ref()
+                .and_then(|r| r.as_object())
+                .filter(|r| r.len() == 1)
+                .and_then(|r| r.get("decision"))
+                .and_then(Value::as_str)
+                .filter(|s| matches!(*s, "respond" | "observe" | "ignore"))
+                .unwrap_or("observe");
+            if choice != "respond" {
+                return Ok(Gate::Triage(format!("{choice}: triage")));
+            }
+            // Avoid another external call after a pause/resume changed the
+            // decision context while triage was in flight.
+            if !current(&self.store, id, session, request).await? {
+                return Ok(Gate::Triage("observe: stale triage".into()));
+            }
+            verdict = format!("respond: {}", outcome.reason);
+            unsolicited = gate.turns == 0;
+        }
+        Ok(Gate::Respond(Respond {
+            class: if request.trigger["payload"]["owner_trigger"] == true {
+                "owner"
+            } else if gate.generated {
+                "peer"
+            } else {
+                "human"
+            }
+            .into(),
+            turn: outcome.turn,
+            verdict,
+            unsolicited,
+        }))
+    }
+    /// Ask the parent for the turn's decision, and once more with the reason
+    /// if its first answer is not a valid one. A failed or twice-invalid
+    /// parent yields the blocked stand-in; a temporary failure is returned
+    /// for the turn to be retried later.
+    async fn decide(
+        &self,
+        request: &mut ParentRequest,
+        calls: &mut Vec<Call>,
+    ) -> Result<std::result::Result<Decision, (&'static str, f64)>> {
+        for round in 0..2 {
+            request.call = if round == 0 { "decide" } else { "repair" }.into();
+            let (raw, mut call) = self.call(request).await?;
+            let now = self.clock.now();
+            if let Some(temporary) = temporary(std::slice::from_ref(&call)) {
+                calls.push(call);
+                return Ok(Err(temporary));
+            }
+            let Some(raw) = raw else {
+                call.settlement_error = Some("parent_unavailable");
+                calls.push(call);
+                return Ok(Ok(super::failure::blocked(false)));
+            };
+            match validate(&raw, request, now).and_then(|d| {
+                super::delegation::prepare(
+                    &d,
+                    request,
+                    delegation_scope(self.config.as_deref(), request),
+                    None,
+                )?;
+                Ok(d)
+            }) {
+                Ok(decision) => {
+                    calls.push(call);
+                    return Ok(Ok(decision));
+                }
+                Err(error) => {
+                    // Kept with the call, so both the decide and the repair
+                    // errors are in parent_turns.
+                    call.validation_error = Some(error.to_string());
+                    request.previous = Some(raw);
+                    request.errors = vec![error.to_string()];
+                    if round == 1 {
+                        call.settlement_error = Some("parent_invalid_after_repair");
+                    }
+                    calls.push(call);
+                }
+            }
+        }
+        Ok(Ok(super::failure::blocked(true)))
     }
     /// The parent hit its backend's usage limit (#107). That is temporary:
     /// the item stays pending and is retried after `failure::RATE_LIMIT_RETRY`, the
@@ -486,7 +631,7 @@ impl<P: Parent> Actor<P> {
         id: i64,
         session: String,
         request: ParentRequest,
-        calls: Vec<Value>,
+        calls: Vec<Call>,
         (code, delay): (&'static str, f64),
     ) -> Result<Step> {
         let now = self.clock.now();
@@ -495,25 +640,14 @@ impl<P: Parent> Actor<P> {
         // read as a later, successful one (it would clear owner review).
         let calls = calls
             .iter()
-            .filter(|c| c["failure"]["code"] == code || c["request"]["call"] == "triage")
+            .filter(|c| c.failure.as_deref() == Some(code) || c.is_triage())
             .map(|call| {
-                let mut context = call["request"].clone();
-                if let Some(code) = call["failure"]["code"].as_str() {
-                    context["failure"] = json!(code);
-                }
-                let error = if call["failure"]["code"] == code {
+                let error = if call.failure.as_deref() == Some(code) {
                     code
                 } else {
                     ""
                 };
-                ParentTurn {
-                    call: call["request"]["call"].as_str().map(str::to_owned),
-                    response: call["response"].to_string(),
-                    context: context.to_string(),
-                    error: error.into(),
-                    created: call["created"].as_f64(),
-                    blocked: None,
-                }
+                call.turn(&call.context(), error, None)
             })
             .collect();
         let retry = TurnRetry {
@@ -528,7 +662,7 @@ impl<P: Parent> Actor<P> {
         let current = self.store.transact(move |u| u.retry_turn(&retry)).await?;
         Ok(if current { Step::Deferred } else { Step::Stale })
     }
-    pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Value)> {
+    pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Call)> {
         let started = self.clock.now();
         let encoded = serde_json::to_string(request)?;
         let call_id = self
@@ -555,23 +689,29 @@ impl<P: Parent> Actor<P> {
                 Ok(())
             })
             .await?;
-        let call =
-            json!({"request":request,"response":raw,"error":error,"failure":failure,"created":now});
         if failure
             .as_ref()
             .is_some_and(super::failure::prevents_effects)
         {
             bail!("parent evidence recording or context boundary failed");
         }
+        let call = Call {
+            request: serde_json::to_value(request)?,
+            response: raw.clone(),
+            failure: failure.map(|f| f.code),
+            created: now,
+            validation_error: None,
+            settlement_error: None,
+        };
         Ok((raw, call))
     }
 }
 
 /// Characters of the source thread's state a hand-off carries.
-const HANDOFF_CONTEXT: usize = 6000;
+pub(super) const HANDOFF_CONTEXT: usize = 6000;
 /// A turn started by a hand-off of this many hops hands off no further.
 const MAX_HANDOFF_HOPS: u64 = 2;
-fn handoff_hop(request: &ParentRequest) -> u64 {
+pub(super) fn handoff_hop(request: &ParentRequest) -> u64 {
     if request.trigger["kind"] == "handoff" {
         request.trigger["payload"]["hop"].as_u64().unwrap_or(1)
     } else {
@@ -581,8 +721,8 @@ fn handoff_hop(request: &ParentRequest) -> u64 {
 /// A temporary failure of the last call, with its code and how long until the
 /// turn is retried: the backend's usage limit (#107), or a lost refresh of
 /// its login. Neither blocks the thread or asks for owner review.
-pub(super) fn temporary(calls: &[Value]) -> Option<(&'static str, f64)> {
-    match calls.last()?["failure"]["code"].as_str()? {
+fn temporary(calls: &[Call]) -> Option<(&'static str, f64)> {
+    match calls.last()?.failure.as_deref()? {
         super::failure::RATE_LIMITED => Some((
             super::failure::RATE_LIMITED,
             super::failure::RATE_LIMIT_RETRY,
@@ -647,7 +787,7 @@ async fn load(store: &impl Backend, id: i64, session: String) -> Result<ParentRe
 
 /// Whether a valid decision ends the owner-review hold a failed parent call
 /// left on the thread: the hold stands only while the parent blocks again.
-fn hold_clears(request: &ParentRequest, decision: &Decision) -> bool {
+pub(super) fn hold_clears(request: &ParentRequest, decision: &Decision) -> bool {
     request.session["parent_review_required"] == true
         && !decision
             .reply
@@ -802,213 +942,38 @@ pub(super) async fn settle(
     verdict: String,
     until: Option<f64>,
 ) -> Result<Step> {
-    let session = request.session["id"]
-        .as_str()
-        .context("missing session ID")?
-        .to_owned();
-    let version = request.session["version"]
-        .as_i64()
-        .context("missing session version")?;
-    let event = request.trigger["message"]["event_id"]
-        .as_str()
-        .map(str::to_owned);
-    let settlement = Settlement {
-        id,
-        session,
-        version,
-        event,
-        verdict,
-        until,
-    };
+    let settlement = settlement(id, request, verdict, until)?;
     let current = store.transact(move |u| u.settle_turn(&settlement)).await?;
     Ok(if current { Step::Observed } else { Step::Stale })
 }
-
-#[allow(clippy::too_many_arguments)]
-async fn commit(
-    store: &impl Backend,
+/// A settlement under the version the request was read at.
+fn settlement(
     id: i64,
-    session: String,
-    request: ParentRequest,
-    mut decision: Decision,
-    work: super::delegation::Work,
-    calls: Vec<Value>,
+    request: &ParentRequest,
     verdict: String,
-    turn: u64,
-    owner: &str,
-    now: f64,
-    signal: usize,
-    reply_limit: usize,
-    cooldown: Option<f64>,
-) -> Result<Step> {
-    let owner = owner.to_owned();
-    let sql_turn = i64::try_from(turn).context("turn counter exceeds supported range")?;
-    store.transact(move|u| {
-        let Fence{version,active}=u.fence_turn(&session,id)?;
-        let is_result=matches!(request.trigger["kind"].as_str(),Some("worker_result"|"worker_interrupted"));
-        let result_stale=if is_result {super::results::load(u,&session,request.trigger["ref"].as_str().unwrap_or(""))?["results"]!=request.trigger["results"]} else {false};
-        let notes_changed=super::effects::notes(u,&session)?.0 != request.session["notes"]["revision"].as_i64().unwrap_or(0);
-        let controls_current=u.worker_controls_current(&request,&decision.worker_control)?;
-        // A message that arrived while the parent was deciding (not one of our
-        // own echoes) makes the turn stale once, so it reruns and sees it.
-        let seen=request.history.iter().chain(std::iter::once(&request.trigger["message"]))
-            .filter_map(|m| m["ts"].as_str()?.parse::<f64>().ok()).fold(f64::NEG_INFINITY,f64::max);
-        let Arrival{arrived,reread}=u.arrival(&session,id,seen.is_finite().then_some(seen),&owner)?;
-        if Some(version)!=request.session["version"].as_i64() || !active || result_stale || notes_changed || !controls_current || (arrived && !reread) {
-            u.return_turn(id)?;
-            return Ok(Step::Stale);
-        }
-        if let Some(cooldown)=cooldown.filter(|_|decision.reply.is_some()) {
-            let last=u.last_unsolicited(request.session["workspace"].as_str(),request.session["channel"].as_str())?;
-            if let Some(last)=last.filter(|last|now-last<cooldown) {
-                u.defer_turn(id,last+cooldown)?;
-                return Ok(Step::Deferred);
-            }
-        }
-        let mut waiting=request.session["wait_streak"].as_i64().unwrap_or(0);
-        let mut quiet=request.session["no_progress"].as_i64().unwrap_or(0)+1;
-        let mut status=request.session["status"].as_str().unwrap_or("new").to_string();
-        if decision.reopen_blocked && status=="blocked" {status="complete".into();}
-        let mut hash=request.session["last_reply_hash"].as_str().unwrap_or("").to_owned();
-        let repeat=super::replies::repeat_evidence(u,&request,&owner)?;
-        // Only the stand-in for a failed parent turn reaches here unsent: it
-        // settles the thread's status without posting anything.
-        if let Some(reply)=decision.reply.as_ref().filter(|r|!r.send) {status=reply.status.as_str().into();}
-        let files = super::results::Files::load(u, &request, &session)?;
-        let mut posted = None;
-        if let Some(reply) = decision.reply.as_mut().filter(|r| r.send) {
-            files.describe(reply);
-            super::replies::render(u,&request,&owner,reply,reply_limit)?;
-        }
-        if let Some(reply)=decision.reply.as_ref().filter(|r|r.send) {
-            let candidate=crate::core::policy::reply_hash(&reply.text);
-            let explicit=repeat["allowed"]==true;
-            let duplicate=candidate==hash && reply.status.as_str()==status && !explicit && reply.answers.is_empty() && reply.details.is_empty() && work.jobs.is_empty() && !is_result && decision.note.kind!=NoteKind::Correction;
-            if !duplicate {
-                let answer=Answer{key:format!("{id}:reply"),session:session.clone(),channel:request.session["channel"].as_str().context("missing channel")?.into(),
-                    thread_ts:request.session["root_ts"].as_str().context("missing root timestamp")?.into(),text:reply.text.clone(),obligations:reply.answers.clone(),inbox:id};
-                let post=attention::queue_answer_tx(u,&answer,now)?;
-                // A post a hand-off asked for settles the source thread's asks
-                // it names once delivered (#108).
-                // A blocked notice settles nothing, here or there.
-                if request.trigger["kind"]=="handoff" && !matches!(reply.status,ReplyStatus::Blocked) {
-                    let from=request.trigger["payload"]["from_session"].as_str().unwrap_or("");
-                    let answers:Vec<String>=request.trigger["payload"]["answers"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
-                    u.answer_for_handoff(from,&answers,post,now)?;
-                }
-                // A report names the worker(s) it reports on, failed ones first.
-                let worker=if is_result {
-                    let results=request.trigger["results"].as_array().cloned().unwrap_or_default();
-                    let failed=|r:&Value| r["job_status"]!="done" || r["result"]["status"]=="failed";
-                    let mut ids:Vec<&str>=results.iter().filter(|r|failed(r)).chain(results.iter().filter(|r|!failed(r))).filter_map(|r|r["worker_id"].as_str()).collect();
-                    ids.dedup();
-                    ids.join(",").chars().take(64).collect::<String>()
-                } else {String::new()};
-                // The PRs its jobs were dispatched to review, or a person's ask (no agent meta) names: only these are signed.
-                let review:Vec<String>=request.trigger["results"].as_array().into_iter().flatten().filter_map(|r|r["brief"].as_str()).chain(request.trigger["message"]["text"].as_str().filter(|_|request.trigger["message"]["meta"].is_null())).flat_map(super::dispatcher::subjects).collect();
-                let mut meta=json!({"owner":owner,"session":session,"turn":turn,"status":reply.status.as_str(),"kind":if is_result {"report"} else {"reply"},"worker":worker,"v":2});
-                if request.session["github_reviews"] == true { meta["github_reviews"] = json!(true); }
-                else if !review.is_empty() {meta["review"]=json!(review);}
-                u.label_post(post,&meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).or_else(||request.trigger["refused"]["trigger_event"].as_str()).unwrap_or(""),is_result)?;
-                posted = Some(reply);
-                if cooldown.is_some() {
-                    u.mark_unsolicited(request.session["workspace"].as_str(),request.session["channel"].as_str(),now)?;
-                }
-                quiet=if candidate==hash || decision.note.kind==NoteKind::Ack {quiet}else{0};hash=candidate;
-                waiting=if matches!(reply.status,ReplyStatus::Waiting) {waiting+1}else{0};
-                status=reply.status.as_str().into();
-            }
-        }
-        // A parent-error stand-in is an explicit hold on publication. A
-        // successful turn with no text still delivers its approved files.
-        if decision.reply.as_ref().is_none_or(|r| r.send) {
-            files.queue(u,&request,posted,&session,id,now)?;
-        }
-        u.add_workers(&work.workers,now)?;
-        u.queue_jobs(&work.jobs,now)?;
-        u.queue_worker_controls(&request,&decision.worker_control,now)?;
-        if is_result {
-            let jobs:Vec<Option<String>>=request.trigger["results"].as_array().context("missing results")?.iter().map(|r|r["id"].as_str().map(str::to_owned)).collect();
-            u.mark_reported(&session,&jobs)?;
-        }
-        let working=u.jobs_running(&session)?;
-        if working && status!="blocked" {status="working".into();}
-        if !work.jobs.is_empty() {if decision.note.kind!=NoteKind::Ack {quiet=0;}waiting=0;}
-        if !work.context.is_null() {
-            u.patch_context(&session,&work.context.to_string())?;
-        }
-        super::effects::commit(u,&decision,&session,id,now,hold_clears(&request,&decision))?;
-        // Hand-offs (#108): the target thread's own turn acts on each, with
-        // this thread's state as of this turn attached as a fork bundle.
-        if !decision.handoffs.is_empty() {
-            let class=u.handoff_class(id)?;
-            let (workspace,channel)=(request.session["workspace"].as_str().unwrap_or(""),request.session["channel"].as_str().unwrap_or(""));
-            let handoffs:Vec<QueuedHandoff>=decision.handoffs.iter().enumerate().map(|(index,handoff)| {
-                let target=format!("{workspace}:{channel}:{}",handoff.thread);
-                // This thread's state for the target, without the target's own.
-                let mut source=request.clone();
-                if let Some(linked)=source.session["linked_threads"].as_array_mut() {linked.retain(|t|t["thread"]!=handoff.thread.as_str());}
-                let bundle=crate::core::fork::render(&crate::core::fork::snapshot(&source,&decision,HANDOFF_CONTEXT));
-                let payload=json!({"from":request.session["root_ts"],"from_session":session,"kind":handoff.kind,"note":handoff.note.trim(),
-                    "answers":handoff.answers,"class":class,"hop":handoff_hop(&request)+1,"context":bundle});
-                let details=|queued:bool| json!({"from":session,"inbox_id":id,"kind":handoff.kind,"queued":queued}).to_string();
-                QueuedHandoff{target,from:session.clone(),payload:payload.to_string(),dedup_key:format!("handoff:{id}:{index}"),queued:details(true),skipped:details(false)}
-            }).collect();
-            u.queue_handoffs(&handoffs,now)?;
-        }
-        let changes=decision.dispositions.iter().map(|disposition| {
-            let (state,due)=match disposition {Disposition::Declined{..}=>("declined",None),Disposition::Deferred{until,..}=>("deferred",Some(*until))};
-            Ok(ObligationChange{id:disposition.id().into(),state:state.into(),details:serde_json::to_string(disposition)?,due})
-        }).collect::<Result<Vec<_>>>()?;
-        if !u.change_obligations(&session,&changes,now)? {bail!("obligation changed before actor commit");}
-        let asks:Vec<NewAsk>=decision.asks.iter().enumerate().map(|(index,ask)| NewAsk{id:format!("ask:{id}:{index}"),
-            source:json!({"inbox_id":id,"event_id":request.trigger["message"]["event_id"]}).to_string(),summary:ask.summary.clone(),due:ask.due}).collect();
-        u.open_asks(&session,&asks,now)?;
-        if waiting==signal as i64 || quiet==signal as i64 {
-            let key=format!("streak:{session}:{id}");
-            u.open_streak_signal(&key,&session,&json!({"inbox_id":id}).to_string(),now)?;
-        }
-        let action=serde_json::to_string(&decision)?;
-        let calls:Vec<ParentTurn>=calls.into_iter().map(|call| {
-            let error=call["settlement_error"].as_str().unwrap_or("");
-            let mut context=call["request"].clone();
-            if let Some(validation)=call.get("validation_error") {context["validation_error"]=validation.clone();}
-            // The parent's own failure code (e.g. parent_timeout), never its output.
-            if let Some(code)=call["failure"]["code"].as_str() {context["failure"]=json!(code);}
-            // A failed turn posts nothing and blocks the thread, which puts it in
-            // the owner's attention view; the audit keeps the cause.
-            let blocked=(!error.is_empty()).then(|| json!({"inbox_id":id,"reason":error,"failure":call["failure"]["code"],"validation_error":call["validation_error"]}).to_string());
-            ParentTurn{call:call["request"]["call"].as_str().map(str::to_owned),response:call["response"].to_string(),context:context.to_string(),
-                error:error.into(),created:call["created"].as_f64(),blocked}
-        }).collect();
-        u.record_parent_calls(&session,id,&action,&calls,now)?;
-        u.close_turn(&TurnClose{session:session.clone(),status,reply_key:format!("{id}:reply"),turn:sql_turn,waiting,quiet,hash,summary:decision.summary.clone(),now})?;
-        u.finish_turn(id,request.trigger["message"]["event_id"].as_str(),&verdict)?;
-        u.record("actor_commit",now,&json!({"inbox_id":id,"request":request,"decision":decision,"workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat}).to_string(),true)?;
-        Ok(Step::Committed)
-    }).await
+    until: Option<f64>,
+) -> Result<Settlement> {
+    Ok(Settlement {
+        id,
+        session: request.session["id"]
+            .as_str()
+            .context("missing session ID")?
+            .to_owned(),
+        version: request.session["version"]
+            .as_i64()
+            .context("missing session version")?,
+        event: event_id(request).map(str::to_owned),
+        verdict,
+        until,
+    })
 }
 
 /// Settle an externally driven thread's worker result or study post: the
 /// item finishes under the same version fence as any settlement, and the
 /// finished jobs it carries count as reported, all in one unit of work.
 async fn settle_external(store: &impl Backend, id: i64, request: &ParentRequest) -> Result<Step> {
-    let session = request.session["id"]
-        .as_str()
-        .context("missing session ID")?
-        .to_owned();
-    let settlement = Settlement {
-        id,
-        session: session.clone(),
-        version: request.session["version"]
-            .as_i64()
-            .context("missing session version")?,
-        event: request.trigger["message"]["event_id"]
-            .as_str()
-            .map(str::to_owned),
-        verdict: "observe: external driver".into(),
-        until: None,
-    };
+    let settlement = settlement(id, request, "observe: external driver".into(), None)?;
+    let session = settlement.session.clone();
     let jobs: Vec<Option<String>> = request.trigger["results"]
         .as_array()
         .into_iter()
@@ -1051,7 +1016,7 @@ async fn settle_triage(
     session: String,
     request: ParentRequest,
     verdict: String,
-    calls: Vec<Value>,
+    calls: Vec<Call>,
     now: f64,
 ) -> Result<Step> {
     let triage = TriageSettlement {
@@ -1062,16 +1027,10 @@ async fn settle_triage(
             .into_iter()
             .map(|call| ParentTurn {
                 call: Some("triage".into()),
-                response: call["response"].to_string(),
-                context: call["request"].to_string(),
-                error: String::new(),
-                created: call["created"].as_f64(),
-                blocked: None,
+                ..call.turn(&call.request, "", None)
             })
             .collect(),
-        event: request.trigger["message"]["event_id"]
-            .as_str()
-            .map(str::to_owned),
+        event: event_id(&request).map(str::to_owned),
         verdict,
         now,
     };

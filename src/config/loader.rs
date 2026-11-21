@@ -13,7 +13,7 @@ use std::{
     collections::HashSet,
     path::{Component, Path, PathBuf},
 };
-use toml_edit::{DocumentMut, Item, TableLike};
+use toml_edit::{DocumentMut, Item, Table, TableLike};
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 use users::os::unix::UserExt;
@@ -28,6 +28,10 @@ pub struct LoadContext {
     pub protected: Vec<PathBuf>,
 }
 impl LoadContext {
+    /// Where the configuration is read from when no `--config` names one.
+    pub fn default_config(&self) -> PathBuf {
+        self.home.join(".config/fridica/config.toml")
+    }
     pub fn current() -> Result<Self> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -89,6 +93,60 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             bail!("missing [{key}] section");
         }
     }
+    let owner = owner(root, base, context)?;
+    let slack = slack(root)?;
+    let mut parent = parent(root)?;
+    let limits: Limits = decode(root.get("limits"))?;
+    let placement = placement(root)?;
+    limit_bounds(&limits)?;
+    let policy: Policy = decode(root.get("policy"))?;
+    policy.validate()?;
+    let attention: Attention = decode(root.get("attention"))?;
+    attention.validate()?;
+    let egress = egress(root, base, context)?;
+    let github = github(root)?;
+    let state = state(root, base, context)?;
+    let (machines, python_envs) = machines(root, &policy, &parent.backend, base, context)?;
+    if parent.default_machine.is_empty() {
+        parent.default_machine = machines.first().map(|m| m.name.clone()).unwrap_or_default();
+    }
+    let registry = Registry {
+        machines,
+        default: parent.default_machine.clone(),
+    };
+    registry.validate()?;
+    removed_isolation_settings(root)?;
+    let isolation: super::isolation::Settings = decode(root.get("isolation"))?;
+    progress_bounds(&limits)?;
+    let config = Config {
+        owner,
+        slack,
+        parent,
+        limits,
+        policy,
+        machines: registry,
+        python_envs,
+        state,
+        github,
+        alphaxiv: decode(root.get("alphaxiv"))?,
+        attention,
+        isolation,
+        placement,
+        egress,
+        path,
+        fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
+    };
+    super::github_mcp::validate(&config)?;
+    anyhow::ensure!(
+        !config.alphaxiv.enabled || !config.secret_env().contains(&"ALPHAXIV_TOKEN"),
+        "ALPHAXIV_TOKEN cannot also be a master credential"
+    );
+    protect(&config, context)?;
+    Ok(config)
+}
+
+/// `[owner]`: who the daemon works for, and the contract file if there is one.
+fn owner(root: &Table, base: &Path, context: &LoadContext) -> Result<Owner> {
     let mut owner: Owner = decode(root.get("owner"))?;
     if !slack_id(&owner.slack_user, "UW") {
         bail!("owner.slack_user must be a Slack member ID");
@@ -105,6 +163,10 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         )?),
         None => None,
     };
+    Ok(owner)
+}
+/// `[slack]`: the workspace, its channels and the token variable names.
+fn slack(root: &Table) -> Result<Slack> {
     let slack: Slack = decode(root.get("slack"))?;
     if !slack_id(&slack.workspace, "T") {
         bail!("slack.workspace must be a Slack team ID");
@@ -121,7 +183,11 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         bail!("Slack token settings must name environment variables");
     }
     number(slack.cooldown, 0., "slack.cooldown")?;
-    let mut parent: Parent = decode(root.get("parent"))?;
+    Ok(slack)
+}
+/// `[parent]`, except its default machine, which needs the machines.
+fn parent(root: &Table) -> Result<Parent> {
+    let parent: Parent = decode(root.get("parent"))?;
     if !BACKENDS.contains(&parent.backend.as_str()) {
         bail!("parent.backend must be claude or codex");
     }
@@ -135,7 +201,10 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     if parent.context_chars < 2000 {
         bail!("parent.context_chars must be at least 2000");
     }
-    let limits: Limits = decode(root.get("limits"))?;
+    Ok(parent)
+}
+/// `[placement]`: load probing and its thresholds.
+fn placement(root: &Table) -> Result<Placement> {
     let placement: Placement = decode(root.get("placement"))?;
     number(placement.probe_ttl, 0., "placement.probe_ttl")?;
     number(placement.probe_timeout, 1., "placement.probe_timeout")?;
@@ -154,6 +223,10 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             bail!("{name} must be a positive number");
         }
     }
+    Ok(placement)
+}
+/// `[limits]`: counts, timeouts and the reply length.
+fn limit_bounds(limits: &Limits) -> Result<()> {
     if [
         limits.max_delegations_per_turn,
         limits.max_workers_per_thread,
@@ -174,21 +247,41 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     if !(500..=12000).contains(&limits.reply_chars) {
         bail!("limits.reply_chars must be between 500 and 12000");
     }
-    let policy: Policy = decode(root.get("policy"))?;
-    policy.validate()?;
-    let attention: Attention = decode(root.get("attention"))?;
-    attention.validate()?;
+    Ok(())
+}
+/// `[limits]`: progress notes. Checked after the machines, as it always was,
+/// so a configuration with several mistakes reports them in the same order.
+fn progress_bounds(limits: &Limits) -> Result<()> {
+    if !limits.progress_interval.is_finite() || limits.progress_interval < 0. {
+        bail!("limits.progress_interval must be 0 (off) or a positive number of seconds");
+    }
+    if !(200..=6000).contains(&limits.progress_chars) {
+        bail!("limits.progress_chars must be between 200 and 6000");
+    }
+    Ok(())
+}
+/// `[egress]`, with its deny list read once to prove it parses.
+fn egress(root: &Table, base: &Path, context: &LoadContext) -> Result<Egress> {
     let mut egress: Egress = decode(root.get("egress"))?;
     if let Some(path) = egress.deny_list.take() {
         let path = file(&path, base, context)?;
         super::egress::deny_list(&path).context("invalid egress.deny_list")?;
         egress.deny_list = Some(path);
     }
+    Ok(egress)
+}
+/// `[github]`: the token variable name and the cache lifetime.
+fn github(root: &Table) -> Result<GitHub> {
     let github: GitHub = decode(root.get("github"))?;
     if !env_name(&github.token_env) {
         bail!("github.token_env must name an environment variable");
     }
     number(github.cache_seconds, 0., "github.cache_seconds")?;
+    Ok(github)
+}
+/// `[state]`: the database, the control socket derived from it when none is
+/// named, and what is archived or recorded.
+fn state(root: &Table, base: &Path, context: &LoadContext) -> Result<State> {
     let state_data = table(root.get("state"))?;
     if let Some(t) = state_data {
         keys(
@@ -204,7 +297,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         )?;
     }
     let archive_after_days = match state_data.and_then(|t| t.get("archive_after_days")) {
-        None => 7.,
+        None => State::ARCHIVE_AFTER_DAYS,
         Some(item) => item
             .as_float()
             .or_else(|| item.as_integer().map(|i| i as f64))
@@ -214,7 +307,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     let archive_events_after_hours = match state_data
         .and_then(|t| t.get("archive_events_after_hours"))
     {
-        None => 24.,
+        None => State::ARCHIVE_EVENTS_AFTER_HOURS,
         Some(item) => item
             .as_float()
             .or_else(|| item.as_integer().map(|i| i as f64))
@@ -224,7 +317,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             )?,
     };
     let record =
-        string(state_data.and_then(|t| t.get("record")))?.unwrap_or_else(|| "summary".into());
+        string(state_data.and_then(|t| t.get("record")))?.unwrap_or_else(|| State::RECORD.into());
     if !matches!(record.as_str(), "summary" | "full") {
         bail!("state.record must be \"summary\" or \"full\"");
     }
@@ -262,6 +355,22 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             fallback
         }
     };
+    Ok(State {
+        path: state_path,
+        control_socket,
+        archive_after_days,
+        archive_events_after_hours,
+        record,
+    })
+}
+/// `[machines.*]`, in file order, and each machine's Python environment.
+fn machines(
+    root: &Table,
+    policy: &Policy,
+    backend: &str,
+    base: &Path,
+    context: &LoadContext,
+) -> Result<(Vec<Machine>, std::collections::BTreeMap<String, String>)> {
     let machine_table = table(root.get("machines"))?.context("machines must be a table")?;
     let mut machines = Vec::new();
     let mut python_envs = std::collections::BTreeMap::new();
@@ -273,23 +382,12 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             let env = remote_path(&env)?;
             python_envs.insert(name.to_owned(), env.to_string_lossy().into_owned());
         }
-        machines.push(machine(
-            name,
-            item,
-            &policy,
-            &parent.backend,
-            base,
-            context,
-        )?);
+        machines.push(machine(name, item, policy, backend, base, context)?);
     }
-    if parent.default_machine.is_empty() {
-        parent.default_machine = machines.first().map(|m| m.name.clone()).unwrap_or_default();
-    }
-    let registry = Registry {
-        machines,
-        default: parent.default_machine.clone(),
-    };
-    registry.validate()?;
+    Ok((machines, python_envs))
+}
+/// Settings of `[isolation]` that no longer exist get a message saying so.
+fn removed_isolation_settings(root: &Table) -> Result<()> {
     // Workers see the target's normal files so git push/commit and gh work; only
     // Fridica's own daemon files are hidden, automatically. Ambient MCP servers
     // are disabled; explicit host servers need no ambient inventory.
@@ -303,44 +401,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             }
         }
     }
-    let isolation: super::isolation::Settings = decode(root.get("isolation"))?;
-    if !limits.progress_interval.is_finite() || limits.progress_interval < 0. {
-        bail!("limits.progress_interval must be 0 (off) or a positive number of seconds");
-    }
-    if !(200..=6000).contains(&limits.progress_chars) {
-        bail!("limits.progress_chars must be between 200 and 6000");
-    }
-    let config = Config {
-        owner,
-        slack,
-        parent,
-        limits,
-        policy,
-        machines: registry,
-        python_envs,
-        state: State {
-            path: state_path,
-            control_socket,
-            archive_after_days,
-            archive_events_after_hours,
-            record,
-        },
-        github,
-        alphaxiv: decode(root.get("alphaxiv"))?,
-        attention,
-        isolation,
-        placement,
-        egress,
-        path,
-        fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
-    };
-    super::github_mcp::validate(&config)?;
-    anyhow::ensure!(
-        !config.alphaxiv.enabled || !config.secret_env().contains(&"ALPHAXIV_TOKEN"),
-        "ALPHAXIV_TOKEN cannot also be a master credential"
-    );
-    protect(&config, context)?;
-    Ok(config)
+    Ok(())
 }
 
 fn machine(

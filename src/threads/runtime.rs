@@ -1,6 +1,6 @@
 //! Runtime composition with injected external adapters. Socket/control servers
 //! can drive bounded passes; the database, not notifications, owns queued work.
-use super::{actor, controls, dispatcher::Dispatcher, manager::Manager};
+use super::{actor, controls, dispatcher::Dispatcher, manager::Manager, refusal::Refused};
 use crate::machines::probe::Monitor;
 use crate::{
     approvals::Broker,
@@ -100,7 +100,8 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         adapters.workers.validate_config(&config)?;
         let shared: Shared = Arc::new(store.clone());
         super::configuration::recover_startup(&store, &config, clock.now()).await?;
-        let timeout = Duration::try_from_secs_f64(config.parent.timeout)?;
+        // Refused before any recovery writes.
+        Duration::try_from_secs_f64(config.parent.timeout)?;
         let now = clock.now();
         store.transact(move |u| u.recover_jobs(now)).await?;
         let now = clock.now();
@@ -131,16 +132,15 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             },
         )?;
         let actor = Arc::new(actor::Actor {
-            store: shared.clone(),
-            config: Some(config.clone()),
-            parent: adapters.parent,
-            clock: clock.clone(),
-            ids: ids.clone(),
-            owner: config.owner.slack_user.clone(),
-            limits: config.attention.clone(),
             observe_only,
-            parent_timeout: timeout,
             machine_load: adapters.machine_load.clone(),
+            ..actor::Actor::configured(
+                config.clone(),
+                shared.clone(),
+                adapters.parent,
+                clock.clone(),
+                ids.clone(),
+            )?
         });
         let manager = Manager::new(actor, config.limits.parent_concurrency)?;
         let dispatcher = Dispatcher {
@@ -203,16 +203,15 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("configuration editing is unavailable"))?;
         let actor = Arc::new(actor::Actor {
-            store: self.shared.clone(),
-            config: Some(config.clone()),
-            parent: factory(config.clone())?,
-            clock: self.clock.clone(),
-            ids: self.ids.clone(),
-            owner: config.owner.slack_user.clone(),
-            limits: config.attention.clone(),
             observe_only: self.observe_only(),
-            parent_timeout: Duration::try_from_secs_f64(config.parent.timeout)?,
             machine_load: self.machine_load.clone(),
+            ..actor::Actor::configured(
+                config.clone(),
+                self.shared.clone(),
+                factory(config.clone())?,
+                self.clock.clone(),
+                self.ids.clone(),
+            )?
         });
         Ok(Arc::new(Manager::new(
             actor,
@@ -265,7 +264,9 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         authority: Authority,
     ) -> Result<Arc<Config>> {
         if authority != Authority::Owner {
-            bail!("configuration editing requires owner authentication");
+            bail!(Refused::Forbidden(
+                "configuration editing requires owner authentication"
+            ));
         }
         let _pass = self.pass.lock().await;
         self.reconcile_configuration().await?;
@@ -292,7 +293,9 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
     }
     pub async fn worker_control(&self, id: &str, stop: bool, authority: Authority) -> Result<bool> {
         if authority != Authority::Owner {
-            bail!("worker controls require owner authentication");
+            bail!(Refused::Forbidden(
+                "worker controls require owner authentication"
+            ));
         }
         if stop {
             self.supervisor.stop(id).await?;
@@ -310,7 +313,9 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         authority: Authority,
     ) -> Result<std::result::Result<serde_json::Value, super::external::Refusal>> {
         if authority != Authority::Owner {
-            bail!("delegation requires owner authentication");
+            bail!(Refused::Forbidden(
+                "delegation requires owner authentication"
+            ));
         }
         if self.observe_only() {
             return Ok(Err((409, "observe_only")));
@@ -333,7 +338,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         authority: Authority,
     ) -> Result<std::result::Result<serde_json::Value, super::external::Refusal>> {
         if authority != Authority::Owner {
-            bail!("posting requires owner authentication");
+            bail!(Refused::Forbidden("posting requires owner authentication"));
         }
         if self.observe_only() {
             return Ok(Err((409, "observe_only")));
@@ -359,7 +364,9 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         authority: Authority,
     ) -> Result<i64> {
         if self.observe_only() {
-            bail!("instructions are unavailable in observe-only mode");
+            bail!(Refused::Conflict(
+                "instructions are unavailable in observe-only mode"
+            ));
         }
         let lookup = session.clone();
         let (workspace, channel) = self
@@ -369,7 +376,7 @@ impl<P: Parent + 'static, D: Delivery> Runtime<P, D> {
         if workspace != self.config().slack.workspace
             || !self.config().slack.channels.contains(&channel)
         {
-            bail!("instruction outside configured scope");
+            bail!(Refused::Conflict("instruction outside configured scope"));
         }
         controls::instruct(
             &self.store,

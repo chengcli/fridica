@@ -45,10 +45,7 @@ pub async fn isolation_backend(
         check: Check::LaunchConfigurationRefused,
     };
     let isolation = Isolation::new(config, &[])?;
-    let excluded_env = vec![
-        config.slack.app_token_env.clone(),
-        config.slack.user_token_env.clone(),
-    ];
+    let excluded_env: Vec<String> = config.secret_env().map(str::to_owned).into();
     // Retain the private temporary directory until SSH and its cleanup exit.
     let mut control = None;
     let launch = match machine.transport.as_str() {

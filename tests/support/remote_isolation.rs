@@ -3,7 +3,7 @@ use fridica::{
     config::registry::Machine,
     exec::{shell, ssh},
     workers::{
-        jsonl::{Launcher, SystemLauncher},
+        launcher::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     },
 };

@@ -3,8 +3,10 @@
 pub mod artifacts;
 pub mod credentials;
 pub mod fetch;
+pub mod helper;
 pub mod isolation;
 pub mod local;
+pub mod probe;
 pub mod process;
 pub mod python;
 pub mod sandbox;

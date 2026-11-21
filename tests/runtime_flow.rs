@@ -1083,16 +1083,15 @@ async fn restart_recovers_unconsumed_results_and_uncertain_sends_without_duplica
         if uncertain {
             // Commit the report but interrupt its send before acknowledgement.
             let actor = fridica::threads::actor::Actor {
-                store: Arc::new(h.store.clone()),
-                config: Some(h.config.clone()),
-                parent: h.parent.clone(),
-                clock: h.clock.clone(),
-                ids: Arc::new(SequenceIds::default()),
-                owner: "UOWNER".into(),
-                limits: h.config.attention.clone(),
-                observe_only: false,
                 parent_timeout: Duration::from_secs(1),
-                machine_load: None,
+                ..fridica::threads::actor::Actor::configured(
+                    h.config.clone(),
+                    Arc::new(h.store.clone()),
+                    h.parent.clone(),
+                    h.clock.clone(),
+                    Arc::new(SequenceIds::default()),
+                )
+                .unwrap()
             };
             actor.step(SESSION.into()).await.unwrap();
             assert!(fridica::store::outbox::claim(&h.store, 20.)
@@ -3335,16 +3334,15 @@ async fn owner_note_edit_fences_all_late_parent_effects() {
 
 fn control_actor(h: &Harness) -> fridica::threads::actor::Actor<ParentScript> {
     fridica::threads::actor::Actor {
-        config: Some(h.config.clone()),
-        store: Arc::new(h.store.clone()),
-        parent: h.parent.clone(),
-        clock: h.clock.clone(),
-        ids: Arc::new(fridica::core::time::RandomIds),
-        owner: "UOWNER".into(),
-        limits: h.config.attention.clone(),
-        observe_only: false,
         parent_timeout: Duration::from_secs(3),
-        machine_load: None,
+        ..fridica::threads::actor::Actor::configured(
+            h.config.clone(),
+            Arc::new(h.store.clone()),
+            h.parent.clone(),
+            h.clock.clone(),
+            Arc::new(fridica::core::time::RandomIds),
+        )
+        .unwrap()
     }
 }
 fn worker_control(worker: &str, op: &str) -> Value {
@@ -4402,16 +4400,15 @@ async fn complete_runtime_capture(
         if scenario == "restart_result" || scenario == "restart_sending" {
             if scenario == "restart_sending" {
                 let actor = fridica::threads::actor::Actor {
-                    store: Arc::new(h.store.clone()),
-                    config: Some(h.config.clone()),
-                    parent: h.parent.clone(),
-                    clock: h.clock.clone(),
-                    ids: h.ids.clone(),
-                    owner: "UOWNER".into(),
-                    limits: h.config.attention.clone(),
-                    observe_only: false,
                     parent_timeout: Duration::from_secs(1),
-                    machine_load: None,
+                    ..fridica::threads::actor::Actor::configured(
+                        h.config.clone(),
+                        Arc::new(h.store.clone()),
+                        h.parent.clone(),
+                        h.clock.clone(),
+                        h.ids.clone(),
+                    )
+                    .unwrap()
                 };
                 actor.step(SESSION.into()).await.unwrap();
                 assert!(fridica::store::outbox::claim(&h.store, 22.)

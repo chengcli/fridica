@@ -10,7 +10,6 @@ use std::{
 };
 
 pub const MAX_FILES: usize = 3;
-pub const TOTAL_LIMIT: usize = FILE_LIMIT;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Attachment {
     pub id: String,
@@ -178,7 +177,7 @@ pub async fn read<D: Downloader>(
             .as_str()
             .map_or(0, |s| s.len().min(FILE_LIMIT));
         let view = &mut views.get_mut(&event).unwrap()[index];
-        if size > 0 && used + size > TOTAL_LIMIT {
+        if size > 0 && used + size > FILE_LIMIT {
             view["note"] = json!("not read: over the 64 KB of attached text per reply");
             continue;
         }

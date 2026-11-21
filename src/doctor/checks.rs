@@ -2,12 +2,7 @@
 //! these probes invoke backend help/auth/schema commands, but never a session.
 use crate::{
     config::{self, registry::Machine, Config, LoadContext},
-    exec::{
-        isolation::shared_ssh_probe,
-        local::LocalTransport,
-        process,
-        ssh::{LaunchOptions, SshTransport},
-    },
+    exec::process,
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -282,7 +277,6 @@ pub async fn run_with(
             report.checks.extend(part.checks);
         }
     }
-    report.detach();
     report.cancelled = *probe.stop.borrow();
     if report.cancelled {
         report.add(
@@ -296,6 +290,8 @@ pub async fn run_with(
         "Worker isolation",
         "run start --check-ready for target isolation checks",
     );
+    // After the last check, so a watcher is shown every line the counts include.
+    report.detach();
     Ok(report)
 }
 
@@ -482,40 +478,18 @@ impl Probe {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let args = vec!["/usr/bin/python3".into(),"-I".into(),"-S".into(),"-c".into(),include_str!("../exec/diagnostics.py").into(),serde_json::json!({
+        let args = crate::exec::helper::argv(vec![include_str!("../exec/diagnostics.py").into(),serde_json::json!({
             "action":action,"backend":backend,"parent":parent,"auto":auto,"workspace":workspace,
             "home":(machine.transport=="local").then_some(&self.context.home),"excluded":excluded,"timeout":self.timeout.as_secs_f64()
-        }).to_string()];
-        let launch = if machine.transport == "local" {
-            LocalTransport {
-                machine: machine.clone(),
-                home: self.context.home.clone(),
-                excluded_env: excluded,
-            }
-            .launch(
-                args,
-                Path::new("/"),
-                self.environment.clone(),
-                &BTreeMap::new(),
-                None,
-                false,
-            )?
-        } else {
-            let mut launch = SshTransport {
-                machine: machine.clone(),
-                excluded_env: excluded,
-                control_directory: self.control.clone(),
-            }
-            .launch(
-                args,
-                "/",
-                self.environment.clone(),
-                &BTreeMap::new(),
-                LaunchOptions::default(),
-            )?;
-            shared_ssh_probe(&mut launch);
-            launch
-        };
+        }).to_string()]);
+        let (launch, _) = crate::exec::probe::launch(
+            machine,
+            &self.context.home,
+            excluded,
+            self.environment.clone(),
+            args,
+            crate::exec::probe::Control::Shared(&self.control),
+        )?;
         let launch = crate::exec::python::activate(
             launch,
             &machine.transport,

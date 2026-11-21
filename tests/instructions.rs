@@ -2,8 +2,8 @@ use fridica::{
     config::{contract, loader, provisions, LoadContext},
     core::worker::WorkerRecord,
     workers::{
+        backend::Instructions,
         instructions::{OwnerInstructions, NO_SIGN_OFF, UNTRUSTED},
-        jsonl::Instructions,
     },
 };
 use serde_json::{json, Value};

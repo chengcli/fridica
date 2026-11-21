@@ -4,7 +4,7 @@ use fridica::{
     exec::{process, shell},
     workers::{
         codex,
-        jsonl::{Launcher, SystemLauncher},
+        launcher::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     },
 };

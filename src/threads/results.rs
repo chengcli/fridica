@@ -113,9 +113,9 @@ pub(super) fn direct(
         .map(|o| o["id"].clone())
         .collect();
     let rendered = if request.session["github_reviews"] == true {
-        super::dispatcher::github_summary(report)
+        super::verdict::github_summary(report)
     } else {
-        super::dispatcher::hoist(report)
+        super::verdict::hoist(report)
     };
     let report: &str = &rendered;
     let (text, details) = if report.chars().count() > limit {
@@ -312,19 +312,19 @@ impl Files {
                 ),
             );
         }
+        let channel = request.session["channel"].as_str().unwrap_or("");
+        let root_ts = request.session["root_ts"].as_str().map(str::to_owned);
         if reply.is_none() && !self.notices.is_empty() {
             u.queue_post(
                 &Post {
-                    idem_key: format!("{inbox}:file-notice"),
-                    session_id: session.into(),
-                    kind: "notice".into(),
-                    channel: request.session["channel"].as_str().unwrap_or("").into(),
-                    thread_ts: request.session["root_ts"].as_str().map(str::to_owned),
                     text: self.notices.join("\n"),
-                    meta: None,
-                    filename: String::new(),
-                    blob: None,
-                    after: String::new(),
+                    ..super::posts::post(
+                        format!("{inbox}:file-notice"),
+                        session,
+                        "notice",
+                        channel,
+                        root_ts.clone(),
+                    )
                 },
                 now,
             )?;
@@ -333,16 +333,16 @@ impl Files {
         for (index, (filename, blob)) in self.uploads.into_iter().enumerate() {
             let id = u.queue_post(
                 &Post {
-                    idem_key: format!("{inbox}:upload:{index}"),
-                    session_id: session.into(),
-                    kind: "upload".into(),
-                    channel: request.session["channel"].as_str().unwrap_or("").into(),
-                    thread_ts: request.session["root_ts"].as_str().map(str::to_owned),
-                    text: String::new(),
-                    meta: None,
                     filename,
                     blob: Some(blob),
                     after: after.clone(),
+                    ..super::posts::post(
+                        format!("{inbox}:upload:{index}"),
+                        session,
+                        "upload",
+                        channel,
+                        root_ts.clone(),
+                    )
                 },
                 now,
             )?;

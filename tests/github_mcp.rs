@@ -286,18 +286,18 @@ fn summaries_keep_confirmed_github_links_without_a_second_signoff() {
         "VERDICT o/r#1 {} approve\nApproved https://github.com/o/r/pull/1#review-1",
         "a".repeat(40)
     );
-    let summary = fridica::threads::dispatcher::github_summary(&text);
+    let summary = fridica::threads::verdict::github_summary(&text);
     assert!(summary.contains("https://github.com/o/r/pull/1#review-1"));
     assert!(!summary.contains("SIGN-OFF") && !summary.contains("VERDICT"));
     let failed = "Could not submit the review: permission denied.";
-    assert_eq!(fridica::threads::dispatcher::github_summary(failed), failed);
+    assert_eq!(fridica::threads::verdict::github_summary(failed), failed);
 }
 
 #[test]
 fn worker_and_parent_instructions_describe_available_tools_without_claiming_publication() {
     use fridica::workers::{
+        backend::Instructions,
         instructions::{OwnerInstructions, GITHUB_TOOLS},
-        jsonl::Instructions,
     };
     let mut f = Fixture::new();
     let worker = serde_json::from_value(json!({"id":"w","session_id":"s","machine":"local","workspace":"project","backend":"codex"})).unwrap();

@@ -640,11 +640,7 @@ pub fn frame(job: &Job, w: &WorkerRecord) -> String {
 }
 fn failed(code: &str, kind: Failure) -> Completion {
     Completion {
-        outcome: Err(WorkerFailure {
-            kind,
-            code: code.into(),
-            backend_session_id: String::new(),
-        }),
+        outcome: Err(failure(kind, code)),
         artifacts: vec![],
         interrupted: false,
         stopped: false,
@@ -687,11 +683,7 @@ async fn forked_context(t: &Task, resume: &str) -> Result<String, WorkerFailure>
     } else {
         previous_snapshot(&t.store, &t.record.id, &t.job.id)
             .await
-            .map_err(|_| WorkerFailure {
-                kind: Failure::Execution,
-                code: "worker_intent_storage_failed".into(),
-                backend_session_id: String::new(),
-            })?
+            .map_err(|_| failure(Failure::Execution, "worker_intent_storage_failed"))?
     };
     Ok(match previous {
         Some(PreviousSnapshot {
@@ -734,11 +726,7 @@ async fn fork_header(t: &Task) -> Result<String, WorkerFailure> {
     if let Some(current) = t.job.snapshot.as_ref() {
         let previous = previous_snapshot(&t.store, source, &t.job.id)
             .await
-            .map_err(|_| WorkerFailure {
-                kind: Failure::Execution,
-                code: "worker_intent_storage_failed".into(),
-                backend_session_id: String::new(),
-            })?;
+            .map_err(|_| failure(Failure::Execution, "worker_intent_storage_failed"))?;
         if let Some(PreviousSnapshot {
             job,
             bundle: earlier,
@@ -787,11 +775,18 @@ async fn fresh_unless_same_instructions(t: &Task, resume: String) -> Result<Stri
             Ok(resume)
         })
         .await
-        .map_err(|_| WorkerFailure {
-            kind: Failure::Execution,
-            code: "worker_intent_storage_failed".into(),
-            backend_session_id: String::new(),
-        })
+        .map_err(|_| failure(Failure::Execution, "worker_intent_storage_failed"))
+}
+/// A stopped worker's job is cancelled; an interrupted one may be resumed.
+fn interrupted(signal: Signal) -> WorkerFailure {
+    failure(
+        if signal == Signal::Stop {
+            Failure::Cancelled
+        } else {
+            Failure::Interrupted
+        },
+        "worker_interrupted",
+    )
 }
 async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskEnd> {
     let stale = t.record.updated != 0.
@@ -821,16 +816,8 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
                             .transpose()
                     })
                     .await
-                    .map_err(|_| WorkerFailure {
-                        kind: Failure::Execution,
-                        code: "saved_file_read_failed".into(),
-                        backend_session_id: String::new(),
-                    })?;
-                return cached.ok_or_else(|| WorkerFailure {
-                    kind: Failure::Refusal,
-                    code: "saved_file_not_verified".into(),
-                    backend_session_id: String::new(),
-                });
+                    .map_err(|_| failure(Failure::Execution, "saved_file_read_failed"))?;
+                return cached.ok_or_else(|| failure(Failure::Refusal, "saved_file_not_verified"));
             }
         }
         t.factory.prepare(t.spec.clone()).await;
@@ -877,11 +864,7 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
                 Ok(())
             })
             .await
-            .map_err(|_| WorkerFailure {
-                kind: Failure::Execution,
-                code: "worker_intent_storage_failed".into(),
-                backend_session_id: String::new(),
-            })?;
+            .map_err(|_| failure(Failure::Execution, "worker_intent_storage_failed"))?;
         in_backend.store(true, Ordering::SeqCst);
         let run = t.worker.run(
             request,
@@ -933,13 +916,13 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
             let _=tokio::time::timeout(t.grace,t.approvals.cancel(t.record.id.clone())).await;
             let _=tokio::time::timeout(t.grace,t.worker.interrupt()).await;
             let result=if in_backend.load(Ordering::SeqCst) && signal!=Signal::Shutdown{
-                tokio::time::timeout(t.grace,&mut operation).await.unwrap_or_else(|_|Err(WorkerFailure{kind:if signal==Signal::Stop{Failure::Cancelled}else{Failure::Interrupted},code:"worker_interrupted".into(),backend_session_id:String::new()}))
-            }else{Err(WorkerFailure{kind:if signal==Signal::Stop{Failure::Cancelled}else{Failure::Interrupted},code:"worker_interrupted".into(),backend_session_id:String::new()})};
+                tokio::time::timeout(t.grace,&mut operation).await.unwrap_or_else(|_|Err(interrupted(signal)))
+            }else{Err(interrupted(signal))};
             (result,signal)
         },
         _=&mut timeout=>{
             let _=tokio::time::timeout(t.grace,t.worker.interrupt()).await;
-            (Err(WorkerFailure{kind:Failure::Execution,code:"job_timeout".into(),backend_session_id:String::new()}),Signal::Run)
+            (Err(failure(Failure::Execution,"job_timeout")),Signal::Run)
         },
         result=&mut operation=>(result,Signal::Run),
     };

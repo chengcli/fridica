@@ -12,6 +12,7 @@ use crate::{
     threads::{
         controls::Control,
         external::{DelegateRequest, PostRequest, Refusal, Target},
+        refusal::Refused,
         runtime::Runtime,
     },
 };
@@ -237,7 +238,6 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
     ) -> Response {
         let store = self.runtime.store();
         let config = self.runtime.config();
-        let now = self.runtime.now();
         if request.method == "GET" {
             if !request.body.as_object().is_some_and(|v| v.is_empty()) {
                 return Response::error(400, "get_body_not_allowed");
@@ -275,37 +275,11 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         if !request.body.is_object() || !query.is_empty() {
             return Response::error(400, "invalid_body_or_query");
         }
+        // Everything below changes state. `handle` admits only the owner and
+        // the read-only desktop capability, and the latter stopped above, so
+        // the caller here is the owner.
         if request.method == "PATCH" && parts.first().is_some_and(|p| p == "config") {
-            if authority != Authority::Owner {
-                return Response::error(403, "owner_required");
-            }
-            if parts.len() != 2 || !matches!(parts[1].as_str(), "parent" | "limits") {
-                return Response::error(404, "not_found");
-            }
-            if !crate::config::editor::valid_patch(&parts[1], &request.body) {
-                return Response::error(400, "configuration_field_not_editable");
-            }
-            if !self.runtime.configuration_editable() {
-                return Response::error(503, "configuration_editor_unavailable");
-            }
-            return match self
-                .runtime
-                .update_configuration(&parts[1], request.body, authority)
-                .await
-            {
-                Ok(config) => {
-                    let value = if parts[1] == "parent" {
-                        json!({"parent":{"backend":config.parent.backend,"model":config.parent.model,"triage_model":config.parent.triage_model,"reasoning_effort":config.parent.reasoning_effort}})
-                    } else {
-                        json!({"limits":config.limits})
-                    };
-                    Response::ok(value)
-                }
-                Err(error) if error.is::<crate::config::editor::InvalidPatch>() => {
-                    Response::error(400, "invalid_configuration_values")
-                }
-                Err(_) => Response::error(409, "configuration_update_refused_or_pending"),
-            };
+            return self.config_patch(parts, request.body, authority).await;
         }
         if request.method != "POST" {
             return Response::error(405, "method_not_allowed");
@@ -313,373 +287,358 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
         let p: Vec<_> = parts.iter().map(String::as_str).collect();
         let body = request.body;
         match p.as_slice() {
-            ["obligations", id, "close"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let Some(reason) = body
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.trim().is_empty() && s.chars().count() <= 4000)
-                else {
-                    return Response::error(400, "invalid_reason");
-                };
-                if body.as_object().unwrap().len() != 1 {
-                    return Response::error(400, "unknown_body_field");
-                }
-                match crate::attention::disposition(
-                    &store,
-                    id.to_string(),
-                    crate::attention::Disposition::OwnerClosed {
-                        reason: reason.into(),
-                    },
-                    authority,
-                    now,
-                )
-                .await
-                {
-                    Ok(()) => Response::ok(json!({"id":id,"state":"owner_closed"})),
-                    Err(_) => Response::error(409, "obligation_close_refused"),
-                }
-            }
-            ["archive", "restore"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let Some(thread) = body
-                    .get("thread")
-                    .and_then(Value::as_str)
-                    .filter(|s| s.matches(':').count() == 2 && s.len() <= 200)
-                    .map(str::to_owned)
-                else {
-                    return Response::error(400, "invalid_thread");
-                };
-                if body.as_object().unwrap().len() != 1 {
-                    return Response::error(400, "unknown_body_field");
-                }
-                let id = thread.clone();
-                match store.transact(move |u| u.revive_thread(&id, now)).await {
-                    Ok(true) => Response::ok(json!({"thread":thread,"restored":true})),
-                    Ok(false) => Response::error(404, "not_archived"),
-                    Err(_) => Response::error(409, "restore_failed"),
-                }
-            }
-            ["obligations", "backfill"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let Ok(request) =
-                    serde_json::from_value::<crate::attention::backfill::Request>(body)
-                else {
-                    return Response::error(400, "invalid_backfill_request");
-                };
-                if !request.valid(now) {
-                    return Response::error(400, "invalid_backfill_request");
-                }
-                match crate::attention::backfill::run(&store, &config, request, authority, now)
-                    .await
-                {
-                    Ok(result) => Response::ok(result),
-                    Err(_) => Response::error(409, "backfill_refused"),
-                }
-            }
+            ["obligations", id, "close"] => self.obligation_close(id, &body, authority).await,
+            ["archive", "restore"] => self.archive_restore(&body).await,
+            ["obligations", "backfill"] => self.backfill(body, authority).await,
             ["channels", channel, "instruct"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                if body
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .any(|k| !["actor", "text", "client_id"].contains(&k.as_str()))
-                {
-                    return Response::error(400, "unknown_body_field");
-                }
-                // A configured channel ID, or its name as recorded at Slack startup.
-                let wanted = channel.to_string();
-                let slack = config.slack.clone();
-                let thread = store
-                    .transact(move |u| {
-                        let names = Names::recorded(u, &slack)?;
-                        let Some(id) = names.channel_id(&wanted) else {
-                            return Ok(Err("unknown_channel"));
-                        };
-                        Ok(u.latest_thread_in(&slack.workspace, &id)?
-                            .map(|thread| (names.thread(&thread), thread))
-                            .ok_or("no_thread_in_channel"))
-                    })
-                    .await;
-                let (name, thread) = match thread {
-                    Ok(Ok(thread)) => thread,
-                    Ok(Err(code)) => return Response::error(404, code),
-                    Err(_) => return Response::error(500, "storage_failed"),
-                };
-                let (Some(text), Some(client_id)) =
-                    (body["text"].as_str(), body["client_id"].as_str())
-                else {
-                    return Response::error(400, "invalid_instruction");
-                };
-                if !(1..=4000).contains(&text.trim().chars().count())
-                    || !(8..=80).contains(&client_id.len())
-                    || !client_id
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                {
-                    return Response::error(400, "invalid_instruction");
-                }
-                match self
-                    .runtime
-                    .instruct(thread.clone(), text.into(), client_id.into(), authority)
-                    .await
-                {
-                    // Like every view: `thread` is the readable name, `id` the key.
-                    Ok(id) => Response::ok(
-                        json!({"instruction_id":id,"queued":true,"thread":name,"id":thread}),
-                    ),
-                    Err(error) => operation_error(error),
-                }
+                self.channel_instruct(channel, &body, authority).await
             }
-            ["threads", id, "delegate"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let request = match delegate_body(&body) {
-                    Ok(request) => request,
-                    Err(code) => return Response::error(400, code),
-                };
-                answer(
+            ["threads", id, "delegate"] => match delegate_body(&body) {
+                Ok(request) => answer(
                     self.runtime
                         .delegate(id.to_string(), request, authority)
                         .await,
-                )
-            }
+                ),
+                Err(code) => Response::error(400, code),
+            },
             ["threads", id, "post"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let request = match post_body(&body, false) {
-                    Ok(request) => request,
-                    Err(code) => return Response::error(400, code),
-                };
-                answer(
-                    self.runtime
-                        .external_post(Target::Thread(id.to_string()), request, authority)
-                        .await,
-                )
+                self.post(Target::Thread(id.to_string()), &body, authority)
+                    .await
             }
             ["channels", channel, "post"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let request = match post_body(&body, true) {
-                    Ok(request) => request,
-                    Err(code) => return Response::error(400, code),
-                };
-                answer(
-                    self.runtime
-                        .external_post(Target::Channel(channel.to_string()), request, authority)
-                        .await,
-                )
-            }
-            ["threads", id, "driver"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                if body
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .any(|k| !["actor", "driver"].contains(&k.as_str()))
-                {
-                    return Response::error(400, "unknown_body_field");
-                }
-                let Some(driver) = body["driver"]
-                    .as_str()
-                    .filter(|d| matches!(*d, "parent" | "external"))
-                    .map(str::to_owned)
-                else {
-                    return Response::error(400, "invalid_driver");
-                };
-                let (session, actor, value) =
-                    (id.to_string(), json!(authority).to_string(), driver.clone());
-                match store
-                    .transact(move |u| {
-                        if !u.thread_exists(&session)? {
-                            return Ok(None);
-                        }
-                        u.set_thread_driver(&session, &value, &actor, now).map(Some)
-                    })
+                self.post(Target::Channel(channel.to_string()), &body, authority)
                     .await
-                {
-                    Ok(Some(changed)) => Response::ok(json!({"driver":driver,"changed":changed})),
-                    Ok(None) => Response::error(404, "no_such_thread"),
-                    Err(error) => operation_error(error),
-                }
             }
+            ["threads", id, "driver"] => self.driver(id, &body, authority).await,
             ["threads", id, "workers", worker, "stop"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                if body
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .any(|k| !["actor", "mode"].contains(&k.as_str()))
-                {
-                    return Response::error(400, "unknown_body_field");
-                }
-                let stop = match body.get("mode") {
-                    None | Some(Value::Null) => true,
-                    Some(mode) => match mode.as_str() {
-                        Some("stop") => true,
-                        Some("interrupt") => false,
-                        _ => return Response::error(400, "invalid_mode"),
-                    },
-                };
-                let (session, lookup) = (id.to_string(), worker.to_string());
-                match store
-                    .transact(move |u| {
-                        Ok(u.thread_workers(&session)?.iter().any(|w| w.id == lookup))
-                    })
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => return Response::error(404, "no_such_worker"),
-                    Err(error) => return operation_error(error),
-                }
-                match self.runtime.worker_control(worker, stop, authority).await {
-                    Ok(value) => Response::ok(if stop {
-                        json!({"stopped":value})
-                    } else {
-                        json!({"interrupted":value})
-                    }),
-                    Err(error) => operation_error(error),
-                }
+                self.thread_worker_stop(id, worker, &body, authority).await
             }
-            ["threads", id, action] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                let allowed = match *action {
-                    "instruct" => vec!["actor", "text", "client_id"],
-                    "notes" => vec!["actor", "data", "expected"],
-                    "pause" => vec!["actor", "reason"],
-                    _ => vec!["actor"],
+            ["threads", id, action] => self.thread_action(id, action, &body, authority).await,
+            ["workers", id, op] => self.worker_operation(id, op, &body, authority).await,
+            ["approvals", id] => self.approval(id, &body, authority).await,
+            ["outbox", id, "retry"] => self.outbox_retry(id, &body, authority).await,
+            _ => Response::error(404, "not_found"),
+        }
+    }
+    /// `PATCH /config/parent` and `PATCH /config/limits`.
+    async fn config_patch(&self, parts: &[String], body: Value, authority: Authority) -> Response {
+        if parts.len() != 2 || !matches!(parts[1].as_str(), "parent" | "limits") {
+            return Response::error(404, "not_found");
+        }
+        if !crate::config::editor::valid_patch(&parts[1], &body) {
+            return Response::error(400, "configuration_field_not_editable");
+        }
+        if !self.runtime.configuration_editable() {
+            return Response::error(503, "configuration_editor_unavailable");
+        }
+        match self
+            .runtime
+            .update_configuration(&parts[1], body, authority)
+            .await
+        {
+            Ok(config) => {
+                let value = if parts[1] == "parent" {
+                    json!({"parent":{"backend":config.parent.backend,"model":config.parent.model,"triage_model":config.parent.triage_model,"reasoning_effort":config.parent.reasoning_effort}})
+                } else {
+                    json!({"limits":config.limits})
                 };
-                if body
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .any(|k| !allowed.contains(&k.as_str()))
-                {
-                    return Response::error(400, "unknown_body_field");
+                Response::ok(value)
+            }
+            Err(error) if error.is::<crate::config::editor::InvalidPatch>() => {
+                Response::error(400, "invalid_configuration_values")
+            }
+            Err(_) => Response::error(409, "configuration_update_refused_or_pending"),
+        }
+    }
+    async fn obligation_close(&self, id: &str, body: &Value, authority: Authority) -> Response {
+        let Some(reason) = body
+            .get("reason")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty() && s.chars().count() <= 4000)
+        else {
+            return Response::error(400, "invalid_reason");
+        };
+        // `reason` alone: this route takes no `actor`.
+        if body.as_object().is_none_or(|fields| fields.len() != 1) {
+            return Response::error(400, "unknown_body_field");
+        }
+        match crate::attention::disposition(
+            &self.runtime.store(),
+            id.to_string(),
+            crate::attention::Disposition::OwnerClosed {
+                reason: reason.into(),
+            },
+            authority,
+            self.runtime.now(),
+        )
+        .await
+        {
+            Ok(()) => Response::ok(json!({"id":id,"state":"owner_closed"})),
+            Err(_) => Response::error(409, "obligation_close_refused"),
+        }
+    }
+    async fn archive_restore(&self, body: &Value) -> Response {
+        let Some(thread) = body
+            .get("thread")
+            .and_then(Value::as_str)
+            .filter(|s| s.matches(':').count() == 2 && s.len() <= 200)
+            .map(str::to_owned)
+        else {
+            return Response::error(400, "invalid_thread");
+        };
+        // `thread` alone: this route takes no `actor`.
+        if body.as_object().is_none_or(|fields| fields.len() != 1) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let (id, now) = (thread.clone(), self.runtime.now());
+        match self
+            .runtime
+            .store()
+            .transact(move |u| u.revive_thread(&id, now))
+            .await
+        {
+            Ok(true) => Response::ok(json!({"thread":thread,"restored":true})),
+            Ok(false) => Response::error(404, "not_archived"),
+            Err(_) => Response::error(409, "restore_failed"),
+        }
+    }
+    async fn backfill(&self, body: Value, authority: Authority) -> Response {
+        let now = self.runtime.now();
+        let Ok(request) = serde_json::from_value::<crate::attention::backfill::Request>(body)
+        else {
+            return Response::error(400, "invalid_backfill_request");
+        };
+        if !request.valid(now) {
+            return Response::error(400, "invalid_backfill_request");
+        }
+        match crate::attention::backfill::run(
+            &self.runtime.store(),
+            &self.runtime.config(),
+            request,
+            authority,
+            now,
+        )
+        .await
+        {
+            Ok(result) => Response::ok(result),
+            Err(_) => Response::error(409, "backfill_refused"),
+        }
+    }
+    /// An instruction for the latest thread of a configured channel, named by
+    /// its ID or by its name as recorded at Slack startup.
+    async fn channel_instruct(
+        &self,
+        channel: &str,
+        body: &Value,
+        authority: Authority,
+    ) -> Response {
+        if !only(body, &["text", "client_id"]) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let wanted = channel.to_string();
+        let slack = self.runtime.config().slack.clone();
+        let thread = self
+            .runtime
+            .store()
+            .transact(move |u| {
+                let names = Names::recorded(u, &slack)?;
+                let Some(id) = names.channel_id(&wanted) else {
+                    return Ok(Err("unknown_channel"));
+                };
+                Ok(u.latest_thread_in(&slack.workspace, &id)?
+                    .map(|thread| (names.thread(&thread), thread))
+                    .ok_or("no_thread_in_channel"))
+            })
+            .await;
+        let (name, thread) = match thread {
+            Ok(Ok(thread)) => thread,
+            Ok(Err(code)) => return Response::error(404, code),
+            Err(_) => return Response::error(500, "storage_failed"),
+        };
+        let Some((text, client_id)) = instruction(body) else {
+            return Response::error(400, "invalid_instruction");
+        };
+        self.instruct(thread, name, text, client_id, authority)
+            .await
+    }
+    /// Queue an owner instruction. Like every view, the answer's `thread` is
+    /// the readable name and `id` the key.
+    async fn instruct(
+        &self,
+        id: String,
+        name: String,
+        text: &str,
+        client_id: &str,
+        authority: Authority,
+    ) -> Response {
+        match self
+            .runtime
+            .instruct(id.clone(), text.into(), client_id.into(), authority)
+            .await
+        {
+            Ok(instruction) => Response::ok(
+                json!({"instruction_id":instruction,"queued":true,"thread":name,"id":id}),
+            ),
+            Err(error) => operation_error(error),
+        }
+    }
+    /// A driver's post to a thread, or a `study_root` to a channel.
+    async fn post(&self, target: Target, body: &Value, authority: Authority) -> Response {
+        match post_body(body, matches!(target, Target::Channel(_))) {
+            Ok(request) => answer(self.runtime.external_post(target, request, authority).await),
+            Err(code) => Response::error(400, code),
+        }
+    }
+    async fn driver(&self, id: &str, body: &Value, authority: Authority) -> Response {
+        if !only(body, &["driver"]) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let Some(driver) = body["driver"]
+            .as_str()
+            .filter(|d| matches!(*d, "parent" | "external"))
+            .map(str::to_owned)
+        else {
+            return Response::error(400, "invalid_driver");
+        };
+        let (session, actor, value) =
+            (id.to_string(), json!(authority).to_string(), driver.clone());
+        let now = self.runtime.now();
+        match self
+            .runtime
+            .store()
+            .transact(move |u| {
+                if !u.thread_exists(&session)? {
+                    return Ok(None);
                 }
-                if !matches!(
-                    *action,
-                    "pause"
-                        | "resume"
-                        | "retry"
-                        | "close"
-                        | "archive"
-                        | "instruct"
-                        | "notes"
-                        | "restore"
-                        | "clean"
-                ) {
-                    return Response::error(404, "unknown_thread_action");
-                }
-                let id = id.to_string();
-                let lookup = id.clone();
-                match store.transact(move |u| u.thread_exists(&lookup)).await {
-                    Ok(true) => {}
-                    Ok(false) => return Response::error(404, "no_such_thread"),
-                    Err(_) => return Response::error(500, "storage_failed"),
-                }
-                if *action == "instruct" {
-                    let (Some(text), Some(client_id)) =
-                        (body["text"].as_str(), body["client_id"].as_str())
-                    else {
-                        return Response::error(400, "invalid_instruction");
-                    };
-                    if !(1..=4000).contains(&text.trim().chars().count())
-                        || !(8..=80).contains(&client_id.len())
-                        || !client_id
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                    {
-                        return Response::error(400, "invalid_instruction");
-                    }
-                    let slack = config.slack.clone();
-                    let key = id.clone();
-                    let name = store
-                        .transact(move |u| Ok(Names::recorded(u, &slack)?.thread(&key)))
-                        .await
-                        .unwrap_or_else(|_| id.clone());
-                    return match self
-                        .runtime
-                        .instruct(id.clone(), text.into(), client_id.into(), authority)
-                        .await
-                    {
-                        Ok(instruction) => Response::ok(
-                            json!({"instruction_id":instruction,"queued":true,"thread":name,"id":id}),
-                        ),
-                        Err(error) => operation_error(error),
-                    };
-                }
-                if *action == "notes" {
-                    let Some(data) = body["data"].as_object() else {
-                        return Response::error(400, "notes_must_be_an_object");
-                    };
-                    let data = data.clone();
-                    let expected = match body.get("expected") {
-                        None | Some(Value::Null) => None,
-                        Some(v) => match v.as_u64().filter(|n| *n <= i64::MAX as u64) {
-                            Some(n) => Some(n as i64),
-                            None => return Response::error(400, "invalid_revision"),
-                        },
-                    };
-                    let actor = config.owner.slack_user.clone();
-                    let result = store
-                        .transact(move |u| {
-                            let revision = u.notes_revision(&id)?;
-                            if expected.is_some_and(|r| r != revision) {
-                                anyhow::bail!("notes revision conflict");
-                            }
-                            let next = revision
-                                .checked_add(1)
-                                .ok_or_else(|| anyhow::anyhow!("revision overflow"))?;
-                            u.write_owner_notes(&id, next, &actor, &json!(data).to_string(), now)?;
-                            Ok(next)
-                        })
-                        .await;
-                    return match result {
-                        Ok(revision) => Response::ok(json!({"revision":revision})),
-                        Err(error) => operation_error(error),
-                    };
-                }
-                let control = match *action {
-                    "pause" => {
-                        if body.get("reason").is_some_and(|v| !v.is_string()) {
-                            return Response::error(400, "invalid_pause_reason");
-                        }
-                        let reason = body
-                            .get("reason")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Paused by the owner.");
-                        if reason.trim().is_empty() || reason.chars().count() > 4000 {
-                            return Response::error(400, "invalid_pause_reason");
-                        }
-                        Control::Pause {
-                            reason: reason.into(),
-                        }
-                    }
-                    "resume" => Control::Resume,
-                    "retry" => Control::Retry,
-                    "close" => Control::Close,
-                    "archive" => Control::Archive,
-                    "restore" => Control::Restore,
-                    "clean" => Control::Clean,
-                    _ => unreachable!(),
+                u.set_thread_driver(&session, &value, &actor, now).map(Some)
+            })
+            .await
+        {
+            Ok(Some(changed)) => Response::ok(json!({"driver":driver,"changed":changed})),
+            Ok(None) => Response::error(404, "no_such_thread"),
+            Err(error) => operation_error(error),
+        }
+    }
+    /// `POST /threads/<id>/workers/<worker>/stop`: stop, or with
+    /// `mode: "interrupt"` interrupt, one of the thread's workers.
+    async fn thread_worker_stop(
+        &self,
+        id: &str,
+        worker: &str,
+        body: &Value,
+        authority: Authority,
+    ) -> Response {
+        if !only(body, &["mode"]) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let stop = match body.get("mode") {
+            None | Some(Value::Null) => true,
+            Some(mode) => match mode.as_str() {
+                Some("stop") => true,
+                Some("interrupt") => false,
+                _ => return Response::error(400, "invalid_mode"),
+            },
+        };
+        let (session, lookup) = (id.to_string(), worker.to_string());
+        match self
+            .runtime
+            .store()
+            .transact(move |u| Ok(u.thread_workers(&session)?.iter().any(|w| w.id == lookup)))
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return Response::error(404, "no_such_worker"),
+            Err(error) => return operation_error(error),
+        }
+        self.worker_signal(worker, stop, authority).await
+    }
+    /// `POST /workers/<id>/stop` and `/interrupt`.
+    async fn worker_operation(
+        &self,
+        id: &str,
+        op: &str,
+        body: &Value,
+        authority: Authority,
+    ) -> Response {
+        if !matches!(op, "stop" | "interrupt") {
+            return Response::error(404, "unknown_worker_operation");
+        }
+        if !only(body, &[]) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let worker = id.to_string();
+        if let Err(error) = self
+            .runtime
+            .store()
+            .transact(move |u| u.worker_record(&worker))
+            .await
+        {
+            return if crate::store::not_found(&error) {
+                Response::error(404, "no_such_worker")
+            } else {
+                operation_error(error)
+            };
+        }
+        self.worker_signal(id, op == "stop", authority).await
+    }
+    async fn worker_signal(&self, worker: &str, stop: bool, authority: Authority) -> Response {
+        match self.runtime.worker_control(worker, stop, authority).await {
+            Ok(value) => Response::ok(if stop {
+                json!({"stopped":value})
+            } else {
+                json!({"interrupted":value})
+            }),
+            Err(error) => operation_error(error),
+        }
+    }
+    /// `POST /threads/<id>/<action>`: an instruction, the owner's notes, or a
+    /// control. Unknown fields are refused before an unknown action is.
+    async fn thread_action(
+        &self,
+        id: &str,
+        action: &str,
+        body: &Value,
+        authority: Authority,
+    ) -> Response {
+        let allowed: &[&str] = match action {
+            "instruct" => &["text", "client_id"],
+            "notes" => &["data", "expected"],
+            "pause" => &["reason"],
+            _ => &[],
+        };
+        if !only(body, allowed) {
+            return Response::error(400, "unknown_body_field");
+        }
+        if !matches!(action, "instruct" | "notes") && control(action, body).is_none() {
+            return Response::error(404, "unknown_thread_action");
+        }
+        let id = id.to_string();
+        let lookup = id.clone();
+        let store = self.runtime.store();
+        match store.transact(move |u| u.thread_exists(&lookup)).await {
+            Ok(true) => {}
+            Ok(false) => return Response::error(404, "no_such_thread"),
+            Err(_) => return Response::error(500, "storage_failed"),
+        }
+        match action {
+            "instruct" => {
+                let Some((text, client_id)) = instruction(body) else {
+                    return Response::error(400, "invalid_instruction");
+                };
+                let slack = self.runtime.config().slack.clone();
+                let key = id.clone();
+                let name = store
+                    .transact(move |u| Ok(Names::recorded(u, &slack)?.thread(&key)))
+                    .await
+                    .unwrap_or_else(|_| id.clone());
+                self.instruct(id, name, text, client_id, authority).await
+            }
+            "notes" => self.notes(id, body).await,
+            _ => {
+                let control = match control(action, body) {
+                    Some(Ok(control)) => control,
+                    Some(Err(code)) => return Response::error(400, code),
+                    None => return Response::error(404, "unknown_thread_action"),
                 };
                 match self.runtime.control(id.clone(), control, authority).await {
                     Ok(()) => Response::ok(
@@ -688,90 +647,138 @@ impl<P: Parent + 'static, D: Delivery + 'static> Api<P, D> {
                     Err(error) => operation_error(error),
                 }
             }
-            ["workers", id, op] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                if !matches!(*op, "stop" | "interrupt") {
-                    return Response::error(404, "unknown_worker_operation");
-                }
-                if !only_actor(&body) {
-                    return Response::error(400, "unknown_body_field");
-                }
-                let worker = id.to_string();
-                if let Err(error) = store.transact(move |u| u.worker_record(&worker)).await {
-                    return if crate::store::not_found(&error) {
-                        Response::error(404, "no_such_worker")
-                    } else {
-                        operation_error(error)
-                    };
-                }
-                match self
-                    .runtime
-                    .worker_control(id, *op == "stop", authority)
-                    .await
-                {
-                    Ok(value) => Response::ok(if *op == "stop" {
-                        json!({"stopped":value})
-                    } else {
-                        json!({"interrupted":value})
-                    }),
-                    Err(error) => operation_error(error),
-                }
-            }
-            ["approvals", id] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                if body
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .any(|k| k != "actor" && k != "decision")
-                {
-                    return Response::error(400, "unknown_body_field");
-                }
-                let decision = match body["decision"].as_str() {
-                    Some("once") => ApprovalDecision::Once,
-                    Some("session") => ApprovalDecision::Session,
-                    Some("deny") => ApprovalDecision::Deny,
-                    _ => return Response::error(400, "invalid_approval_decision"),
-                };
-                let id = id.to_string();
-                let lookup = id.clone();
-                match store.transact(move |u| u.approval_exists(&lookup)).await {
-                    Ok(true) => {}
-                    Ok(false) => return Response::error(404, "no_such_approval"),
-                    Err(_) => return Response::error(500, "storage_failed"),
-                }
-                match self.runtime.approvals.decide(id, decision, authority).await {
-                    Ok(true) => Response::ok(json!({"decided":body["decision"]})),
-                    Ok(false) => Response::error(409, "approval_already_settled"),
-                    Err(error) => operation_error(error),
-                }
-            }
-            ["outbox", id, "retry"] => {
-                if authority != Authority::Owner {
-                    return Response::error(403, "owner_required");
-                }
-                if !only_actor(&body) {
-                    return Response::error(400, "unknown_body_field");
-                }
-                let Ok(id) = id.parse::<i64>() else {
-                    return Response::error(400, "invalid_outbox_id");
-                };
-                match store
-                    .transact(move |u| u.retry_post(id, authority, now))
-                    .await
-                {
-                    Ok(true) => Response::ok(json!({"requeued":true})),
-                    Ok(false) => Response::error(409, "post_not_retryable"),
-                    Err(error) => operation_error(error),
-                }
-            }
-            _ => Response::error(404, "not_found"),
         }
     }
+    /// Replace the owner's notes; `expected`, when given, must be the current
+    /// revision.
+    async fn notes(&self, id: String, body: &Value) -> Response {
+        let Some(data) = body["data"].as_object() else {
+            return Response::error(400, "notes_must_be_an_object");
+        };
+        let data = data.clone();
+        let expected = match body.get("expected") {
+            None | Some(Value::Null) => None,
+            Some(v) => match v.as_u64().filter(|n| *n <= i64::MAX as u64) {
+                Some(n) => Some(n as i64),
+                None => return Response::error(400, "invalid_revision"),
+            },
+        };
+        let actor = self.runtime.config().owner.slack_user.clone();
+        let now = self.runtime.now();
+        let result = self
+            .runtime
+            .store()
+            .transact(move |u| {
+                let revision = u.notes_revision(&id)?;
+                if expected.is_some_and(|r| r != revision) {
+                    anyhow::bail!(Refused::Conflict("notes revision conflict"));
+                }
+                let next = revision
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("revision overflow"))?;
+                u.write_owner_notes(&id, next, &actor, &json!(data).to_string(), now)?;
+                Ok(next)
+            })
+            .await;
+        match result {
+            Ok(revision) => Response::ok(json!({"revision":revision})),
+            Err(error) => operation_error(error),
+        }
+    }
+    async fn approval(&self, id: &str, body: &Value, authority: Authority) -> Response {
+        if !only(body, &["decision"]) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let decision = match body["decision"].as_str() {
+            Some("once") => ApprovalDecision::Once,
+            Some("session") => ApprovalDecision::Session,
+            Some("deny") => ApprovalDecision::Deny,
+            _ => return Response::error(400, "invalid_approval_decision"),
+        };
+        let id = id.to_string();
+        let lookup = id.clone();
+        match self
+            .runtime
+            .store()
+            .transact(move |u| u.approval_exists(&lookup))
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return Response::error(404, "no_such_approval"),
+            Err(_) => return Response::error(500, "storage_failed"),
+        }
+        match self.runtime.approvals.decide(id, decision, authority).await {
+            Ok(true) => Response::ok(json!({"decided":body["decision"]})),
+            Ok(false) => Response::error(409, "approval_already_settled"),
+            Err(error) => operation_error(error),
+        }
+    }
+    async fn outbox_retry(&self, id: &str, body: &Value, authority: Authority) -> Response {
+        if !only(body, &[]) {
+            return Response::error(400, "unknown_body_field");
+        }
+        let Ok(id) = id.parse::<i64>() else {
+            return Response::error(400, "invalid_outbox_id");
+        };
+        let now = self.runtime.now();
+        match self
+            .runtime
+            .store()
+            .transact(move |u| u.retry_post(id, authority, now))
+            .await
+        {
+            Ok(true) => Response::ok(json!({"requeued":true})),
+            Ok(false) => Response::error(409, "post_not_retryable"),
+            Err(error) => operation_error(error),
+        }
+    }
+}
+/// The control a thread action names, or the code its body is refused with;
+/// `None` for an action that is not a control.
+fn control(action: &str, body: &Value) -> Option<Result<Control, &'static str>> {
+    Some(Ok(match action {
+        "pause" => {
+            if body.get("reason").is_some_and(|v| !v.is_string()) {
+                return Some(Err("invalid_pause_reason"));
+            }
+            let reason = body
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("Paused by the owner.");
+            if reason.trim().is_empty() || reason.chars().count() > 4000 {
+                return Some(Err("invalid_pause_reason"));
+            }
+            Control::Pause {
+                reason: reason.into(),
+            }
+        }
+        "resume" => Control::Resume,
+        "retry" => Control::Retry,
+        "close" => Control::Close,
+        "archive" => Control::Archive,
+        "restore" => Control::Restore,
+        "clean" => Control::Clean,
+        _ => return None,
+    }))
+}
+/// Whether the body is an object naming only `allowed` fields; every body may
+/// also carry `actor`.
+fn only(body: &Value, allowed: &[&str]) -> bool {
+    body.as_object().is_some_and(|fields| {
+        fields
+            .keys()
+            .all(|k| k == "actor" || allowed.contains(&k.as_str()))
+    })
+}
+/// A client's idempotency key.
+fn valid_client_id(id: &str) -> bool {
+    (8..=80).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+}
+/// An instruction's text and client ID, as both instruct routes take them.
+fn instruction(body: &Value) -> Option<(&str, &str)> {
+    let (text, client_id) = (body["text"].as_str()?, body["client_id"].as_str()?);
+    ((1..=4000).contains(&text.trim().chars().count()) && valid_client_id(client_id))
+        .then_some((text, client_id))
 }
 /// A refusal is its status and code; anything else failed.
 fn answer(result: anyhow::Result<std::result::Result<Value, Refusal>>) -> Response {
@@ -894,10 +901,7 @@ fn post_body(body: &Value, channel: bool) -> Result<PostRequest, &'static str> {
         None => None,
         Some(v) => Some(
             v.as_str()
-                .filter(|id| {
-                    (8..=80).contains(&id.len())
-                        && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-                })
+                .filter(|id| valid_client_id(id))
                 .ok_or("invalid_client_id")?
                 .to_owned(),
         ),
@@ -910,31 +914,26 @@ fn post_body(body: &Value, channel: bool) -> Result<PostRequest, &'static str> {
         client_id,
     })
 }
-fn only_actor(body: &Value) -> bool {
-    body.as_object()
-        .is_some_and(|v| v.keys().all(|k| k == "actor"))
-}
+/// The status for a failed operation. Refusals raised in this crate are
+/// typed; one from elsewhere (the store, approvals) that names the owner or
+/// authentication is still a refused authority.
 fn operation_error(error: anyhow::Error) -> Response {
     if crate::store::storage_failure(&error) {
-        Response::error(500, "storage_failed")
-    } else if error.to_string().contains("owner") || error.to_string().contains("authentication") {
-        Response::error(403, "owner_required")
-    } else if error.to_string() == "nothing to retry" {
-        Response::error(409, "nothing_to_retry")
-    } else if error.to_string() == "thread worker cleanup is pending" {
-        Response::error(409, "thread_cleanup_pending")
-    } else if matches!(
-        error.to_string().as_str(),
-        "notes revision conflict"
-            | "instruction ID reused with different text"
-            | "closed threads require explicit restoration"
-            | "only an active thread can retry its last decision"
-            | "instruction outside configured scope"
-            | "instructions are unavailable in observe-only mode"
-    ) {
-        Response::error(409, "operation_conflict")
-    } else {
-        Response::error(500, "operation_failed")
+        return Response::error(500, "storage_failed");
+    }
+    match error.downcast_ref::<Refused>() {
+        Some(Refused::Forbidden(_)) => Response::error(403, "owner_required"),
+        Some(Refused::NothingToRetry) => Response::error(409, "nothing_to_retry"),
+        Some(Refused::CleanupPending) => Response::error(409, "thread_cleanup_pending"),
+        Some(Refused::Conflict(_)) => Response::error(409, "operation_conflict"),
+        None => {
+            let message = error.to_string();
+            if message.contains("owner") || message.contains("authentication") {
+                Response::error(403, "owner_required")
+            } else {
+                Response::error(500, "operation_failed")
+            }
+        }
     }
 }
 impl<P: Parent + 'static, D: Delivery + 'static> Backend for Api<P, D> {

@@ -118,7 +118,7 @@ pub async fn probe(
     workspace: &crate::config::registry::Workspace,
     timeout: std::time::Duration,
 ) -> anyhow::Result<bool> {
-    use crate::workers::jsonl::{Launcher, SystemLauncher};
+    use crate::workers::launcher::{Launcher, SystemLauncher};
     if target(config, &machine.name, &workspace.policy).is_none() {
         return Ok(true);
     }
