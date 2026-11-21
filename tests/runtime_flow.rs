@@ -1659,6 +1659,11 @@ async fn ready_worker_artifacts_are_ordered_after_report_and_linked_to_answer_de
     {
         let calls = h.sink.calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
+        assert!(calls[1].post.text.contains("Could not collect missing.md"));
+        assert!(calls[1]
+            .post
+            .text
+            .contains("Files queued for upload: checks.md."));
         assert_eq!(calls[2].post.filename, "checks.md");
         assert_eq!(
             calls[2].post.blob.as_deref(),
@@ -1674,6 +1679,180 @@ async fn ready_worker_artifacts_are_ordered_after_report_and_linked_to_answer_de
         h.scalar("SELECT CAST(count(*) AS TEXT) FROM artifacts")
             .await,
         "2"
+    );
+    h.runtime.pass().await.unwrap();
+    let calls = h.sink.calls.lock().unwrap().clone();
+    assert_eq!(calls.iter().filter(|p| p.post.kind == "upload").count(), 1);
+    assert!(calls.iter().any(|p| p.post.kind == "notice"
+        && p.post
+            .text
+            .contains("Slack did not confirm the upload of checks.md")));
+    h.runtime.close().await.unwrap();
+}
+
+fn file_outcome() -> Outcome {
+    Outcome {
+        result: serde_json::from_value(
+            json!({"status":"done","summary":"Ready","report":"File ready.",
+            "artifacts":[{"path":"/work/checks.md","kind":"md"}]}),
+        )
+        .unwrap(),
+        backend_session_id: "worker-session".into(),
+    }
+}
+
+#[tokio::test]
+async fn silent_group_result_still_queues_the_ready_file_once() {
+    let delegation = json!({"delegations":[
+        {"brief":"Return the file","worker_id":"owned","deliverable":"markdown"},
+        {"brief":"Other work","worker_id":"owned"}
+    ]});
+    let h = Harness::with_io(vec![delegation, json!({})], false, Arc::new(CollectedFiles)).await;
+    h.worker.outcomes.lock().unwrap().extend([
+        Ok(file_outcome()),
+        Err(WorkerFailure {
+            kind: Failure::Interrupted,
+            code: "worker_interrupted".into(),
+            backend_session_id: String::new(),
+        }),
+    ]);
+    h.intake(false).await;
+    idle_control_worker(&h).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 2).await;
+    for _ in 0..2 {
+        h.runtime.pass().await.unwrap();
+    }
+    let uploads: Vec<_> = h
+        .sink
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p.post.kind == "upload")
+        .cloned()
+        .collect();
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(
+        uploads[0].post.blob.as_deref(),
+        Some(b"verified artifact bytes".as_slice())
+    );
+    assert!(uploads[0].post.after.is_empty());
+    assert_eq!(
+        h.scalar("SELECT CAST(sum(reported) AS TEXT) FROM jobs")
+            .await,
+        "2"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn report_files_stay_private_and_local_redelivery_requires_verified_bytes() {
+    let h = Harness::with_io(vec![delegate(), json!({})], false, Arc::new(CollectedFiles)).await;
+    h.worker
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Ok(file_outcome()));
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+    let digest = format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(b"verified artifact bytes")
+    );
+    instruction(&h,json!({"delegations":[{"brief":format!("Resend saved file {digest}\nchecks.md"),"machine":"local","workspace":"project","deliverable":"markdown","ephemeral":true}]})).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(0, 2).await;
+    h.parent.responses.lock().unwrap().push_back(json!({}));
+    h.runtime.pass().await.unwrap();
+    {
+        let calls = h.sink.calls.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|p| p.post.text.contains("text-report job")));
+        assert!(calls
+            .iter()
+            .any(|p| p.post.text.contains("saved_file_not_verified")));
+        assert!(!calls.iter().any(|p| p.post.kind == "upload"));
+    }
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "2"
+    );
+    h.runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn remote_startup_failure_recovers_a_verified_file_once_on_a_local_worker() {
+    use sha2::{Digest, Sha256};
+    let mut initial = delegate();
+    initial["delegations"][0]["deliverable"] = json!("markdown");
+    let h = Harness::with_machines(
+        vec![initial],
+        false,
+        Arc::new(CollectedFiles),
+        r#"
+[machines.remote]
+transport="ssh"
+host="example"
+backends=["codex"]
+[machines.remote.workspaces]
+other="/work"
+"#,
+        None,
+    )
+    .await;
+    h.worker
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Ok(file_outcome()));
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 1).await;
+    h.runtime.pass().await.unwrap();
+
+    let digest = format!("{:x}", Sha256::digest(b"verified artifact bytes"));
+    instruction(
+        &h,
+        json!({"delegations":[{"brief":format!("Resend saved file {digest}\nchecks.md"),
+        "deliverable":"markdown","machine":"remote","workspace":"other","ephemeral":true}]}),
+    )
+    .await;
+    h.worker
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(WorkerFailure {
+            kind: Failure::Refusal,
+            code: "worker_github_mcp_unavailable".into(),
+            backend_session_id: String::new(),
+        }));
+    h.runtime.pass().await.unwrap();
+    h.finish(1, 2).await;
+    h.runtime.pass().await.unwrap();
+    h.finish(0, 3).await;
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.scalar("SELECT w.machine || ':' || j.status FROM jobs j JOIN workers w ON w.id=j.worker_id ORDER BY j.rowid DESC LIMIT 1").await,"local:done");
+    {
+        let calls = h.sink.calls.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|c| c.post.text.contains("worker_github_mcp_unavailable")
+                && c.post.text.contains("local worker")));
+        let uploads: Vec<_> = calls.iter().filter(|c| c.post.kind == "upload").collect();
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[1].post.filename, "checks.md");
+        assert_eq!(uploads[1].post.blob, uploads[0].post.blob);
+    }
+    assert_eq!(
+        h.worker.calls.lock().unwrap().len(),
+        2,
+        "local delivery used saved bytes"
     );
     h.runtime.close().await.unwrap();
 }

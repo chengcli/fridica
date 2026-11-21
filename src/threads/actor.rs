@@ -393,6 +393,13 @@ impl<P: Parent> Actor<P> {
         } else {
             None
         };
+        if result.is_none() && worker_result {
+            if let Some(scope) =
+                delegation_scope(self.config.as_deref(), &request).filter(|s| s.allowed)
+            {
+                result = super::results::recover_local(&self.store, scope, &mut request).await?;
+            }
+        }
         if result.is_none() {
             self.attach_load(&mut request).await?;
         }
@@ -867,7 +874,12 @@ async fn commit(
         // Only the stand-in for a failed parent turn reaches here unsent: it
         // settles the thread's status without posting anything.
         if let Some(reply)=decision.reply.as_ref().filter(|r|!r.send) {status=reply.status.as_str().into();}
-        if let Some(reply)=decision.reply.as_mut().filter(|r|r.send) {super::replies::render(u,&request,&owner,reply,reply_limit)?;}
+        let files = super::results::Files::load(u, &request, &session)?;
+        let mut posted = None;
+        if let Some(reply) = decision.reply.as_mut().filter(|r| r.send) {
+            files.describe(reply);
+            super::replies::render(u,&request,&owner,reply,reply_limit)?;
+        }
         if let Some(reply)=decision.reply.as_ref().filter(|r|r.send) {
             let candidate=crate::core::policy::reply_hash(&reply.text);
             let explicit=repeat["allowed"]==true;
@@ -898,7 +910,7 @@ async fn commit(
                 if request.session["github_reviews"] == true { meta["github_reviews"] = json!(true); }
                 else if !review.is_empty() {meta["review"]=json!(review);}
                 u.label_post(post,&meta.to_string(),request.trigger["message"]["event_id"].as_str().or_else(||request.trigger["origin"]["event_id"].as_str()).or_else(||request.trigger["refused"]["trigger_event"].as_str()).unwrap_or(""),is_result)?;
-                super::results::attachments(u, &request, reply, &session, id, now)?;
+                posted = Some(reply);
                 if cooldown.is_some() {
                     u.mark_unsolicited(request.session["workspace"].as_str(),request.session["channel"].as_str(),now)?;
                 }
@@ -906,6 +918,11 @@ async fn commit(
                 waiting=if matches!(reply.status,ReplyStatus::Waiting) {waiting+1}else{0};
                 status=reply.status.as_str().into();
             }
+        }
+        // A parent-error stand-in is an explicit hold on publication. A
+        // successful turn with no text still delivers its approved files.
+        if decision.reply.as_ref().is_none_or(|r| r.send) {
+            files.queue(u,&request,posted,&session,id,now)?;
         }
         u.add_workers(&work.workers,now)?;
         u.queue_jobs(&work.jobs,now)?;
