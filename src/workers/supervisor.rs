@@ -804,6 +804,35 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
     let in_backend = AtomicBool::new(false);
     let mut operation = Box::pin(async {
         t.factory.admit(t.config.clone(), t.spec.clone()).await?;
+        // This reserved file-only job needs neither a backend session nor
+        // access to the original workspace. Admission and cancellation still
+        // use the configured local worker and the usual durable job lifecycle.
+        if t.spec.machine.transport == "local" && t.job.deliverable == "markdown" {
+            if let Some((name, digest)) = super::redelivery::requested(&t.job.brief) {
+                let (session, name, digest) =
+                    (t.job.session_id.clone(), name.to_owned(), digest.to_owned());
+                let cached = t
+                    .store
+                    .transact(move |u| {
+                        super::redelivery::saved(u, &session, &name, &digest)?
+                            .map(|(reference, bytes)| {
+                                super::redelivery::outcome(reference, bytes, &digest)
+                            })
+                            .transpose()
+                    })
+                    .await
+                    .map_err(|_| WorkerFailure {
+                        kind: Failure::Execution,
+                        code: "saved_file_read_failed".into(),
+                        backend_session_id: String::new(),
+                    })?;
+                return cached.ok_or_else(|| WorkerFailure {
+                    kind: Failure::Refusal,
+                    code: "saved_file_not_verified".into(),
+                    backend_session_id: String::new(),
+                });
+            }
+        }
         t.factory.prepare(t.spec.clone()).await;
         let prepared = t.io.prepare(t.spec.clone(), t.job.clone()).await?;
         let resume = fresh_unless_same_instructions(&t, resume).await?;

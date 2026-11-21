@@ -7,5 +7,6 @@ pub mod instructions;
 pub mod jsonl;
 pub mod progress;
 pub mod protocol;
+pub(crate) mod redelivery;
 pub use fridica_core::result;
 pub mod supervisor;

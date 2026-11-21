@@ -267,7 +267,14 @@ impl<D: Delivery> Dispatcher<D> {
                                 })?;
                             }
                         }
-                        u.finish_delivery(&post, &result, &owner, now)
+                        let outcome = u.finish_delivery(&post, &result, &owner, now)?;
+                        if refused.is_empty()
+                            && p.kind == "upload"
+                            && outcome == PostOutcome::Unsent
+                        {
+                            upload_notice(u, &post, now)?;
+                        }
+                        Ok(outcome)
                     })
                     .await?;
                 if outcome == PostOutcome::Stale {
@@ -285,6 +292,43 @@ impl<D: Delivery> Dispatcher<D> {
         Ok(sent)
     }
 }
+/// Read the committed disposition: a rate limit can leave the upload either
+/// pending or permanently failed. Never resend bytes on an uncertain result.
+fn upload_notice(
+    u: &mut dyn fridica_core::store::Unit,
+    claim: &ClaimedPost,
+    now: f64,
+) -> Result<()> {
+    let Some(post) = u
+        .thread_posts(&claim.post.session_id)?
+        .into_iter()
+        .find(|p| p.id == claim.id)
+    else {
+        return Ok(());
+    };
+    let text = match post.state.as_str() {
+        "ambiguous" => format!("Slack did not confirm the upload of {} ({}). Check the thread before requesting another copy.",post.filename,post.error),
+        "failed" => format!("The upload of {} failed ({}).",post.filename,post.error),
+        _ => return Ok(()),
+    };
+    u.queue_post(
+        &crate::core::delivery::Post {
+            idem_key: format!("upload-notice:{}:{}", claim.id, claim.attempt),
+            session_id: post.session_id,
+            channel: post.channel,
+            thread_ts: post.thread_ts,
+            kind: "notice".into(),
+            text,
+            meta: None,
+            filename: String::new(),
+            blob: None,
+            after: String::new(),
+        },
+        now,
+    )?;
+    Ok(())
+}
+
 /// The text a post would publish: its message, its file name and, for an
 /// upload of text, its contents.
 fn check(post: &ClaimedPost, rules: &DenyList) -> Vec<String> {

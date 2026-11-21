@@ -705,8 +705,12 @@ Alice:   can you fix snowy and rerun?
   questions pause the thread.
 - **Results.** Delegations made in one turn form a group. The parent writes one
   reply when all of them finish, and says when workers disagree. A single finished
-  job's `report` is posted directly with no second parent call. Figures and PDFs
-  a worker lists are uploaded after the reply. Long replies keep an executive
+  job's `report` is posted directly with no second parent call. Ready files from `markdown` and
+  `figures_pdf` jobs are queued even when the group finishes without a text
+  reply. A text report keeps its worker files private. If a remote worker
+  fails its GitHub or isolation startup check while resending a file, a
+  configured local worker can return the saved bytes from the same thread.
+  It checks both the filename and SHA-256 before queuing the upload. Long replies keep an executive
   summary in the thread and attach the rest as a Markdown file.
 - **GitHub reviews.** Workers publish authorized reviews and code changes directly
   through the bundled GitHub MCP integration. Slack summarizes the confirmed
