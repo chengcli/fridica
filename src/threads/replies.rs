@@ -79,10 +79,10 @@ pub(super) fn render(
         reply.details.clear();
     }
     if request.session["github_reviews"] == true {
-        reply.text = super::dispatcher::github_summary(&reply.text);
-        reply.details = super::dispatcher::github_summary(&reply.details);
+        reply.text = super::verdict::github_summary(&reply.text);
+        reply.details = super::verdict::github_summary(&reply.details);
     } else {
-        reply.text = super::dispatcher::hoist(&reply.text);
+        reply.text = super::verdict::hoist(&reply.text);
     }
     (reply.text, reply.details) = crate::core::render::reply(
         &reply.text,

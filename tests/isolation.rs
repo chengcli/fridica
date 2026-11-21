@@ -375,7 +375,7 @@ os.execve = replace_before_exec
 #[tokio::test]
 async fn system_launcher_applies_isolation_only_to_confined_local_workers() {
     use fridica::workers::{
-        jsonl::{Launcher, SystemLauncher},
+        launcher::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     };
     let f = Fixture::new();
@@ -414,7 +414,7 @@ async fn system_launcher_applies_isolation_only_to_confined_local_workers() {
 #[tokio::test]
 async fn owner_files_stay_visible_while_mcp_servers_are_disabled_in_the_local_launcher() {
     use fridica::workers::{
-        jsonl::{Launcher, SystemLauncher},
+        launcher::{Launcher, SystemLauncher},
         protocol::WorkerSpec,
     };
     let f = Fixture::new();

@@ -29,7 +29,8 @@ async function api(method, path, body) {
   const response = await fetch("/api" + path, options);
   if (response.status === 401) { showUnlock(); throw new Error("locked"); }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || response.statusText);
+  // An answered request carries its status: the daemon is there and refused.
+  if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { status: response.status });
   return data;
 }
 
@@ -887,7 +888,14 @@ async function refresh(force = false) {
     render();
     if (view === "overview" && (state.historyOpen || state.graphMode === "conversation") && state.replayIndex === null) await loadWorkDetail(true);
   } catch (error) {
-    if (error.message !== "locked") {
+    if (error.status === 404 && state.view === "threads" && state.thread) {
+      // The open thread is gone (archived or cleaned): back to the list.
+      state.thread = null;
+      state.pending = true;
+    } else if (error.status) {
+      document.getElementById("view").replaceChildren(page("Request failed", "Fridica answered with an error."),
+        empty(error.message), button("Retry", () => refresh(true), "button"));
+    } else if (error.message !== "locked") {
       document.getElementById("status").textContent = "Offline";
       document.getElementById("status").className = "connection bad";
       document.getElementById("last-sync").textContent = state.lastSync ?

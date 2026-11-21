@@ -158,16 +158,15 @@ impl Harness {
     }
     fn actor(&self) -> Actor<CliParent> {
         Actor {
-            config: Some(self.config.clone()),
-            store: Arc::new(self.store.clone()),
-            parent: self.parent.clone(),
-            clock: self.clock.clone(),
-            ids: Arc::new(SequenceIds::default()),
-            owner: "UOWNER".into(),
-            limits: self.config.attention.clone(),
-            observe_only: false,
             parent_timeout: Duration::from_secs(5),
-            machine_load: None,
+            ..Actor::configured(
+                self.config.clone(),
+                Arc::new(self.store.clone()),
+                self.parent.clone(),
+                self.clock.clone(),
+                Arc::new(SequenceIds::default()),
+            )
+            .unwrap()
         }
     }
     async fn intake(&self, n: usize, text: &str) -> String {
@@ -937,22 +936,13 @@ async fn context_reads_are_skipped_for_triage_observe_and_owner_pause() {
         let downloads = Arc::new(AttachmentDownloads::default());
         let reader = Arc::new(LinkedReads::default());
         let github = Arc::new(GithubReads::default());
-        let base = h.actor();
         let actor = Actor {
-            config: base.config,
-            store: base.store,
-            parent: Arc::new(
+            observe_only: mode == "observe",
+            ..h.actor().with_parent(Arc::new(
                 attachment_parent(&h, downloads.clone())
                     .with_links(reader.clone())
                     .with_github(github.clone()),
-            ),
-            clock: base.clock,
-            ids: base.ids,
-            owner: base.owner,
-            limits: base.limits,
-            observe_only: mode == "observe",
-            parent_timeout: base.parent_timeout,
-            machine_load: None,
+            ))
         };
         let session = h
             .intake(
@@ -1041,19 +1031,9 @@ async fn attachment_history_uses_the_full_sixty_message_python_window() {
         tx.commit()?;Ok(())
     }).await.unwrap();
     let downloads = Arc::new(AttachmentDownloads::default());
-    let base = h.actor();
-    let actor = Actor {
-        config: base.config,
-        store: base.store,
-        parent: Arc::new(attachment_parent(&h, downloads.clone())),
-        clock: base.clock,
-        ids: base.ids,
-        owner: base.owner,
-        limits: base.limits,
-        observe_only: false,
-        parent_timeout: base.parent_timeout,
-        machine_load: None,
-    };
+    let actor = h
+        .actor()
+        .with_parent(Arc::new(attachment_parent(&h, downloads.clone())));
     assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
     assert_eq!(downloads.calls.lock().unwrap().len(), 1);
     let data = last_prompt(&h);
@@ -1122,16 +1102,8 @@ async fn slow_optional_files_do_not_consume_the_models_response_deadline() {
         h.clock.clone(),
     ));
     let actor = Actor {
-        config: base.config,
-        store: base.store,
-        parent,
-        clock: base.clock,
-        ids: base.ids,
-        owner: base.owner,
-        limits: base.limits,
-        observe_only: false,
         parent_timeout: Duration::from_millis(100),
-        machine_load: None,
+        ..base.with_parent(parent)
     };
     assert_eq!(actor.step(session).await.unwrap(), Step::Committed);
     assert_eq!(h.scalar("SELECT state FROM outbox").await, "pending");
@@ -1414,19 +1386,9 @@ async fn cancelling_github_preparation_preserves_unfinished_context_intent() {
 async fn clean_restore_followup_does_not_download_or_render_old_attachments() {
     let h = Harness::new("claude", FAKE, "ok", 5.).await;
     let downloads = Arc::new(AttachmentDownloads::default());
-    let base = h.actor();
-    let actor = Actor {
-        config: base.config,
-        store: base.store,
-        parent: Arc::new(attachment_parent(&h, downloads.clone())),
-        clock: base.clock,
-        ids: base.ids,
-        owner: base.owner,
-        limits: base.limits,
-        observe_only: false,
-        parent_timeout: base.parent_timeout,
-        machine_load: None,
-    };
+    let actor = h
+        .actor()
+        .with_parent(Arc::new(attachment_parent(&h, downloads.clone())));
     h.intake(1, "<@UOWNER> review the old diff").await;
     let attached = attachment_message("e1", "F1", "old.diff", "UALICE")["attachments"].to_string();
     h.store.call(move|c|{c.execute("UPDATE messages SET attachments_json=?,files_json='[\"old.diff\"]' WHERE event_id='e1'",[attached])?;Ok(())}).await.unwrap();

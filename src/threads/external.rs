@@ -323,16 +323,9 @@ pub async fn post(
             let meta = json!({"owner":config.owner.slack_user,"session":session,"turn":turn,
                 "status":request.status,"kind":request.kind,"worker":"","v":2});
             let post = crate::core::delivery::Post {
-                idem_key: key.clone(),
-                session_id: session.clone(),
-                kind: kind.into(),
-                channel: channel.clone(),
-                thread_ts: thread_ts.clone(),
                 text: request.text.clone(),
                 meta: Some(meta),
-                filename: String::new(),
-                blob: None,
-                after: String::new(),
+                ..super::posts::post(key.clone(), &session, kind, &channel, thread_ts.clone())
             };
             let id = match u.queue_post(&post, now) {
                 Ok(id) => id,
@@ -344,16 +337,16 @@ pub async fn post(
             if !request.details.is_empty() {
                 u.queue_post(
                     &crate::core::delivery::Post {
-                        idem_key: format!("{key}:details"),
-                        session_id: session.clone(),
-                        kind: "upload".into(),
-                        channel: channel.clone(),
-                        thread_ts,
-                        text: String::new(),
-                        meta: None,
                         filename: format!("details-{id}.md"),
                         blob: Some(request.details.as_bytes().to_vec()),
-                        after: key,
+                        after: key.clone(),
+                        ..super::posts::post(
+                            format!("{key}:details"),
+                            &session,
+                            "upload",
+                            &channel,
+                            thread_ts,
+                        )
                     },
                     now,
                 )?;

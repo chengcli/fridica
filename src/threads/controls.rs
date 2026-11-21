@@ -1,5 +1,6 @@
 //! Trusted callers supply authority derived from their authenticated capability,
 //! never from a request body's `actor` field. Effects and audit commit together.
+use super::refusal::Refused;
 use crate::core::{Authority, ThreadControl};
 use anyhow::{bail, Result};
 use fridica_core::store::{ControlState, ResumePoint, Store as Backend, Unit};
@@ -34,7 +35,9 @@ pub async fn apply(
         bail!("invalid control time");
     }
     if actor != Authority::Owner {
-        bail!("thread control requires an authenticated capability");
+        bail!(Refused::Forbidden(
+            "thread control requires an authenticated capability"
+        ));
     }
     store
         .transact(move |u| {
@@ -55,7 +58,9 @@ pub async fn instruct(
     now: f64,
 ) -> Result<i64> {
     if actor != Authority::Owner || !now.is_finite() {
-        bail!("owner instruction authentication required");
+        bail!(Refused::Forbidden(
+            "owner instruction authentication required"
+        ));
     }
     let text = text.trim().to_owned();
     if !(1..=4000).contains(&text.chars().count())
@@ -71,7 +76,9 @@ pub async fn instruct(
             let existing = u.owner_instruction(&session, &client_id)?;
             if let Some((id, prior)) = existing {
                 if prior != text {
-                    bail!("instruction ID reused with different text");
+                    bail!(Refused::Conflict(
+                        "instruction ID reused with different text"
+                    ));
                 }
                 return Ok(id);
             }
@@ -109,7 +116,9 @@ fn apply_tx(
     let (state, name, detail) = match &action {
         Control::Pause { reason } => {
             if matches!(control.as_str(), "closed" | "archived" | "cleaned") {
-                bail!("closed threads require explicit restoration");
+                bail!(Refused::Conflict(
+                    "closed threads require explicit restoration"
+                ));
             }
             if reason.trim().is_empty() {
                 bail!("pause requires a reason");
@@ -123,7 +132,7 @@ fn apply_tx(
                 }
             ) && actor != Authority::Owner
             {
-                bail!("owner pause is protected");
+                bail!(Refused::Forbidden("owner pause is protected"));
             }
             (
                 "paused",
@@ -137,13 +146,19 @@ fn apply_tx(
         }
         Control::Resume | Control::Instruct { .. } => {
             if control == "paused" && !prior.can_resume(&actor) {
-                bail!("only the owner may resume an owner-paused thread");
+                bail!(Refused::Forbidden(
+                    "only the owner may resume an owner-paused thread"
+                ));
             }
             if matches!(action, Control::Instruct { .. }) && actor != Authority::Owner {
-                bail!("owner instructions require owner authentication");
+                bail!(Refused::Forbidden(
+                    "owner instructions require owner authentication"
+                ));
             }
             if matches!(control.as_str(), "closed" | "archived" | "cleaned") {
-                bail!("closed threads require explicit restoration");
+                bail!(Refused::Conflict(
+                    "closed threads require explicit restoration"
+                ));
             }
             (
                 "active",
@@ -157,13 +172,17 @@ fn apply_tx(
         }
         Control::Retry => {
             if control != "active" {
-                bail!("only an active thread can retry its last decision");
+                bail!(Refused::Conflict(
+                    "only an active thread can retry its last decision"
+                ));
             }
             ("active", "retry", ThreadControl::Active)
         }
         Control::Restore => {
             if actor != Authority::Owner {
-                bail!("restoration requires owner authentication");
+                bail!(Refused::Forbidden(
+                    "restoration requires owner authentication"
+                ));
             }
             let stopping = u.worker_stop_pending(&session)?;
             // Include older terminal threads which predate durable stop intents.
@@ -172,13 +191,15 @@ fn apply_tx(
                 || u.worker_control_pending(&session)?
                 || (matches!(control.as_str(), "closed" | "archived" | "cleaned") && live)
             {
-                bail!("thread worker cleanup is pending");
+                bail!(Refused::CleanupPending);
             }
             ("active", "restore", ThreadControl::Active)
         }
         Control::Close | Control::Archive | Control::Clean => {
             if actor != Authority::Owner {
-                bail!("only the owner may close, archive or clean a thread");
+                bail!(Refused::Forbidden(
+                    "only the owner may close, archive or clean a thread"
+                ));
             }
             if matches!(action, Control::Close) {
                 ("closed", "close", ThreadControl::Closed)
@@ -206,7 +227,7 @@ fn apply_tx(
         u.restart_turns(&session)?;
     } else if matches!(action, Control::Retry) && u.retry_failed_turn(&session)?.is_none() {
         // Nothing changes: the unit of work is discarded.
-        bail!("nothing to retry");
+        bail!(Refused::NothingToRetry);
     } else if matches!(action, Control::Instruct { .. }) {
         u.unblock(&session)?;
     }

@@ -2,7 +2,7 @@
 //! path and verified commit; they acquire no network or push capability.
 use super::{
     inputs,
-    protocol::{JobIo, WorkerSpec},
+    protocol::{failure, JobIo, WorkerSpec},
 };
 use crate::{
     config::registry::valid_fetch_ref,
@@ -15,13 +15,6 @@ use fridica_slack::files::Downloader;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-fn failure(kind: Failure, code: &str) -> WorkerFailure {
-    WorkerFailure {
-        kind,
-        code: code.into(),
-        backend_session_id: String::new(),
-    }
-}
 pub fn request(spec: &WorkerSpec, job: &Job) -> Result<Request, WorkerFailure> {
     let policy = &spec.workspace.policy;
     if policy.validate().is_err()

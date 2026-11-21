@@ -83,16 +83,12 @@ impl Isolation {
         {
             bail!("invalid Codex startup settings request");
         }
-        let mut argv = vec![
-            "/usr/bin/python3".into(),
-            "-I".into(),
-            "-S".into(),
-            "-c".into(),
+        let mut argv = crate::exec::helper::argv(vec![
             BOOTSTRAP.into(),
             MCP_STARTUP.into(),
             json!({"home":home,"workspace":cwd,"create":create,"excluded_env":excluded_env})
                 .to_string(),
-        ];
+        ]);
         argv.extend(command);
         Ok(argv)
     }
@@ -110,16 +106,11 @@ impl Isolation {
         if !["codex", "claude"].contains(&backend) {
             bail!("unknown readiness backend");
         }
-        Ok(vec![
-            "/usr/bin/python3".into(),
-            "-I".into(),
-            "-S".into(),
-            "-c".into(),
-            BOOTSTRAP.into(),
+        Ok(crate::exec::helper::argv(vec![BOOTSTRAP.into(),
             READINESS.into(),
             json!({"home":home,"workspace":workspace,"backend":backend,"parent":parent,"excluded_env":excluded_env})
                 .to_string(),
-        ])
+        ]))
     }
 
     pub fn launch_remote(
@@ -201,17 +192,12 @@ impl Isolation {
             bail!("confined SSH workspace must be an absolute or home-relative path");
         }
         shell::validate(&command)?;
-        let mut argv = vec![
-            "/usr/bin/python3".into(),
-            "-I".into(),
-            "-S".into(),
-            "-c".into(),
-            BOOTSTRAP.into(),
+        let mut argv = crate::exec::helper::argv(vec![BOOTSTRAP.into(),
             HELPER.into(),
             json!({"home":null,"workspace":cwd,"private":[],
                 "create":create,"preflight":preflight,"probe_backend":probe_backend,"excluded_env":transport.excluded_env})
             .to_string(),
-        ];
+        ]);
         argv.extend(command);
         // Keep the SSH watchdog and its stdin channel. Only the fixed helper
         // creates/opens the workspace; no repository cwd or path-based mkdir.
@@ -276,16 +262,11 @@ impl Isolation {
             &transport.machine.resources.environment(),
         );
         env.insert("HOME".into(), transport.home.clone().into_os_string());
-        let mut argv = vec![
-            "/usr/bin/python3".into(),
-            "-I".into(),
-            "-S".into(),
-            "-c".into(),
-            BOOTSTRAP.into(),
+        let mut argv = crate::exec::helper::argv(vec![BOOTSTRAP.into(),
             HELPER.into(),
             json!({"home":transport.home,"workspace":cwd,"private":self.private,"create":create,"preflight":preflight,"probe_backend":probe_backend})
                 .to_string(),
-        ];
+        ]);
         argv.extend(command);
         // No repository cwd, PYTHONPATH, shell expansion or repository-controlled
         // helper executable participates in preparing the mount namespace.

@@ -41,11 +41,7 @@ impl Capability {
             return Err(Failure::Configuration);
         }
         Ok(Self {
-            secret: format!(
-                "{}{}",
-                uuid::Uuid::new_v4().simple(),
-                uuid::Uuid::new_v4().simple()
-            ),
+            secret: super::secret(),
             authority,
         })
     }
@@ -93,7 +89,7 @@ impl Access {
                     .to_str()
                     .ok()?
                     .strip_prefix("Bearer ")?;
-                if token.len() != 64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
+                if !super::is_secret(token) {
                     return None;
                 }
                 let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();

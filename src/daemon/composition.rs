@@ -16,9 +16,10 @@ use crate::{
     threads::runtime::{Adapters, ParentFactory, Runtime},
     workers::{
         artifacts::SystemJobIo,
+        backend::{self, BackendFactory, StoreWireRecorder},
         fetch::ScopedJobIo,
         instructions::OwnerInstructions,
-        jsonl::{self, BackendFactory, Launcher, StoreWireRecorder, SystemLauncher},
+        launcher::{Launcher, SystemLauncher},
         protocol::{JobIo, NoJobIo},
     },
 };
@@ -47,7 +48,7 @@ pub struct Execution {
     pub fetcher: Arc<dyn Fetcher>,
     pub artifacts: Arc<dyn JobIo>,
     pub github: Option<Arc<dyn client::Api>>,
-    pub workers: jsonl::Options,
+    pub workers: backend::Options,
     /// Placement load probe; `[placement] probe = false` or None disables it.
     pub machine_load: Option<Arc<crate::machines::probe::Monitor>>,
 }
@@ -115,7 +116,7 @@ impl Execution {
                 environment: host.environment,
             },
             github,
-            workers: jsonl::Options::default(),
+            workers: backend::Options::default(),
         })
     }
 }

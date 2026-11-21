@@ -42,6 +42,14 @@ pub struct RunRequest {
     #[serde(default)]
     pub fork_from: String,
 }
+/// A failure of the daemon's own making: it names no backend session.
+pub(crate) fn failure(kind: Failure, code: &str) -> WorkerFailure {
+    WorkerFailure {
+        kind,
+        code: code.into(),
+        backend_session_id: String::new(),
+    }
+}
 pub trait ApprovalHandler: Send + Sync {
     /// Called before supervisor configuration changes become visible.
     fn reconfigure(
@@ -129,13 +137,7 @@ pub trait JobIo: Send + Sync {
         _job: Job,
         _inputs: Vec<super::inputs::Input>,
     ) -> AdapterFuture<'_, Result<Vec<super::inputs::Placed>, WorkerFailure>> {
-        Box::pin(async {
-            Err(WorkerFailure {
-                kind: Failure::Refusal,
-                code: "files_unsupported".into(),
-                backend_session_id: String::new(),
-            })
-        })
+        Box::pin(async { Err(failure(Failure::Refusal, "files_unsupported")) })
     }
     /// The job attempt's progress file (`file`, in the slot workspace) while
     /// it runs (#105), at most `PROGRESS_LIMIT` bytes. `None` when there is
@@ -163,11 +165,7 @@ impl JobIo for NoJobIo {
             if job.fetch_repo.is_empty() {
                 Ok(String::new())
             } else {
-                Err(WorkerFailure {
-                    kind: Failure::Refusal,
-                    code: "fetch_adapter_unavailable".into(),
-                    backend_session_id: String::new(),
-                })
+                Err(failure(Failure::Refusal, "fetch_adapter_unavailable"))
             }
         })
     }

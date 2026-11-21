@@ -9,6 +9,18 @@ use crate::core::{delivery::AdapterFuture, Authority};
 use serde_json::{json, Value};
 pub const BODY_LIMIT: usize = 64 * 1024;
 pub const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
+/// A fresh 256-bit secret, as 64 hex characters.
+pub fn secret() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+/// Whether `value` has the form of a [`secret`].
+pub fn is_secret(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit())
+}
 #[derive(Clone)]
 pub struct Request {
     pub method: String,

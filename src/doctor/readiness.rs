@@ -3,17 +3,11 @@
 use super::{isolation_backend, Check};
 use crate::{
     config::{registry::Machine, Config, LoadContext},
-    exec::{
-        isolation::{self as helpers, Isolation},
-        local::LocalTransport,
-        ssh::{LaunchOptions, SshTransport},
-    },
+    exec::isolation::{self as helpers, Isolation},
 };
 use anyhow::{bail, Result};
 use serde::Serialize;
-use std::{
-    collections::BTreeMap, ffi::OsString, os::unix::fs::PermissionsExt, path::Path, time::Duration,
-};
+use std::{collections::BTreeMap, ffi::OsString, path::Path, time::Duration};
 use tokio::sync::watch;
 
 /// Refusals are independent facets, every one of them reported, so a single
@@ -192,10 +186,7 @@ async fn probe(
     parent: bool,
     timeout: Duration,
 ) -> Vec<Check> {
-    let excluded = vec![
-        config.slack.app_token_env.clone(),
-        config.slack.user_token_env.clone(),
-    ];
+    let excluded: Vec<String> = config.secret_env().map(str::to_owned).into();
     let args = match boundary.readiness(
         (machine.transport == "local").then_some(context.home.as_path()),
         workspace,
@@ -206,46 +197,17 @@ async fn probe(
         Ok(args) => args,
         Err(_) => return vec![Check::LaunchConfigurationRefused],
     };
-    let control;
-    let launch = if machine.transport == "local" {
-        LocalTransport {
-            machine: machine.clone(),
-            home: context.home.clone(),
-            excluded_env: excluded,
-        }
-        .launch(
-            args,
-            Path::new("/"),
-            environment,
-            &BTreeMap::new(),
-            None,
-            false,
-        )
-    } else {
-        control = match tempfile::Builder::new()
-            .prefix("fridica-readiness-")
-            .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
-        {
-            Ok(control) => control,
-            Err(_) => return vec![Check::LaunchConfigurationRefused],
-        };
-        let mut launch = SshTransport {
-            machine: machine.clone(),
-            excluded_env: excluded,
-            control_directory: control.path().to_owned(),
-        }
-        .launch(
-            args,
-            "/",
-            environment,
-            &BTreeMap::new(),
-            LaunchOptions::default(),
-        );
-        if let Ok(launch) = &mut launch {
-            helpers::read_only_ssh_probe(launch);
-        }
-        launch
+    // The control directory is held until the probe finishes.
+    let (launch, _control) = match crate::exec::probe::launch(
+        machine,
+        &context.home,
+        excluded,
+        environment,
+        args,
+        crate::exec::probe::Control::ReadOnly("fridica-readiness-"),
+    ) {
+        Ok((launch, control)) => (Ok(launch), control),
+        Err(error) => (Err(error), None),
     };
     let launch = launch.and_then(|launch| {
         crate::exec::python::activate(

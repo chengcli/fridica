@@ -1,6 +1,6 @@
 //! Claude stream-json driver settings for a worker; the protocol lives in
 //! `fridica_agent::claude`.
-use super::{jsonl::driver_spec, protocol::WorkerSpec};
+use super::{backend::driver_spec, protocol::WorkerSpec};
 use fridica_agent::Backend;
 use serde_json::Value;
 pub fn settings(spec: &WorkerSpec) -> Value {

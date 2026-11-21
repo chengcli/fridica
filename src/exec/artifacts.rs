@@ -26,15 +26,11 @@ impl SshTransport {
             bail!("invalid artifact read bounds");
         }
         let launch = self.launch(
-            vec![
-                "/usr/bin/python3".into(),
-                "-I".into(),
-                "-S".into(),
-                "-c".into(),
+            crate::exec::helper::argv(vec![
                 include_str!("isolation_bootstrap.py").into(),
                 HELPER.into(),
                 serde_json::json!({"path":path,"roots":roots,"limit":limit}).to_string(),
-            ],
+            ]),
             "/",
             environment,
             &BTreeMap::new(),

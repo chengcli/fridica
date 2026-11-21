@@ -3,7 +3,6 @@
 //! Confinement needs no inventory,
 //! so the `[isolation]` table has no settings left; it is accepted empty.
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::path::Path;
 
 /// Settings the `[isolation]` table once carried. A configuration that still
@@ -23,11 +22,6 @@ pub struct Settings {}
 impl Settings {
     pub fn is_empty(&self) -> bool {
         true
-    }
-    /// Configuration coverage only. This does not claim target reachability
-    /// or runtime isolation support.
-    pub fn summary(&self) -> Value {
-        json!({"runtime_checks":"not_run"})
     }
 }
 

@@ -86,16 +86,16 @@ impl Fixture {
     }
     fn actor(&self) -> Actor<Script> {
         Actor {
-            config: Some(self.config.clone()),
-            store: Arc::new(self.store.clone()),
-            parent: self.parent.clone(),
-            clock: self.clock.clone(),
-            ids: self.ids.clone(),
-            owner: "UOWNER".into(),
             limits: Default::default(),
-            observe_only: false,
             parent_timeout: Duration::from_secs(2),
-            machine_load: None,
+            ..Actor::configured(
+                self.config.clone(),
+                Arc::new(self.store.clone()),
+                self.parent.clone(),
+                self.clock.clone(),
+                self.ids.clone(),
+            )
+            .unwrap()
         }
     }
     async fn reopen(self) -> Self {

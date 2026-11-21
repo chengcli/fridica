@@ -34,10 +34,7 @@ impl Client {
         {
             return Err(Failure::UnsafeSocket);
         }
-        if token
-            .as_ref()
-            .is_some_and(|t| t.len() != 64 || !t.bytes().all(|c| c.is_ascii_hexdigit()))
-        {
+        if token.as_ref().is_some_and(|t| !super::is_secret(t)) {
             return Err(Failure::InvalidRequest);
         }
         let client = reqwest::Client::builder()

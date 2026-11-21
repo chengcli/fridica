@@ -13,7 +13,7 @@ pub const TEMPLATE: &str = include_str!("template.toml");
 pub const MANIFEST: &str = include_str!("../../assets/slack-manifest.yaml");
 pub fn path(requested: Option<&Path>, context: &LoadContext) -> Result<PathBuf> {
     loader::resolve_path(
-        requested.unwrap_or(&context.home.join(".config/fridica/config.toml")),
+        requested.unwrap_or(&context.default_config()),
         &std::env::current_dir()?,
         &context.home,
     )

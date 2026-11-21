@@ -2,7 +2,8 @@ use fridica::{
     core::{delivery::AdapterFuture, time::SequenceIds, worker::*},
     exec::{local::LocalTransport, process::Launch},
     workers::{
-        jsonl::{JsonlWorker, Launcher, Options, WireRecorder},
+        backend::{JsonlWorker, Options, WireRecorder},
+        launcher::Launcher,
         protocol::*,
     },
 };
@@ -622,8 +623,8 @@ async fn durable_supervisor_runs_real_protocol_adapters_and_records_wire_events(
         core::Authority,
         store::{work, Store},
         workers::{
+            backend::{BackendFactory, StoreWireRecorder},
             instructions::OwnerInstructions,
-            jsonl::{BackendFactory, StoreWireRecorder},
             supervisor::{Options as SupervisorOptions, Supervisor},
         },
     };

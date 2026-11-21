@@ -151,7 +151,7 @@ async fn remote_doctor_probes_target_home_through_watchdog_without_a_private_inv
     .await
     .unwrap();
     assert!(report.passed(), "{report:?}");
-    use fridica::workers::jsonl::{Launcher, SystemLauncher};
+    use fridica::workers::launcher::{Launcher, SystemLauncher};
     let launcher = SystemLauncher::from_config(
         &f.config,
         f.home.clone(),
@@ -193,7 +193,7 @@ fn worker_spec(f: &Fixture) -> fridica::workers::protocol::WorkerSpec {
 
 #[tokio::test]
 async fn automatic_admission_probes_without_provisioning_and_rechecks_changed_settings() {
-    use fridica::workers::jsonl::{Launcher, SystemLauncher};
+    use fridica::workers::launcher::{Launcher, SystemLauncher};
     use std::sync::Arc;
     let f = Fixture::new();
     let launcher = SystemLauncher::from_config(
@@ -231,7 +231,7 @@ async fn automatic_admission_probes_without_provisioning_and_rechecks_changed_se
 
 #[tokio::test]
 async fn immutable_launcher_rejects_private_path_changes() {
-    use fridica::workers::jsonl::{Launcher, SystemLauncher};
+    use fridica::workers::launcher::{Launcher, SystemLauncher};
     use std::sync::Arc;
     let f = Fixture::new();
     let launcher = SystemLauncher::from_config(

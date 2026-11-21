@@ -2,7 +2,7 @@
 //! to enable trusted repository fetches.
 use super::{
     inputs,
-    protocol::{JobIo, NoJobIo, WorkerSpec},
+    protocol::{failure, JobIo, NoJobIo, WorkerSpec},
 };
 use crate::exec::ssh::SshTransport;
 use crate::{
@@ -17,11 +17,7 @@ use std::{
 };
 
 fn placement_failed() -> WorkerFailure {
-    WorkerFailure {
-        kind: Failure::Execution,
-        code: "files_placement_failed".into(),
-        backend_session_id: String::new(),
-    }
+    failure(Failure::Execution, "files_placement_failed")
 }
 pub fn validate_reference(reference: &ArtifactRef) -> Result<(), &'static str> {
     let path = Path::new(&reference.path);
@@ -214,11 +210,7 @@ async fn collect(
     artifacts: Vec<ArtifactRef>,
 ) -> Result<Vec<CollectedArtifact>, WorkerFailure> {
     if artifacts.len() > 3 {
-        return Err(WorkerFailure {
-            kind: Failure::Refusal,
-            code: "artifact_count_limit".into(),
-            backend_session_id: String::new(),
-        });
+        return Err(failure(Failure::Refusal, "artifact_count_limit"));
     }
     let mut collected = vec![];
     for reference in artifacts {

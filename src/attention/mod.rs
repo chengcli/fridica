@@ -362,5 +362,3 @@ pub async fn signal_streak(
         .transact(move |u| u.open_signal(&format!("streak:{session}:{streak}"), &session, now))
         .await
 }
-
-pub use crate::core::worker::{retry_same_session, Failure};
