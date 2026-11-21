@@ -16,7 +16,7 @@ name = "fridica"
 path = "src/bin/fridica.rs"
 
 [dependencies]
-fridica-core = "0.6.0"
+fridica-core = { version = "0.6.1", features = ["native-secrets"] }
 fridica-store-sqlite = "0.4.0"
 fridica-agent = { version = "0.4.3", features = ["github", "alphaxiv"] }
 fridica-slack = "0.2.3"
@@ -42,6 +42,7 @@ regex = "1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
+rpassword = "7"
 
 [dev-dependencies]
 fridica-store-sqlite = { version = "0.4.0", features = ["testing"] }
@@ -53,3 +54,7 @@ syn = { version = "2", features = ["full", "visit"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+# Keep the store, agent and daemon on the same core types until the next core release.
+[patch.crates-io]
+fridica-core = { git = "https://github.com/chengcli/fridica-core", rev = "36cf69f96868ad6fd829c969ba62ebe6807c1b35" }

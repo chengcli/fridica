@@ -40,6 +40,28 @@ fn service_defaults_to_active_daemon_and_quotes_paths_without_shell_expansion() 
 }
 
 #[test]
+fn service_print_wraps_daemon_with_summon() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+        .args([
+            "service-print",
+            "--config",
+            "/cfg",
+            "--summon-file",
+            "/private/a $b%.yml",
+            "--summon-provider",
+            "/owner/Fridica Tools/fridica-secret",
+            "--observe-only",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let unit = String::from_utf8(output.stdout).unwrap();
+    assert!(unit.contains(r#"ExecStart=summon --provider "/owner/Fridica Tools/fridica-secret" -f "/private/a $$b%%.yml" "#));
+    assert!(unit.contains(" start --config \"/cfg\" --observe-only\n"));
+    assert!(!unit.contains("EnvironmentFile="));
+}
+
+#[test]
 fn exported_assets_are_complete_and_never_overwrite() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("assets");
@@ -93,6 +115,13 @@ fn start_modes_are_exclusive_and_removed_flags_are_rejected() {
         vec!["start", "--active"],
         vec!["start", "--deployment-record", "/nope"],
         vec!["service-print", "--environment-file", "/env", "--active"],
+        vec![
+            "service-print",
+            "--environment-file",
+            "/env",
+            "--summon-file",
+            "/map",
+        ],
         vec!["deployment-record", "--output", "/nope"],
     ] {
         let result = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
@@ -101,4 +130,16 @@ fn start_modes_are_exclusive_and_removed_flags_are_rejected() {
             .unwrap();
         assert_eq!(result.status.code(), Some(2), "{args:?}");
     }
+}
+
+#[test]
+fn native_service_needs_only_the_config() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+        .args(["service-print", "--config", "/cfg"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let unit = String::from_utf8(output.stdout).unwrap();
+    assert!(unit.contains(" start --config \"/cfg\""));
+    assert!(!unit.contains("summon") && !unit.contains("EnvironmentFile="));
 }

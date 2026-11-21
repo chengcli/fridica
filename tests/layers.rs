@@ -11,7 +11,7 @@ fn level(name: &str) -> usize {
     match name {
         "core" => 0,
         "config" => 1,
-        "store" => 2,
+        "store" | "secrets" => 2,
         "exec" | "workers" | "machines" | "github" | "alphaxiv" => 3,
         "attention" | "threads" | "parent" | "slack" | "approvals" => 4,
         "cli" | "control" | "daemon" | "dashboard" | "doctor" | "mcp" | "bin" => 5,

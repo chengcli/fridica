@@ -54,8 +54,12 @@ impl Harness {
                 ("FRIDICA_SLACK_TOKEN".into(), "xoxp_synthetic_slack".into()),
                 ("SSH_AUTH_SOCK".into(), "/fake/agent".into()),
             ],
-            "MY_GH_TOKEN",
-        );
+            &crate::config::schema::GitHub {
+                token_env: "MY_GH_TOKEN".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         Gh {
             store: Arc::new(self.store.clone()),
             clock: self.clock.clone(),
@@ -296,8 +300,12 @@ fn gh_rate_delay_and_environment_selection_do_not_request_new_credentials() {
             ("GH_TOKEN".into(), "existing".into()),
             ("MY_GH_TOKEN".into(), "legacy".into()),
         ],
-        "MY_GH_TOKEN",
-    );
+        &crate::config::schema::GitHub {
+            token_env: "MY_GH_TOKEN".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(env[std::ffi::OsStr::new("GH_TOKEN")], "existing");
 }
 
@@ -410,8 +418,12 @@ fn gh_redaction_handles_dense_token_prefixes_and_proxy_credentials() {
             "HTTPS_PROXY".into(),
             "https://owner:proxy-private@proxy.invalid".into(),
         )],
-        "MY_GH_TOKEN",
-    );
+        &crate::config::schema::GitHub {
+            token_env: "MY_GH_TOKEN".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(
         redact(
             "https://owner:proxy-private@proxy.invalid proxy-private",

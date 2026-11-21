@@ -93,8 +93,25 @@ pub struct Credentials {
 }
 impl Credentials {
     pub fn read(config: &Config, env: impl Fn(&str) -> Option<String>) -> Result<Self> {
-        let read = |name: &str, prefix: &str| -> Result<String> {
-            let token = env(name).unwrap_or_default();
+        Self::from_store(config, env, &crate::secrets::NativeStore)
+    }
+
+    pub fn from_store(
+        config: &Config,
+        env: impl Fn(&str) -> Option<String>,
+        store: &dyn fridica_core::secret::SecretStore,
+    ) -> Result<Self> {
+        let read = |name: &str,
+                    reference: Option<&fridica_core::secret::KeyringRef>,
+                    prefix: &str|
+         -> Result<String> {
+            let value = env(name);
+            let token = crate::secrets::resolve(
+                store,
+                name,
+                value.as_deref().map(std::ffi::OsStr::new),
+                reference,
+            )?;
             if !token.starts_with(prefix)
                 || token.len() <= prefix.len()
                 || !token.bytes().all(|b| b.is_ascii_graphic())
@@ -104,8 +121,16 @@ impl Credentials {
             Ok(token)
         };
         Ok(Self {
-            app: read(&config.slack.app_token_env, "xapp-")?,
-            user: read(&config.slack.user_token_env, "xoxp-")?,
+            app: read(
+                &config.slack.app_token_env,
+                config.slack.app_token.as_ref(),
+                "xapp-",
+            )?,
+            user: read(
+                &config.slack.user_token_env,
+                config.slack.user_token.as_ref(),
+                "xoxp-",
+            )?,
         })
     }
 }

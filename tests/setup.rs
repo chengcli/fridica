@@ -85,7 +85,11 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
         std::fs::read_to_string(f.path.with_file_name("manifest.yaml")).unwrap(),
         setup::MANIFEST
     );
-    for name in ["config.toml", "contract.md", "manifest.yaml"] {
+    assert_eq!(
+        std::fs::read_to_string(f.path.with_file_name("secrets.yml")).unwrap(),
+        include_str!("../assets/secrets.yml")
+    );
+    for name in ["config.toml", "contract.md", "manifest.yaml", "secrets.yml"] {
         assert_eq!(
             std::fs::metadata(f.path.with_file_name(name))
                 .unwrap()
@@ -219,6 +223,13 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
     assert_eq!(f.cli(&["init"]).await.returncode, 0);
     let path = f.context.home.join(".config/fridica/config.toml");
     assert!(path.is_file());
+    // Exercise the missing environment credential path without reading a real login keyring.
+    let source = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        source.replace("user_token = \"keyring://slack/user-token\"", ""),
+    )
+    .unwrap();
     let before = std::fs::read(&path).unwrap();
     let output = f
         .cli(&["configure", "--detect", "--channel-name", "general"])

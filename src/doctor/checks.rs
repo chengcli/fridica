@@ -197,18 +197,38 @@ pub async fn run_with(
         config::contract::load(config.owner.contract.as_deref()).is_ok(),
         "invalid or unreadable agent contract",
     );
-    for (name, variable, prefix) in [
-        ("Slack app token", &config.slack.app_token_env, "xapp-"),
-        ("Slack user token", &config.slack.user_token_env, "xoxp-"),
+    for (name, variable, reference, prefix) in [
+        (
+            "Slack app token",
+            &config.slack.app_token_env,
+            &config.slack.app_token,
+            "xapp-",
+        ),
+        (
+            "Slack user token",
+            &config.slack.user_token_env,
+            &config.slack.user_token,
+            "xoxp-",
+        ),
     ] {
-        report.test(
-            name,
+        let value = crate::secrets::resolve(
+            &crate::secrets::NativeStore,
+            variable,
             environment
                 .get(std::ffi::OsStr::new(variable))
-                .and_then(|v| v.to_str())
-                .is_some_and(|v| v.starts_with(prefix)),
-            "set the configured token environment variable to the expected token type",
+                .map(|v| v.as_os_str()),
+            reference.as_ref(),
         );
+        match value {
+            Ok(value) => report.test(
+                name,
+                value.starts_with(prefix)
+                    && value.len() > prefix.len()
+                    && value.bytes().all(|b| b.is_ascii_graphic()),
+                "credential has the wrong Slack token type",
+            ),
+            Err(error) => report.add(Status::Fail, name, error.to_string()),
+        }
     }
     // GitHub reads feed the parent's repository context; a reader that cannot
     // read degrades that context, so it is a warning, not a failure.

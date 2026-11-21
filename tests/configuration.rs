@@ -651,3 +651,120 @@ fn migrate_defaults_to_the_configured_database() {
         .unwrap();
     assert!(!output.status.success());
 }
+
+#[test]
+fn daemon_resolves_typed_keyring_references_without_exporting_values() {
+    use fridica::core::secret::SecretStore;
+
+    struct FixtureStore;
+    impl SecretStore for FixtureStore {
+        fn get(&self, name: &str) -> anyhow::Result<Option<Vec<u8>>> {
+            Ok(match name {
+                "fridica/test/app" => Some(b"xapp-synthetic".to_vec()),
+                "fridica/test/user" => Some(b"xoxp-synthetic".to_vec()),
+                _ => None,
+            })
+        }
+        fn set(&self, _: &str, _: &[u8]) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        fn delete(&self, _: &str) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        fn list(&self) -> anyhow::Result<Vec<String>> {
+            unreachable!()
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup(root);
+    let path = root.join("etc/config.toml");
+    let source = basic(root).replace(
+        "[slack]",
+        "[slack]\napp_token='keyring://test/app'\nuser_token='keyring://test/user'",
+    );
+    std::fs::write(&path, &source).unwrap();
+    let config = config::load(&path, &context(root)).unwrap();
+    let draft = config::setup::Draft::open(path.clone()).unwrap();
+    assert_eq!(draft.user_token_ref().unwrap(), config.slack.user_token);
+    fridica::daemon::Credentials::from_store(&config, |_| None, &FixtureStore).unwrap();
+    assert!(!serde_json::to_string(&config)
+        .unwrap()
+        .contains("synthetic"));
+    let err = fridica::daemon::Credentials::from_store(
+        &config,
+        |_| Some("invalid-private-value".into()),
+        &FixtureStore,
+    )
+    .err()
+    .unwrap();
+    assert!(!err.to_string().contains("private-value"));
+    std::fs::write(
+        &path,
+        source.replace("keyring://test/user", "literal-private-value"),
+    )
+    .unwrap();
+    let err = config::load(&path, &context(root)).unwrap_err();
+    assert!(!err.to_string().contains("private-value"));
+}
+
+#[test]
+#[ignore = "requires an unlocked user credential store"]
+fn native_store_round_trip() -> anyhow::Result<()> {
+    use fridica::core::secret::{NativeStore, SecretStore};
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    setup(root);
+    let path = root.join("etc/config.toml");
+    let prefix = format!("fridica/test/{}", uuid::Uuid::new_v4());
+    let app = format!("{prefix}/app");
+    let user = format!("{prefix}/user");
+    let source = basic(root).replace(
+        "[slack]",
+        &format!("[slack]\napp_token='keyring://{app}'\nuser_token='keyring://{user}'"),
+    );
+    std::fs::write(&path, format!("{source}\n[github]\nenabled=false\n"))?;
+    let config = config::load(&path, &context(root))?;
+    NativeStore.set(&app, b"xapp-synthetic")?;
+    let result = (|| -> anyhow::Result<()> {
+        NativeStore.set(&user, b"xoxp-synthetic")?;
+        NativeStore.set(&user, b"xoxp-rotated")?;
+        anyhow::ensure!(NativeStore.list()?.contains(&user), "entry missing");
+        // Same loader used by start, with both Slack environment variables absent.
+        fridica::daemon::Credentials::read(&config, |_| None)?;
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica-secret"))
+            .arg(&user)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success() && output.stdout == b"xoxp-rotated",
+            "provider read mismatch"
+        );
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+            .args(["doctor", "--json", "--timeout", "1", "--config"])
+            .arg(&path)
+            .env_remove("SLACK_APP_TOKEN")
+            .env_remove("SLACK_USER_TOKEN")
+            .env("PATH", root.join("empty-path"))
+            .output()?;
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        for name in ["Slack app token", "Slack user token"] {
+            anyhow::ensure!(
+                report["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|check| check["name"] == name && check["status"] == "PASS"),
+                "doctor failed {name}"
+            );
+        }
+        anyhow::ensure!(!String::from_utf8_lossy(&output.stdout).contains("xoxp-rotated"));
+        Ok(())
+    })();
+    let user_deleted = NativeStore.delete(&user);
+    NativeStore.delete(&app)?;
+    result?;
+    user_deleted?;
+    anyhow::ensure!(NativeStore.get(&user)?.is_none());
+    Ok(())
+}

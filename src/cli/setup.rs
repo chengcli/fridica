@@ -57,9 +57,16 @@ impl Configure {
         let draft = Draft::open(path.clone())?;
         if self.detect {
             let variable = draft.token_variable()?;
-            let token = std::env::var(&variable).map_err(|_| {
-                anyhow::anyhow!("set {variable} to your Slack user token before detection")
-            })?;
+            let reference = draft.user_token_ref()?;
+            let token = tokio::task::spawn_blocking(move || {
+                crate::secrets::resolve(
+                    &crate::secrets::NativeStore,
+                    &variable,
+                    std::env::var_os(&variable).as_deref(),
+                    reference.as_ref(),
+                )
+            })
+            .await??;
             let client = discovery::Web::new(&token)?;
             detected(draft, &client, |found| {
                 println!(
