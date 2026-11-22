@@ -19,6 +19,7 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
     entries.extend(assets![
         "contract.md" => "../../assets/contract.md",
         "template.toml" => "../config/template.toml",
+        "secrets.yml" => "../../assets/secrets.yml",
         "manifest.yaml" => "../../assets/slack-manifest.yaml",
         "prompts/parent-action.md" => "../../assets/prompts/parent-action.md",
         "prompts/parent-triage.md" => "../../assets/prompts/parent-triage.md",

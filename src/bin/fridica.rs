@@ -17,6 +17,9 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Manage Fridica credentials in the current user's OS credential store.
+    #[command(subcommand)]
+    Secret(fridica::cli::secret::Command),
     /// Serve the bundled GitHub MCP tools over stdio on a worker machine.
     GithubMcp(GithubMcpArgs),
     /// Serve the bundled alphaXiv literature research MCP tools over stdio.
@@ -36,13 +39,20 @@ enum Command {
     ServicePrint {
         #[arg(long)]
         config: Option<PathBuf>,
+        /// Load credentials from a systemd environment file.
+        #[arg(long, conflicts_with = "summon_file")]
+        environment_file: Option<PathBuf>,
+        /// Launch through Summon with this absolute path to a provider reference mapping.
         #[arg(long)]
-        environment_file: PathBuf,
+        summon_file: Option<PathBuf>,
+        /// Absolute path to a Summon provider, such as the installed fridica-secret.
+        #[arg(long, requires = "summon_file")]
+        summon_provider: Option<PathBuf>,
         /// Print an observe-only unit instead of the active default.
         #[arg(long)]
         observe_only: bool,
     },
-    /// Create a starter configuration, contract and Slack manifest.
+    /// Create a starter configuration, contract, Slack manifest and Summon mapping.
     Init {
         #[arg(long)]
         config: Option<PathBuf>,
@@ -148,6 +158,9 @@ fn database_path(database: Option<PathBuf>, config: &Path) -> Result<PathBuf> {
 }
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Secret(command) => {
+            tokio::task::spawn_blocking(move || fridica::cli::secret::run(command)).await??;
+        }
         Command::AlphaxivMcp { probe } => {
             if probe {
                 fridica_agent::alphaxiv::probe().await?;
@@ -180,17 +193,31 @@ async fn run(cli: Cli) -> Result<()> {
         Command::ServicePrint {
             config,
             environment_file,
+            summon_file,
+            summon_provider,
             observe_only,
         } => {
-            print!(
-                "{}",
-                fridica::cli::candidate::service(
-                    &std::env::current_exe()?,
-                    &config_path(config)?,
-                    &environment_file,
-                    observe_only
-                )?
-            );
+            let executable = std::env::current_exe()?;
+            let config = config_path(config)?;
+            let unit = match (summon_file, environment_file) {
+                (Some(mapping), _) => fridica::cli::candidate::summon_service(
+                    &executable,
+                    &config,
+                    &mapping,
+                    summon_provider.as_deref(),
+                    observe_only,
+                )?,
+                (None, None) => {
+                    fridica::cli::candidate::native_service(&executable, &config, observe_only)?
+                }
+                (None, Some(environment)) => fridica::cli::candidate::service(
+                    &executable,
+                    &config,
+                    &environment,
+                    observe_only,
+                )?,
+            };
+            print!("{unit}");
         }
         Command::Init { config } => {
             let context = fridica::config::LoadContext::current()?;

@@ -174,9 +174,22 @@ pub struct Gh {
 }
 fn environment(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
-    token_env: &str,
-) -> (BTreeMap<OsString, OsString>, Vec<String>) {
-    let original: BTreeMap<_, _> = inherited.into_iter().collect();
+    github: &crate::config::schema::GitHub,
+) -> Result<(BTreeMap<OsString, OsString>, Vec<String>), Failure> {
+    let token_env = github.token_env.as_str();
+    let mut original: BTreeMap<_, _> = inherited.into_iter().collect();
+    if let Some(reference) = &github.token {
+        let token = crate::secrets::resolve(
+            &crate::secrets::NativeStore,
+            token_env,
+            original
+                .get(std::ffi::OsStr::new(token_env))
+                .map(|value| value.as_os_str()),
+            Some(reference),
+        )
+        .map_err(|_| Failure::Authentication)?;
+        original.insert("GH_TOKEN".into(), token.into());
+    }
     let mut env: BTreeMap<_, _> = original
         .iter()
         .filter(|(k, _)| {
@@ -246,7 +259,7 @@ fn environment(
             }
         }
     }
-    (env, secrets)
+    Ok((env, secrets))
 }
 impl Gh {
     /// Explicit owner environment snapshot for deterministic daemon construction.
@@ -263,7 +276,7 @@ impl Gh {
         {
             return Err(Failure::Invalid);
         }
-        let (env, secrets) = environment(inherited, &config.github.token_env);
+        let (env, secrets) = environment(inherited, &config.github)?;
         Ok(Self {
             store,
             clock,
@@ -424,7 +437,7 @@ pub async fn probe(
     if options.program.as_os_str().is_empty() || timeout.is_zero() {
         return Err(Failure::Invalid);
     }
-    let (env, _) = environment(inherited, &config.github.token_env);
+    let (env, _) = environment(inherited, &config.github)?;
     let argv = vec![
         options.program.to_string_lossy().into_owned(),
         "api".into(),

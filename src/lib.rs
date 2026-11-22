@@ -12,6 +12,7 @@ pub mod exec;
 pub mod github;
 pub mod machines;
 pub mod parent;
+pub mod secrets;
 pub mod slack;
 /// Fridica's state, kept by [fridica-store-sqlite](https://github.com/chengcli/fridica-store-sqlite)
 /// and reached through the storage contract, [`fridica_core::store`].

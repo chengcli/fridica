@@ -57,7 +57,11 @@ model. No automatic SSH agent forwarding is introduced.
 
 ## Observe-only service, controls and logs
 
-Store `SLACK_APP_TOKEN` and `SLACK_USER_TOKEN` (or configured names) in a private
+With the native keyring configured for the service account, print the direct
+startup unit with `fridica-candidate service-print --config /private/fridica/config.toml`.
+The user service needs access to the account’s Secret Service session.
+
+For an environment-file deployment, store `SLACK_APP_TOKEN` and `SLACK_USER_TOKEN` (or configured names) in a private
 systemd EnvironmentFile, never in the unit/argv/checklist. Include PATH and HOME
 if the user service manager lacks the authenticated backend environment. Print a
 user unit; inspect the output before installing it:
@@ -65,6 +69,12 @@ user unit; inspect the output before installing it:
 ```sh
 /absolute/install/bin/fridica-candidate service-print --config /private/fridica/config.toml --environment-file /private/fridica/credentials.env
 ```
+
+For a service backed by Summon, configure the provider for the service account
+and replace `--environment-file /private/fridica/credentials.env` with
+`--summon-file /private/fridica/secrets.yml`. To use the bundled provider, also pass
+`--summon-provider /absolute/install/bin/fridica-secret`. The generated unit invokes
+`summon` on each start. See the [managed credential setup](../README.md#store-credentials-in-the-os-keyring).
 
 Save it as `~/.config/systemd/user/fridica-candidate.service` on the deployment
 host, then use:

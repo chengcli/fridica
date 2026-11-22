@@ -64,11 +64,11 @@ shell's `PATH`.
 
 ```bash
 pip install fridica              # or: pipx install fridica
-fridica init                     # ~/.config/fridica/config.toml, contract.md, manifest.yaml
+fridica init                     # config.toml, contract.md, manifest.yaml and secrets.yml in ~/.config/fridica
 ```
 
-The wheel contains the native `fridica` executable (no Python
-code), built for Linux x86_64/aarch64 (glibc 2.28+) and macOS arm64/x86_64; one wheel
+The wheel contains the native `fridica` executable and the optional
+`fridica-secret` Summon adapter, built for Linux x86_64/aarch64 (glibc 2.28+) and macOS arm64/x86_64; one wheel
 per platform serves every Python version. Elsewhere pip builds from the source
 distribution, which needs a Rust toolchain (1.88+). Worker helpers still run the
 system `/usr/bin/python3`.
@@ -231,7 +231,7 @@ Event subscriptions and their corresponding scopes are both necessary; see
   See [Slack's metadata scope reference](https://docs.slack.dev/reference/scopes/metadata.message.read/)
   and [link permissions](https://docs.slack.dev/messaging/working-with-files/).
 
-### 2. Install and export tokens
+### 2. Install the app and store its tokens
 
 Under **OAuth & Permissions**, select **Install to Workspace** and authorize as
 the person Fridica will represent. An administrator may need to approve the app
@@ -244,16 +244,58 @@ should be complete by this point; reuse that token rather than creating another.
 For `SLACK_USER_TOKEN`, use the `xoxp-` **User OAuth Token** from
 **OAuth & Permissions** after installation.
 
-Export them in the terminal where Fridica will run:
+#### Store credentials in the OS keyring
 
-   ```bash
-   export SLACK_APP_TOKEN='xapp-your-token'
-   export SLACK_USER_TOKEN='xoxp-your-token'
-   ```
+Run these commands as the user who will run Fridica. Each command prompts with
+terminal echo disabled. On **macOS**, unlock your login Keychain and approve
+Fridica’s access if prompted. On **Linux**, run Fridica in a user D-Bus session
+with an unlocked default Secret Service collection, such as GNOME Keyring.
 
-After changing scopes, **reinstall the app**, update the exported user token if
-Slack replaces it, and restart Fridica. Save event-subscription changes as well.
-Never commit tokens to Git or put them in an agent-accessible workspace.
+```sh
+fridica secret set slack/app-token
+fridica secret set slack/user-token
+fridica configure --detect
+fridica doctor
+fridica start
+```
+
+New configurations already contain the following settings. For an existing
+installation, add these lines to its `[slack]` table to enable direct lookup:
+
+```toml
+app_token = "keyring://slack/app-token"
+user_token = "keyring://slack/user-token"
+```
+
+For a separate credential for the daemon’s GitHub reader, run
+`fridica secret set github/read-prs` and add `token = "keyring://github/read-prs"`
+to `[github]`. Fridica passes that credential only to its GitHub reader.
+The existing `gh` authentication flow remains available when you omit this setting.
+
+`fridica secret list` shows stored names. To rotate a token, repeat its `set`
+command and restart Fridica. After changing Slack OAuth scopes, reinstall the
+app and store the replacement user token. `fridica secret delete NAME` removes
+an entry, and `fridica secret get NAME` writes its value to stdout. Processes
+with access to the same OS keyring can retrieve its entries.
+
+On Linux, `fridica service-print` generates a systemd user unit that runs
+`fridica start` directly. The service needs access to the same D-Bus session
+and keyring as the account that stored the tokens.
+
+#### Environment variables and optional Summon integration
+
+Fridica also accepts tokens from its configured environment variables, including
+`SLACK_APP_TOKEN` and `SLACK_USER_TOKEN`. A supplied variable takes precedence
+over the corresponding keyring reference. Existing environment-file deployments
+can continue using `fridica service-print --environment-file /absolute/path`.
+
+For deployments that already use Summon, `fridica init` supplies an optional
+`secrets.yml` mapping. Select your provider, or use the bundled
+`fridica-secret` adapter to read the same native entries:
+
+```sh
+summon --provider "$(command -v fridica-secret)" -f "$HOME/.config/fridica/secrets.yml" fridica start
+```
 
 ### 3. Set your identity and channels
 
@@ -266,7 +308,7 @@ fridica configure --owner-id U123ABC --workspace-id T123ABC --channel-id C123ABC
 Detection reads your identity with
 [`auth.test`](https://docs.slack.dev/reference/methods/auth.test/) and your joined
 channels with [`conversations.list`](https://docs.slack.dev/reference/methods/conversations.list/),
-using `SLACK_USER_TOKEN` only. It posts nothing. `configure` keeps the comments in
+using the configured Slack user token. It posts nothing. `configure` keeps the comments in
 `config.toml` and only fills in `[owner] slack_user`, `[slack] workspace` and
 `[slack] channels`.
 

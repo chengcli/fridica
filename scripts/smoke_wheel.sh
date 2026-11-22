@@ -9,6 +9,8 @@ trap 'rm -rf "$work"' EXIT
 python -m venv "$work/venv"
 "$work/venv/bin/python" -m pip install --quiet --no-deps "$wheel"
 bin="$work/venv/bin"
+test -x "$bin/fridica-secret"
+"$bin/fridica" secret --help > /dev/null
 version=$("$bin/fridica" --version)
 echo "$version"
 [[ $version == "fridica "* ]]

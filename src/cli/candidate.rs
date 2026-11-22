@@ -42,10 +42,45 @@ pub fn service(
     environment: &Path,
     observe_only: bool,
 ) -> Result<String> {
-    let executable = unit_path(executable)?;
-    let config = unit_path(config)?;
     // EnvironmentFile supports specifiers but does not perform ExecStart's $ expansion.
     let environment = unit_path(environment)?.replace("$$", "$");
+    service_unit(
+        executable,
+        config,
+        observe_only,
+        &format!("EnvironmentFile={environment}\n"),
+        "",
+    )
+}
+
+pub fn native_service(executable: &Path, config: &Path, observe_only: bool) -> Result<String> {
+    service_unit(executable, config, observe_only, "", "")
+}
+
+pub fn summon_service(
+    executable: &Path,
+    config: &Path,
+    mapping: &Path,
+    provider: Option<&Path>,
+    observe_only: bool,
+) -> Result<String> {
+    let provider = match provider {
+        Some(path) => format!(" --provider {}", unit_path(path)?),
+        None => String::new(),
+    };
+    let prefix = format!("summon{provider} -f {} ", unit_path(mapping)?);
+    service_unit(executable, config, observe_only, "", &prefix)
+}
+
+fn service_unit(
+    executable: &Path,
+    config: &Path,
+    observe_only: bool,
+    settings: &str,
+    prefix: &str,
+) -> Result<String> {
+    let executable = unit_path(executable)?;
+    let config = unit_path(config)?;
     let mode = if observe_only { " --observe-only" } else { "" };
-    Ok(format!("[Unit]\nDescription=Fridica experimental native candidate\nAfter=network-online.target\nStartLimitIntervalSec=600\nStartLimitBurst=3\n\n[Service]\nType=simple\nUMask=0077\nEnvironmentFile={environment}\nExecStart={executable} start --config {config}{mode}\nRestart=on-failure\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=180\n\n[Install]\nWantedBy=default.target\n"))
+    Ok(format!("[Unit]\nDescription=Fridica experimental native candidate\nAfter=network-online.target\nStartLimitIntervalSec=600\nStartLimitBurst=3\n\n[Service]\nType=simple\nUMask=0077\n{settings}ExecStart={prefix}{executable} start --config {config}{mode}\nRestart=on-failure\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=180\n\n[Install]\nWantedBy=default.target\n"))
 }

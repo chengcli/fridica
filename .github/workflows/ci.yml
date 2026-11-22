@@ -33,9 +33,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Linux confinement test prerequisites
+      - name: Install Linux confinement and credential-store test prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap gnome-keyring dbus-daemon
       - name: Allow bubblewrap user namespaces (Ubuntu 24.04 AppArmor)
         if: runner.os == 'Linux'
         # Same profile as the README's Linux sandbox setup; it applies to bwrap only.
@@ -54,6 +54,16 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo nextest run --locked --all-targets --profile ci
           cargo test --locked --doc
+      - name: Exercise the native Linux credential store
+        if: runner.os == 'Linux'
+        run: |
+          XDG_DATA_HOME="$(mktemp -d)"
+          XDG_RUNTIME_DIR="$(mktemp -d)"
+          export XDG_DATA_HOME XDG_RUNTIME_DIR
+          dbus-run-session -- bash -euo pipefail -c '
+            printf "%s" "temporary-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            cargo test --locked --test configuration native_store_round_trip -- --ignored
+          '
 
   native-candidate:
     name: Native candidate packaging (Linux x86_64)

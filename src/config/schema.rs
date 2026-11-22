@@ -19,6 +19,10 @@ pub struct Slack {
     pub workspace: String,
     pub channels: Vec<String>,
     pub delegate_channels: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_token: Option<fridica_core::secret::KeyringRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_token: Option<fridica_core::secret::KeyringRef>,
     pub app_token_env: String,
     pub user_token_env: String,
     pub general_messages: bool,
@@ -30,6 +34,8 @@ impl Default for Slack {
             workspace: String::new(),
             channels: vec![],
             delegate_channels: None,
+            app_token: None,
+            user_token: None,
             app_token_env: "SLACK_APP_TOKEN".into(),
             user_token_env: "SLACK_USER_TOKEN".into(),
             general_messages: true,
@@ -53,6 +59,8 @@ pub struct GitHub {
     )]
     pub mcp: super::github_mcp::Settings,
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<fridica_core::secret::KeyringRef>,
     pub token_env: String,
     pub cache_seconds: f64,
 }
@@ -61,6 +69,7 @@ impl Default for GitHub {
         Self {
             mcp: Default::default(),
             enabled: true,
+            token: None,
             token_env: "FRIDICA_GITHUB_TOKEN".into(),
             cache_seconds: 60.,
         }

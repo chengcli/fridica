@@ -42,10 +42,9 @@ fn create(path: &Path, source: &str, preserve_existing: bool) -> Result<()> {
     editor::sync_directory(path)
 }
 pub fn init(path: &Path) -> Result<()> {
-    if path
-        .file_name()
-        .is_some_and(|name| name == "contract.md" || name == "manifest.yaml")
-    {
+    if path.file_name().is_some_and(|name| {
+        name == "contract.md" || name == "manifest.yaml" || name == "secrets.yml"
+    }) {
         bail!("configuration filename conflicts with a companion asset");
     }
     if fs::symlink_metadata(path).is_ok() {
@@ -65,6 +64,7 @@ pub fn init(path: &Path) -> Result<()> {
     for (name, content) in [
         ("contract.md", super::contract::DEFAULT),
         ("manifest.yaml", MANIFEST),
+        ("secrets.yml", include_str!("../../assets/secrets.yml")),
     ] {
         let target = parent.join(name);
         if fs::symlink_metadata(&target).is_err() {
@@ -121,6 +121,18 @@ impl Draft {
             document,
             fingerprint: editor::fingerprint(&source),
         })
+    }
+    pub fn user_token_ref(&self) -> Result<Option<fridica_core::secret::KeyringRef>> {
+        self.document
+            .get("slack")
+            .and_then(|s| s.get("user_token"))
+            .map(|v| {
+                v.as_str()
+                    .context("slack.user_token must be a keyring reference")?
+                    .to_owned()
+                    .try_into()
+            })
+            .transpose()
     }
     pub fn token_variable(&self) -> Result<String> {
         let variable = match self.document.get("slack") {
