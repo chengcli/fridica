@@ -28,9 +28,44 @@ For an existing installation with legacy state, stop the daemon, back up its con
 
 - **Daemon:** Install and sign in to the parent backend on this machine. The default is Claude Code. To use Codex, set `backend = "codex"` under `[parent]`.
 - **Workers:** Install and sign in to every backend listed for that machine. Fridica's helpers use `/usr/bin/python3`. On SSH machines, the account must be reachable without a prompt, and the backend commands must be on its noninteractive `PATH`. Install Fridica there too when using the bundled GitHub or alphaXiv tools.
-- **Linux worker hosts:** Install the system `bubblewrap` package and allow it to create user namespaces. Claude workers also require `socat`. On Debian or Ubuntu, `sudo apt install bubblewrap socat` installs both. If `fridica doctor` reports a sandbox failure on Ubuntu, check the AppArmor user-namespace policy for `/usr/bin/bwrap`. [Sandbox setup](https://code.claude.com/docs/en/sandboxing)
 
 Backend installation guides: [Claude Code](https://code.claude.com/docs/en/setup) and [Codex CLI](https://developers.openai.com/codex/cli).
+
+### Linux worker sandbox
+
+Install `bubblewrap` on every Linux worker host, including Codex-only hosts. Install `socat` as well if the host runs Claude. Use `sudo apt install bubblewrap socat` on Debian or Ubuntu, or `sudo dnf install bubblewrap socat` on Fedora.
+
+Run Fridica’s sandbox check on the worker host as the worker user. Success produces no output and exits with status 0.
+
+```sh
+bwrap --unshare-user --unshare-net --ro-bind / / --dev /dev --proc /proc --die-with-parent -- /bin/true
+```
+
+<details>
+<summary>Ubuntu 24.04 and later: AppArmor blocks user namespaces</summary>
+
+If the check fails with a UID map or loopback permission error, run these on the affected host:
+
+```sh
+command -v bwrap
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+If the path is `/usr/bin/bwrap` and the setting is `1`, check the AppArmor profile for that executable. If the profile is missing, create `/etc/apparmor.d/bwrap` with the following contents. Preserve any existing site-specific rules.
+
+```text
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/bwrap>
+}
+```
+
+Run `sudo systemctl reload apparmor` and repeat the sandbox check as the worker user. [AppArmor setup for bubblewrap](https://code.claude.com/docs/en/sandboxing#add-an-apparmor-profile-for-bubblewrap)
+
+</details>
 
 ## Configure Slack
 
