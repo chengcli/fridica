@@ -520,58 +520,25 @@ read from `config.toml`'s directory; changing them is a pull request.
 
 ## GitHub links
 
-When a message in a thread links a GitHub pull request or issue, the parent sees its
-state as it is right now, not as someone last described it:
+When a Slack thread links a GitHub issue or pull request, Fridica gives the
+parent a read-only summary for up to three links per call. It includes the
+title, state, assignees, labels and selected status lines from the body. For
+pull requests, it also includes the head commit, mergeability, checks and
+reviews, with approvals on older commits marked stale. The parent treats the
+summary as untrusted input.
 
-- title and state;
-- head commit and tree, base branch, and whether the head is behind the base;
-- mergeable state (`unknown` is shown as such after one retry);
-- check runs on the head, where `cancelled` is its own state and never counts as
-  success;
-- reviews as `approved @<sha>`, with approvals on an older commit marked stale.
-  `approvals 2/3` means two approvals on the head out of three reviewers whose latest
-  decision is an approval or a change request;
-- assignees, labels, and the status lines at the top of the body (owner, next,
-  blocker, waiting on).
-
-The rest of the body, including HTML comments, is not passed on, and the block is
-marked untrusted data. A `head:` or `tree:` line in the body is not shown as a fact. Its
-commit id, however it is decorated, is checked against the real commit and reported as
-matching, not matching, or unverified when the real value could not be fetched. CI
-reads `incomplete` when there are more check runs than one call lists.
-
-At most three links per call are followed, and a slow GitHub never delays a reply by
-more than 20 seconds. Results are cached per repository and number, and a rate limit
-pauses all calls until it resets:
+The daemon uses `gh api` with its existing GitHub CLI credentials. Replies can
+repeat details from any repository those credentials can read, so scope access
+to repositories the channel may see. To use a dedicated read-only token, store
+it with `fridica secret set github/read-prs` and uncomment the token line below.
+If set, the legacy `FRIDICA_GITHUB_TOKEN` variable overrides that keyring entry.
 
 ```toml
 [github]
-enabled = true
-token_env = "FRIDICA_GITHUB_TOKEN"   # optional read-only token
+enabled = true       # set to false to disable link lookups
 cache_seconds = 60
+# token = "keyring://github/read-prs"
 ```
-
-Public repositories need no token, but anonymous requests are limited to 60 per hour
-per IP address, and each pull request costs about five. A read-only fine-grained token
-in the named variable raises that limit and reaches private repositories. Like the
-Slack tokens, it is removed from every agent's environment. Changing `token_env` takes
-a restart.
-
-Two things to weigh before enabling it:
-
-- Anyone in a configured channel can mention you with a link, and the reply may repeat
-  what the block says. So the token must see only repositories those channels may see.
-  There is no per-repository allowlist.
-- The daemon itself calls `api.github.com`. Machine network policies govern workers,
-  not this traffic. Set `enabled = false` to keep the daemon off the network.
-
-To let workers review a public
-GitHub ref without general network access, set `fetch_repos` in the workspace policy
-(for example, `["chengcli/snapy", "UCzhangxi/snapy"]`), with `network = []` and
-`approvals = "on-request"`. A delegated job may name one listed repo and ref;
-Fridica fetches it into a new bare repository and supplies its path and commit SHA.
-This requires write mode without GPU confinement. Push requires separate approval;
-private repository credentials are not supported by scoped fetch.
 
 ## Worker credentials
 
@@ -686,6 +653,14 @@ an uncertain write. `git_context` uses gitoxide to read a repository's HEAD and
 branch within the worker directory without invoking a shell.
 GitHub writes do not pass through Fridica's Slack outbox or its text egress filter.
 Use credentials appropriate for the repositories the worker may access.
+
+### Fetch a public ref for a worker
+
+For a worker without general network access, list the allowed repositories in
+`fetch_repos` and set `network = []` and `approvals = "on-request"` in its
+workspace policy. Scoped fetch requires write mode without GPU confinement.
+A job can request one public repository and ref. Fridica gives the worker a
+bare repository and the fetched commit SHA. Pushing requires separate approval.
 
 ## Run
 
