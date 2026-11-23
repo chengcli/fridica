@@ -365,7 +365,7 @@ fn path_comparison_covers_every_python_casefold_mapping() {
 }
 
 fn remote_machine() -> &'static str {
-    "\n[machines.remote]\ntransport='ssh'\nhost='owner@target'\n[machines.remote.resources]\ngpus=[0]\n[machines.remote.policy]\nmode='write'\ngpu_confine=true\n[machines.remote.workspaces]\nproject='~/project'\n"
+    "\n[machines.remote]\ntransport='ssh'\nhost='owner@target'\n[machines.remote.resources]\ngpus=[0]\n[machines.remote.policy]\ngpu_confine=true\n[machines.remote.workspaces]\nproject='~/project'\n"
 }
 
 #[test]

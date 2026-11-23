@@ -101,11 +101,7 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
     let limits: Limits = decode(root.get("limits"))?;
     let placement = placement(root)?;
     limit_bounds(&limits)?;
-    let mut settings = object(root.get("policy"))?;
-    if settings.get("mode").is_none() {
-        settings["mode"] = Value::String("full".into());
-    }
-    let policy: Policy = serde_json::from_value(settings)?;
+    let policy: Policy = decode(root.get("policy"))?;
     policy.validate()?;
     let attention: Attention = decode(root.get("attention"))?;
     attention.validate()?;

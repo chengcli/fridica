@@ -147,7 +147,7 @@ The generated template documents machine limits, load-aware placement, GPU confi
 ### Workspaces and permissions
 
 - Writable workspaces normally give each slot its own `worker1/`, `worker2/`, and so on. Set `subfolders = false` for a shared checkout. Jobs there can touch the same files. In managed slot directories, Fridica cleans old scratch files before reuse. Place `.fridica-keep` in a directory to preserve its subtree.
-- The default worker mode is `full`. Set `[policy].mode` to `read-only`, `write` or `full` and override it per machine or workspace as needed. For Codex's ordinary sandbox, a nonempty `network` list enables general network access. GPU confinement uses the host network and bounds filesystem writes. Declared GPUs are assigned by job slot.
+- The default worker mode is `write`. Set `[policy].mode` to `read-only`, `write` or `full` and override it per machine or workspace as needed. For Codex's ordinary sandbox, a nonempty `network` list enables general network access. GPU confinement uses the host network and bounds filesystem writes. Declared GPUs are assigned by job slot.
 - `approvals = "auto"` uses the backend reviewer. Choose `on-request` for owner decisions on escalation, `untrusted` for more frequent prompts, or `never` to deny escalation. Pending requests appear in the dashboard and in `fridica approvals`.
 - For scoped access to a public GitHub ref, configure `fetch_repos`, `network = []` and `approvals = "on-request"` on a writable workspace without GPU confinement. The worker receives a bare repository and the fetched commit SHA.
 - To use an existing Python virtual environment for worker commands and MCP servers, set `python_env = "~/pyenv"` in the machine table. Fridica activates it on the execution machine.

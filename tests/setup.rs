@@ -132,7 +132,6 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
     assert!(config::load(&f.path, &f.context).is_err());
     std::fs::create_dir(f.context.home.join("project")).unwrap();
     let config = config::load(&f.path, &f.context).unwrap();
-    assert_eq!(config.policy.mode, "full");
     assert!(
         config.github.mcp.enabled
             && config.alphaxiv.enabled

@@ -49,9 +49,9 @@ max_gpu_utilization = 90          # percent; a declared GPU above this, or above
 max_gpu_memory = 0.9              # a machine whose declared GPUs are all in use is saturated
 
 [policy]                          # defaults for every machine; machines and workspaces override
-mode = "full"                     # read-only | write | full
+mode = "write"                    # read-only | write | full
 network = ["*"]
-# fetch_repos = ["chengcli/snapy", "UCzhangxi/snapy"]   # requires write mode, network = [], approvals != auto, no GPU confinement
+# fetch_repos = ["chengcli/snapy", "UCzhangxi/snapy"]   # requires network = [], approvals != auto, no GPU confinement
 approvals = "auto"                # auto (the backend's AI reviewer decides) | on-request | untrusted | never
 approval_timeout = 1800
 auto_approve = []                 # command prefixes approved without asking, e.g. ["pytest", "git status"]
