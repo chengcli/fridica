@@ -206,7 +206,8 @@ control_socket="private/control.sock"
                 root.join("worker.log").into_os_string(),
             ),
             ("SLACK_USER_TOKEN".into(), "xoxp_private_fixture".into()),
-            ("FRIDICA_GITHUB_TOKEN".into(), "ghp_owner_fixture".into()),
+            ("GH_TOKEN".into(), "ghp_owner_fixture".into()),
+            ("FRIDICA_GITHUB_TOKEN".into(), "retired-fixture".into()),
         ]);
         let mut execution = Execution::system(
             &self.config,

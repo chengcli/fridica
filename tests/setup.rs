@@ -118,7 +118,7 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
         0o700
     );
     assert!(!f.context.home.join("project").exists());
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
     assert!(!f.read().contains("max_wait_replies"));
     let before = f.read();
     assert_ne!(
@@ -216,7 +216,7 @@ async fn configure_cli_accepts_incomplete_files_preserves_comments_and_deduplica
     );
     assert!(source.contains("# a few sentences about you"));
     assert!(source.contains("# your Slack member ID"));
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
     for args in [
         vec!["--owner-id", "invalid-private-value"],
         vec!["--workspace-id", "UWRONG"],
@@ -262,7 +262,7 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
     assert_eq!(output.returncode, 2);
     assert!(output.stderr.contains("user-token"));
     assert!(!output.stderr.contains("private-custom"));
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
     assert_eq!(
         f.cli(&[
             "configure",
@@ -489,7 +489,7 @@ async fn detected_setup_commits_only_after_selection_and_refuses_file_changes_du
     .unwrap();
     assert!(f.read().contains("UOWNER"));
     assert!(f.read().contains("CROOM"));
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
 }
 
 #[tokio::test]
