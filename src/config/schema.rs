@@ -61,7 +61,6 @@ pub struct GitHub {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<fridica_core::secret::KeyringRef>,
-    pub token_env: String,
     pub cache_seconds: f64,
 }
 impl Default for GitHub {
@@ -70,7 +69,6 @@ impl Default for GitHub {
             mcp: Default::default(),
             enabled: true,
             token: None,
-            token_env: "FRIDICA_GITHUB_TOKEN".into(),
             cache_seconds: 60.,
         }
     }
@@ -166,12 +164,8 @@ pub struct Config {
     pub fingerprint: String,
 }
 impl Config {
-    pub fn secret_env(&self) -> [&str; 3] {
-        [
-            &self.slack.app_token_env,
-            &self.slack.user_token_env,
-            &self.github.token_env,
-        ]
+    pub fn secret_env(&self) -> [&str; 2] {
+        [&self.slack.app_token_env, &self.slack.user_token_env]
     }
     /// Return only the configured names here; adapters read the actual credentials
     /// just before startup, and must not serialize them into configuration/replay.

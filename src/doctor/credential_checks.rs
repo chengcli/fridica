@@ -64,12 +64,8 @@ pub(super) async fn check(
     }
     let present = |key: &str| environment.contains_key(std::ffi::OsStr::new(key));
     let source = if let Some(reference) = &github.token {
-        if present(&github.token_env) {
-            format!("environment variable {}", github.token_env)
-        } else {
-            format!("keyring entry {}", reference.name())
-        }
-    } else if let Some(key) = ["GH_TOKEN", "GITHUB_TOKEN", github.token_env.as_str()]
+        format!("keyring entry {}", reference.name())
+    } else if let Some(key) = ["GH_TOKEN", "GITHUB_TOKEN"]
         .into_iter()
         .find(|key| present(key))
     {

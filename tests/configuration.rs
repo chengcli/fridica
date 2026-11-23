@@ -733,8 +733,8 @@ fn secret_commands_read_environment_tokens() {
         ),
         (
             env!("CARGO_BIN_EXE_fridica-secret"),
-            vec!["fridica/github/read-prs"],
-            "FRIDICA_GITHUB_TOKEN",
+            vec!["fridica/slack/user-token"],
+            "SLACK_USER_TOKEN",
         ),
         (
             env!("CARGO_BIN_EXE_fridica"),

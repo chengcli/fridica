@@ -115,7 +115,6 @@ project = "~/project"             # an existing directory; each job slot works i
 enabled = true                    # show the parent the state of linked GitHub pull requests and issues
 # token = "keyring://github/read-prs"
 # GitHub API reads use the owner's existing gh authentication.
-token_env = "FRIDICA_GITHUB_TOKEN" # legacy credential name to scrub from worker environments
 cache_seconds = 60
 
 # Bundled Rust MCP: direct GitHub reviews, comments and task-branch commits.

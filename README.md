@@ -88,7 +88,7 @@ The generated configuration uses macOS Keychain or Linux Secret Service. On Linu
 
 `fridica secret set slack/app-token` stores the token as a generic password in macOS Keychain or as a secret in the default Linux Secret Service collection (such as GNOME Keyring). Both use the current OS username as the account, `fridica:fridica/slack/app-token` as the service, and the token as the password. The entry has no website. Running `secret set` on an older Fridica entry moves it to this format.
 
-`fridica secret get slack/app-token` writes the token to stdout. Both this command and the `fridica-secret` provider check the corresponding environment variable first (`SLACK_APP_TOKEN`, `SLACK_USER_TOKEN`, or `FRIDICA_GITHUB_TOKEN` for `github/read-prs`). For a custom token, use `fridica secret get example/api-token --env EXAMPLE_API_TOKEN`. If the variable is unset, Fridica reads the stored password.
+`fridica secret get slack/app-token` writes the token to stdout. Both this command and the `fridica-secret` provider check the corresponding environment variable first for Slack credentials (`SLACK_APP_TOKEN` or `SLACK_USER_TOKEN`). For a custom token, use `fridica secret get example/api-token --env EXAMPLE_API_TOKEN`. If the variable is unset, Fridica reads the stored password.
 
 ## Configure machines
 
@@ -167,7 +167,7 @@ token = "keyring://github/read-prs"
 cache_seconds = 60
 ```
 
-Fridica supplies the resolved secret to its `gh` process as `GH_TOKEN`. No interactive login is required. If present, the legacy `FRIDICA_GITHUB_TOKEN` variable overrides the keyring entry. Set `enabled = false` to disable these lookups.
+Fridica supplies the resolved secret to its `gh` process as `GH_TOKEN`. No interactive login is required. When upgrading an existing configuration, remove `token_env` from the top-level `[github]` table. Move any dedicated reader token to the keyring. Set `enabled = false` to disable these lookups.
 
 ## Worker integrations
 

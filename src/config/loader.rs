@@ -289,12 +289,9 @@ fn egress(root: &Table, base: &Path, context: &LoadContext) -> Result<Egress> {
     }
     Ok(egress)
 }
-/// `[github]`: the token variable name and the cache lifetime.
+/// `[github]`: the reader credential and the cache lifetime.
 fn github(root: &Table) -> Result<GitHub> {
     let github: GitHub = decode(root.get("github"))?;
-    if !env_name(&github.token_env) {
-        bail!("github.token_env must name an environment variable");
-    }
     number(github.cache_seconds, 0., "github.cache_seconds")?;
     Ok(github)
 }

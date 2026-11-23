@@ -176,15 +176,12 @@ fn environment(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
     github: &crate::config::schema::GitHub,
 ) -> Result<(BTreeMap<OsString, OsString>, Vec<String>), Failure> {
-    let token_env = github.token_env.as_str();
     let mut original: BTreeMap<_, _> = inherited.into_iter().collect();
     if let Some(reference) = &github.token {
         let token = crate::secrets::resolve(
             &crate::secrets::NativeStore,
-            token_env,
-            original
-                .get(std::ffi::OsStr::new(token_env))
-                .map(|value| value.as_os_str()),
+            "github.token",
+            None,
             Some(reference),
         )
         .map_err(|_| Failure::Authentication)?;
@@ -217,15 +214,6 @@ fn environment(
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    // Preserve the legacy optional credential as an existing owner credential.
-    // Never request a new token, and never put any token on argv or in a record.
-    if !env.contains_key(std::ffi::OsStr::new("GH_TOKEN"))
-        && !env.contains_key(std::ffi::OsStr::new("GITHUB_TOKEN"))
-    {
-        if let Some(token) = original.get(std::ffi::OsStr::new(token_env)) {
-            env.insert("GH_TOKEN".into(), token.clone());
-        }
-    }
     for (k, v) in [
         ("GH_PROMPT_DISABLED", "1"),
         ("GH_NO_UPDATE_NOTIFIER", "1"),
@@ -239,7 +227,7 @@ fn environment(
         .iter()
         .filter(|(k, _)| {
             k.to_str()
-                .is_some_and(|k| k == token_env || k.contains("TOKEN") || k.contains("SECRET"))
+                .is_some_and(|k| k.contains("TOKEN") || k.contains("SECRET"))
         })
         .filter_map(|(_, v)| v.to_str().filter(|v| !v.is_empty()).map(str::to_owned))
         .collect();
