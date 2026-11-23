@@ -429,7 +429,7 @@ impl Api for Gh {
 /// daemon uses, recording nothing. For `doctor`; an `Err` names the reason the
 /// way `Failure::message` does.
 pub async fn probe(
-    config: &Config,
+    github: &crate::config::schema::GitHub,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
     options: &Options,
     timeout: Duration,
@@ -437,7 +437,7 @@ pub async fn probe(
     if options.program.as_os_str().is_empty() || timeout.is_zero() {
         return Err(Failure::Invalid);
     }
-    let (env, _) = environment(inherited, &config.github)?;
+    let (env, _) = environment(inherited, github)?;
     let argv = vec![
         options.program.to_string_lossy().into_owned(),
         "api".into(),

@@ -271,7 +271,7 @@ fn offline_cli_defaults_to_the_home_configuration_path() {
     let check = |explicit: bool| {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"));
         command
-            .args(["doctor", "--json", "--timeout", "1"])
+            .args(["doctor", "--local-slack", "--json", "--timeout", "1"])
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", root.join("home"));
@@ -299,7 +299,14 @@ fn offline_cli_checks_configuration_without_creating_state_or_reading_tokens() {
     let path = root.join("etc/config.toml");
     std::fs::write(&path, basic(root)).unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-        .args(["doctor", "--json", "--timeout", "1", "--config"])
+        .args([
+            "doctor",
+            "--local-slack",
+            "--json",
+            "--timeout",
+            "1",
+            "--config",
+        ])
         .arg(&path)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -434,7 +441,14 @@ fn doctor_names_a_removed_isolation_setting_without_its_value() {
     )
     .unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-        .args(["doctor", "--json", "--timeout", "1", "--config"])
+        .args([
+            "doctor",
+            "--local-slack",
+            "--json",
+            "--timeout",
+            "1",
+            "--config",
+        ])
         .arg(&path)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -710,6 +724,35 @@ fn daemon_resolves_typed_keyring_references_without_exporting_values() {
 }
 
 #[test]
+fn secret_commands_read_environment_tokens() {
+    for (binary, args, variable) in [
+        (
+            env!("CARGO_BIN_EXE_fridica"),
+            vec!["secret", "get", "slack/app-token"],
+            "SLACK_APP_TOKEN",
+        ),
+        (
+            env!("CARGO_BIN_EXE_fridica-secret"),
+            vec!["fridica/github/read-prs"],
+            "FRIDICA_GITHUB_TOKEN",
+        ),
+        (
+            env!("CARGO_BIN_EXE_fridica"),
+            vec!["secret", "get", "example/token", "--env", "EXAMPLE_TOKEN"],
+            "EXAMPLE_TOKEN",
+        ),
+    ] {
+        let output = std::process::Command::new(binary)
+            .args(args)
+            .env(variable, "synthetic-token")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"synthetic-token");
+    }
+}
+
+#[test]
 #[ignore = "requires an unlocked user credential store"]
 fn native_store_round_trip() -> anyhow::Result<()> {
     use fridica::core::secret::{NativeStore, SecretStore};
@@ -741,20 +784,31 @@ fn native_store_round_trip() -> anyhow::Result<()> {
             "provider read mismatch"
         );
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-            .args(["doctor", "--json", "--timeout", "1", "--config"])
+            .args([
+                "doctor",
+                "--local-slack",
+                "--json",
+                "--timeout",
+                "1",
+                "--config",
+            ])
             .arg(&path)
             .env_remove("SLACK_APP_TOKEN")
             .env_remove("SLACK_USER_TOKEN")
             .env("PATH", root.join("empty-path"))
             .output()?;
         let report: Value = serde_json::from_slice(&output.stdout)?;
-        for name in ["Slack app token", "Slack user token"] {
+        for (name, key) in [("Slack app token", &app), ("Slack user token", &user)] {
             anyhow::ensure!(
                 report["checks"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|check| check["name"] == name && check["status"] == "PASS"),
+                    .any(|check| check["name"] == name
+                        && check["status"] == "PASS"
+                        && check["detail"]
+                            .as_str()
+                            .is_some_and(|detail| detail.contains(key.as_str()))),
                 "doctor failed {name}"
             );
         }

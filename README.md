@@ -72,7 +72,7 @@ Run `sudo systemctl reload apparmor` and repeat the sandbox check as the worker 
 1. In [Slack app management](https://api.slack.com/apps), choose **Create New App → From an app manifest**, select your workspace and import the generated `manifest.yaml`. Use one app per owner. The manifest enables Socket Mode and subscribes to messages in public channels.
 2. Under **Basic Information → App-Level Tokens**, generate an `xapp-` token with `connections:write`. For private channels, also add the `groups:read` and `groups:history` **user token scopes** and the `message.groups` **user event** before installing the app.
 3. Under **OAuth & Permissions**, install the app to your workspace as the person Fridica will represent. Copy the `xoxp-` **User OAuth Token**. That account must belong to each channel you configure.
-4. As the OS user who will run the daemon, store both tokens at the prompts, then select your channels:
+4. As the OS user who will run the daemon, run `fridica doctor` to see which tokens are available and whether Slack accepts them. You can run it before `fridica init`. The starter configuration automatically uses existing environment or keyring tokens. Store only missing tokens, then select your channels:
 
    ```sh
    fridica secret set slack/app-token
@@ -85,6 +85,10 @@ Detection reads your Slack identity and joined channels. For unattended setup, r
 If your installed CLI lacks the `secret` command, set `SLACK_APP_TOKEN` and `SLACK_USER_TOKEN` in your environment before running `fridica configure --detect`.
 
 The generated configuration uses macOS Keychain or Linux Secret Service. On Linux, the daemon needs a user D-Bus session with an unlocked keyring. When using environment variables, supply them to the daemon process as well. They take precedence over stored entries. To rotate a stored token, repeat its `secret set` command and restart the daemon.
+
+`fridica secret set slack/app-token` stores the token as a generic password in macOS Keychain or as a secret in the default Linux Secret Service collection (such as GNOME Keyring). Both use the current OS username as the account, `fridica:fridica/slack/app-token` as the service, and the token as the password. The entry has no website. Running `secret set` on an older Fridica entry moves it to this format.
+
+`fridica secret get slack/app-token` writes the token to stdout. Both this command and the `fridica-secret` provider check the corresponding environment variable first (`SLACK_APP_TOKEN`, `SLACK_USER_TOKEN`, or `FRIDICA_GITHUB_TOKEN` for `github/read-prs`). For a custom token, use `fridica secret get example/api-token --env EXAMPLE_API_TOKEN`. If the variable is unset, Fridica reads the stored password.
 
 ## Configure machines
 
@@ -154,7 +158,7 @@ Customize the owner's voice and delegation rules in `contract.md` beside the con
 
 When a thread links a GitHub issue or pull request, the daemon reads up to three links per call through `gh api`. The parent receives the title, state and selected status lines. Pull requests also include the head commit, checks and reviews. Replies may repeat private repository information, so give the reader access only to repositories those channels may see.
 
-The daemon can use its existing GitHub CLI credentials. To give it a dedicated read-only credential, run `fridica secret set github/read-prs` and enable the token line in the existing table:
+The daemon can use its existing GitHub CLI credentials. A new configuration automatically selects an existing `github/read-prs` keyring entry. To add a dedicated read-only credential after initialization, run `fridica secret set github/read-prs` and enable the token line in the existing table:
 
 ```toml
 [github]

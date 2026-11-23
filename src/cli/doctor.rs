@@ -7,7 +7,12 @@ use crate::{
 use anyhow::Result;
 use std::{path::PathBuf, time::Duration};
 
-pub async fn run(config: Option<PathBuf>, json: bool, timeout: u64) -> Result<()> {
+pub async fn run(
+    config: Option<PathBuf>,
+    json: bool,
+    timeout: u64,
+    local_slack: bool,
+) -> Result<()> {
     let context = LoadContext::current()?;
     let path = config::setup::path(config.as_deref(), &context)?;
     // Each result is shown as soon as it is known: machines are probed
@@ -35,6 +40,7 @@ pub async fn run(config: Option<PathBuf>, json: bool, timeout: u64) -> Result<()
             Duration::from_secs(timeout),
             stop,
             Some(sender),
+            !local_slack,
         )
     })
     .await;

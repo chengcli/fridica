@@ -60,7 +60,12 @@ impl Report {
     pub fn detach(&mut self) {
         self.progress = None;
     }
-    fn add(&mut self, status: Status, name: impl Into<String>, detail: impl Into<String>) {
+    pub(super) fn add(
+        &mut self,
+        status: Status,
+        name: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
         let check = Check {
             status,
             name: name.into(),
@@ -91,7 +96,7 @@ impl Report {
     pub fn summary(&self) -> String {
         let count = |status| self.checks.iter().filter(|c| c.status == status).count();
         format!(
-            "Checks: {} passed, {} failed, {} warnings, {} skipped.\nSlack authorization and channel membership are verified on start; no model request was made.",
+            "Checks: {} passed, {} failed, {} warnings, {} skipped.\nSlack owner identity and channel membership are verified on start; no model request was made.",
             count(Status::Pass),
             count(Status::Fail),
             count(Status::Warn),
@@ -135,7 +140,7 @@ pub async fn run(
     timeout: Duration,
     stop: watch::Receiver<bool>,
 ) -> Result<Report> {
-    run_with(path, context, environment, timeout, stop, None).await
+    run_with(path, context, environment, timeout, stop, None, false).await
 }
 /// Like `run`, streaming each result to `progress` as soon as it is known.
 pub async fn run_with(
@@ -145,6 +150,7 @@ pub async fn run_with(
     timeout: Duration,
     stop: watch::Receiver<bool>,
     progress: Option<mpsc::UnboundedSender<Progress>>,
+    live_slack: bool,
 ) -> Result<Report> {
     if !(Duration::from_secs(1)..=Duration::from_secs(120)).contains(&timeout) {
         bail!("doctor timeout must be between 1 and 120 seconds");
@@ -161,21 +167,48 @@ pub async fn run_with(
     let config = match config::load(path, context) {
         Ok(config) => config,
         Err(error) => {
-            // The loader's own message names the setting; only its first line,
-            // so a parser's source excerpt never appears here.
-            let reason = format!("{error:#}");
-            report.add(
-                Status::Fail,
-                "Configuration",
-                format!(
-                    "invalid or unreadable configuration: {}",
-                    reason.lines().next().unwrap_or("")
-                ),
-            );
+            let absent = std::fs::symlink_metadata(path)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+            if absent {
+                report.add(
+                    Status::Skip,
+                    "Configuration",
+                    "run fridica init to create the starter configuration",
+                );
+            } else {
+                let reason = format!("{error:#}");
+                report.add(
+                    Status::Fail,
+                    "Configuration",
+                    format!(
+                        "invalid or unreadable configuration: {}",
+                        reason.lines().next().unwrap_or("")
+                    ),
+                );
+            }
+            let source = if absent {
+                Ok(config::setup::starter(&crate::secrets::NativeStore))
+            } else {
+                config::editor::read(path)
+            };
+            if let Some((slack, github)) = source
+                .ok()
+                .and_then(|s| config::loader::credential_settings(&s).ok())
+            {
+                super::credential_checks::check(
+                    &mut report,
+                    &slack,
+                    &github,
+                    &environment,
+                    timeout,
+                    live_slack,
+                )
+                .await;
+            }
             report.add(
                 Status::Skip,
                 "Everything else",
-                "fix the configuration first",
+                "complete configuration first",
             );
             report.detach();
             return Ok(report);
@@ -197,58 +230,15 @@ pub async fn run_with(
         config::contract::load(config.owner.contract.as_deref()).is_ok(),
         "invalid or unreadable agent contract",
     );
-    for (name, variable, reference, prefix) in [
-        (
-            "Slack app token",
-            &config.slack.app_token_env,
-            &config.slack.app_token,
-            "xapp-",
-        ),
-        (
-            "Slack user token",
-            &config.slack.user_token_env,
-            &config.slack.user_token,
-            "xoxp-",
-        ),
-    ] {
-        let value = crate::secrets::resolve(
-            &crate::secrets::NativeStore,
-            variable,
-            environment
-                .get(std::ffi::OsStr::new(variable))
-                .map(|v| v.as_os_str()),
-            reference.as_ref(),
-        );
-        match value {
-            Ok(value) => report.test(
-                name,
-                value.starts_with(prefix)
-                    && value.len() > prefix.len()
-                    && value.bytes().all(|b| b.is_ascii_graphic()),
-                "credential has the wrong Slack token type",
-            ),
-            Err(error) => report.add(Status::Fail, name, error.to_string()),
-        }
-    }
-    // GitHub reads feed the parent's repository context; a reader that cannot
-    // read degrades that context, so it is a warning, not a failure.
-    if config.github.enabled {
-        let options = crate::github::client::Options::default();
-        match crate::github::client::probe(&config, environment.clone(), &options, timeout).await {
-            Ok(()) => report.add(Status::Pass, "GitHub reader", ""),
-            Err(error) => report.add(
-                Status::Warn,
-                "GitHub reader",
-                format!(
-                    "{}; repository context will be unavailable until {} can read github.com",
-                    error.message(),
-                    options.program.display()
-                ),
-            ),
-        }
-    } else {
-        report.add(Status::Skip, "GitHub reader", "github.enabled is off");
-    }
+    super::credential_checks::check(
+        &mut report,
+        &config.slack,
+        &config.github,
+        &environment,
+        timeout,
+        live_slack,
+    )
+    .await;
     let scopes = crate::store::diagnostics::slack_scopes(&config.state.path).await;
     match scopes.as_deref() {
         None | Some("unknown") => report.add(Status::Skip,"Slack files:read","scope information is unavailable until recorded by a daemon start"),

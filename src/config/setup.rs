@@ -71,7 +71,24 @@ pub fn init(path: &Path) -> Result<()> {
             create(&target, content, true)?;
         }
     }
-    create(path, TEMPLATE, false)
+    create(path, &starter(&crate::secrets::NativeStore), false)
+}
+/// A dedicated reader is optional. Keep gh authentication available when the
+/// keyring has no such entry or is unavailable in the current session.
+pub(crate) fn starter(store: &dyn fridica_core::secret::SecretStore) -> String {
+    let names = store.list().unwrap_or_default();
+    starter_with(&names)
+}
+
+fn starter_with(names: &[String]) -> String {
+    if names.iter().any(|name| name == "fridica/github/read-prs") {
+        TEMPLATE.replace(
+            "# token = \"keyring://github/read-prs\"",
+            "token = \"keyring://github/read-prs\"",
+        )
+    } else {
+        TEMPLATE.to_owned()
+    }
 }
 #[derive(Default, Clone)]
 pub struct Identity {
@@ -185,5 +202,20 @@ impl Draft {
         }
         table.insert(key, Item::Value(value));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn starter_selects_existing_reader_and_standard_slack_references() {
+        let stored = starter_with(&["fridica/github/read-prs".into()]);
+        let (slack, github) = loader::credential_settings(&stored).unwrap();
+        assert_eq!(github.token.unwrap().name(), "fridica/github/read-prs");
+        assert_eq!(slack.app_token.unwrap().name(), "fridica/slack/app-token");
+        assert_eq!(slack.user_token.unwrap().name(), "fridica/slack/user-token");
+        assert_eq!(starter_with(&[]), TEMPLATE);
     }
 }

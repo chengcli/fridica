@@ -165,6 +165,15 @@ fn owner(root: &Table, base: &Path, context: &LoadContext) -> Result<Owner> {
     };
     Ok(owner)
 }
+/// Read credential settings while the owner's identity and workspaces are still incomplete.
+pub(crate) fn credential_settings(source: &str) -> Result<(Slack, GitHub)> {
+    let document = source.parse::<toml_edit::DocumentMut>()?;
+    let slack: Slack = decode(document.get("slack"))?;
+    if !env_name(&slack.app_token_env) || !env_name(&slack.user_token_env) {
+        bail!("Slack token settings must name environment variables");
+    }
+    Ok((slack, github(document.as_table())?))
+}
 /// `[slack]`: the workspace, its channels and the token variable names.
 fn slack(root: &Table) -> Result<Slack> {
     let slack: Slack = decode(root.get("slack"))?;
