@@ -1,6 +1,7 @@
 //! Explicit target checks. Reports contain fixed diagnostics, never subprocess
 //! output, credentials, inventory paths, or MCP settings.
 pub mod checks;
+mod credential_checks;
 pub mod readiness;
 
 use crate::{

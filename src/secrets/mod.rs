@@ -33,3 +33,9 @@ pub fn resolve(
         })?;
     String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("stored credential must be UTF-8"))
 }
+
+/// Select references for setup without reading any secret values. A session
+/// without an accessible keyring can still use environment or gh credentials.
+pub fn starter_config() -> String {
+    crate::config::setup::starter_with(&NativeStore.list().unwrap_or_default())
+}

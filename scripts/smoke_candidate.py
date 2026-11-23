@@ -104,7 +104,7 @@ enabled=false
             path = root / "bin" / helper
             path.write_text("#!/bin/sh\nexit 0\n")
             path.chmod(0o700)
-        diagnostics = json.loads(command("doctor", "--config", config, "--json"))
+        diagnostics = json.loads(command("doctor", "--local-slack", "--config", config, "--json"))
         assert not diagnostics["cancelled"]
         fingerprint = diagnostics["configuration"]["fingerprint"]
         assert not (root / "private/state.sqlite3").exists()

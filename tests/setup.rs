@@ -79,7 +79,12 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
     let f = Fixture::new();
     let output = f.cli(&["init", "--config", f.path.to_str().unwrap()]).await;
     assert_eq!(output.returncode, 0, "{}", output.stderr);
-    assert_eq!(f.read(), setup::TEMPLATE);
+    let starter = f.read();
+    let detected_reader = setup::TEMPLATE.replace(
+        "# token = \"keyring://github/read-prs\"",
+        "token = \"keyring://github/read-prs\"",
+    );
+    assert!(starter == setup::TEMPLATE || starter == detected_reader);
     assert!(f.path.with_file_name("contract.md").is_file());
     assert_eq!(
         std::fs::read_to_string(f.path.with_file_name("manifest.yaml")).unwrap(),

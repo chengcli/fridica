@@ -293,7 +293,8 @@ async fn github_reader_is_probed_without_recording_and_warns_when_it_cannot_read
 #[tokio::test]
 async fn auth_capability_exit_status_and_auto_requirements_are_checked() {
     let mut fixture = Fixture::new();
-    assert!(fixture.run().await.passed());
+    let initial = fixture.run().await;
+    assert!(initial.passed(), "{}", initial.text());
     for (mode, expected, detail) in [
         ("logout", "claude (parent locally)", "not signed in"),
         ("noauto", "codex (worker on local)", "auto_review"),
@@ -468,7 +469,9 @@ async fn recorded_attachment_scopes_are_read_without_migration() {
 #[tokio::test]
 async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
     let mut fixture = Fixture::new();
-    let result = fixture.cli(&["doctor", "--json", "--timeout", "2"]).await;
+    let result = fixture
+        .cli(&["doctor", "--local-slack", "--json", "--timeout", "2"])
+        .await;
     assert_eq!(
         result.returncode,
         0,
@@ -477,17 +480,21 @@ async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
     );
     let report: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert!(report.get("active_launch_ready").is_none());
-    let result = fixture.cli(&["doctor", "--timeout", "2"]).await;
+    let result = fixture
+        .cli(&["doctor", "--local-slack", "--timeout", "2"])
+        .await;
     assert_eq!(result.returncode, 0);
     assert!(result.text().contains("0 failed"));
     fixture.env.remove(std::ffi::OsStr::new("SLACK_APP_TOKEN"));
-    let result = fixture.cli(&["doctor", "--timeout", "2"]).await;
+    let result = fixture
+        .cli(&["doctor", "--local-slack", "--timeout", "2"])
+        .await;
     assert_eq!(result.returncode, 1);
     assert!(result.text().contains("FAIL Slack app token"));
     assert_ne!(fixture.cli(&["start"]).await.returncode, 0);
     fixture.pristine();
     std::fs::write(&fixture.path, "private-secret invalid TOML").unwrap();
-    let result = fixture.cli(&["doctor", "--json"]).await;
+    let result = fixture.cli(&["doctor", "--local-slack", "--json"]).await;
     assert_eq!(result.returncode, 1);
     assert!(!result.text().contains("private-secret"));
     let value: Value = serde_json::from_slice(&result.stdout).unwrap();
@@ -551,4 +558,28 @@ async fn missing_python_environment_is_reported_without_running_worker_backends(
         .iter()
         .any(|c| c.name.contains("worker on local")));
     f.pristine();
+}
+
+#[tokio::test]
+async fn doctor_finds_tokens_before_init_and_with_incomplete_machine_setup() {
+    let mut f = Fixture::new();
+    f.env
+        .insert("FRIDICA_GITHUB_TOKEN".into(), "synthetic-reader".into());
+    std::fs::remove_file(&f.path).unwrap();
+    for initialized in [false, true] {
+        if initialized {
+            fridica::config::setup::init(&f.path).unwrap();
+        }
+        let report = f.run().await;
+        for (name, source) in [
+            ("Slack app token", "SLACK_APP_TOKEN"),
+            ("Slack user token", "SLACK_USER_TOKEN"),
+        ] {
+            let check = report.checks.iter().find(|c| c.name == name).unwrap();
+            assert_eq!(check.status, Status::Pass);
+            assert!(check.detail.contains(source));
+        }
+        assert!(!report.text().contains("private-secret"));
+        assert_eq!(f.path.exists(), initialized);
+    }
 }

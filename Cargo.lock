@@ -1012,9 +1012,9 @@ dependencies = [
 
 [[package]]
 name = "fridica-core"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc17cbcbc4503a59b764dd4e5b4a4da005f7d5ab4e16b2a04e5af014acb1a5ee"
+checksum = "9d090d207685065a66ee23aadd6127092d8240fdf0e02b276fb5b4f5ec3252cf"
 dependencies = [
  "anyhow",
  "regex",
@@ -1024,6 +1024,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "unicode-casefold",
+ "users",
  "uuid",
 ]
 

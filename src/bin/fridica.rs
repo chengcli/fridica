@@ -76,6 +76,9 @@ enum Command {
     },
     /// Check configuration, tokens, backend sign-in and protocols without model requests.
     Doctor {
+        /// Check Slack token format without contacting Slack.
+        #[arg(long)]
+        local_slack: bool,
         #[arg(long)]
         config: Option<PathBuf>,
         #[arg(long)]
@@ -222,13 +225,13 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Init { config } => {
             let context = fridica::config::LoadContext::current()?;
             let path = fridica::config::setup::path(config.as_deref(), &context)?;
-            fridica::config::setup::init(&path)?;
+            fridica::config::setup::init_with(&path, fridica::secrets::starter_config)?;
             println!(
                 "Created {}. Agent rules are in {}.",
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
+            println!("Existing Slack environment or keyring tokens are picked up automatically. Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
         }
         Command::Configure(options) => options
             .run(&fridica::config::LoadContext::current()?)
@@ -249,10 +252,11 @@ async fn run(cli: Cli) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?)
         }
         Command::Doctor {
+            local_slack,
             config,
             json,
             timeout,
-        } => fridica::cli::doctor::run(config, json, timeout).await?,
+        } => fridica::cli::doctor::run(config, json, timeout, local_slack).await?,
         Command::Migrate {
             database,
             config,
