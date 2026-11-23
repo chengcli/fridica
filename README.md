@@ -147,7 +147,7 @@ The generated template documents machine limits, load-aware placement, GPU confi
 ### Workspaces and permissions
 
 - Writable workspaces normally give each slot its own `worker1/`, `worker2/`, and so on. Set `subfolders = false` for a shared checkout. Jobs there can touch the same files. In managed slot directories, Fridica cleans old scratch files before reuse. Place `.fridica-keep` in a directory to preserve its subtree.
-- Set `[policy].mode` to `read-only`, `write` or `full` and override it per machine or workspace as needed. For Codex's ordinary sandbox, a nonempty `network` list enables general network access. GPU confinement uses the host network and bounds filesystem writes. Declared GPUs are assigned by job slot.
+- The default worker mode is `full`. Set `[policy].mode` to `read-only`, `write` or `full` and override it per machine or workspace as needed. For Codex's ordinary sandbox, a nonempty `network` list enables general network access. GPU confinement uses the host network and bounds filesystem writes. Declared GPUs are assigned by job slot.
 - `approvals = "auto"` uses the backend reviewer. Choose `on-request` for owner decisions on escalation, `untrusted` for more frequent prompts, or `never` to deny escalation. Pending requests appear in the dashboard and in `fridica approvals`.
 - For scoped access to a public GitHub ref, configure `fetch_repos`, `network = []` and `approvals = "on-request"` on a writable workspace without GPU confinement. The worker receives a bare repository and the fetched commit SHA.
 - To use an existing Python virtual environment for worker commands and MCP servers, set `python_env = "~/pyenv"` in the machine table. Fridica activates it on the execution machine.
@@ -169,7 +169,9 @@ fridica start
 
 ## In Slack
 
-Mention the owner in a configured channel and ask for work in a named workspace. For the example workspace above, ask “Run the tests in the project workspace and summarize the failures.” Reply in the same thread to refine the request. The parent can reuse a worker, delegate to several machines, or ask for clarification. Set `[slack].general_messages = false` to turn off unsolicited participation in general conversation.
+From your configured Slack owner account, send `!f <instruction>` in a configured channel to start a thread, or reply with it to instruct an existing thread. For example, send `!f Use the project workspace to inspect <Overleaf project URL> and identify the main TeX file.`
+
+Other channel members can mention the owner and ask for work in a named workspace. For the example workspace above, ask “Run the tests in the project workspace and summarize the failures.” Reply in the same thread to refine the request. The parent can reuse a worker, delegate to several machines, or ask for clarification. Set `[slack].general_messages = false` to turn off unsolicited participation in general conversation.
 
 The parent reads thread history, selected text attachments and worker summaries. It can pass Slack files to a worker as read-only inputs. Workers report results, progress and requested artifacts back through the daemon. The Slack app needs `files:read` to download attachments and `files:write` to upload reports and figures.
 

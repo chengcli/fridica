@@ -59,8 +59,14 @@ pub async fn intake(
     obligation_id: String,
 ) -> Result<Option<i64>> {
     store
-        .transact(move |u| intake_tx(u, msg, &owner, now, grace, &obligation_id, None))
+        .transact(move |u| intake_tx(u, msg, &owner, now, grace, &obligation_id, Intake::Message))
         .await
+}
+
+pub(crate) enum Intake {
+    Message,
+    Catchup(f64),
+    OwnerInstruction(String),
 }
 
 /// Shared atomic intake for direct callers, Socket Mode and catch-up. A catch-up
@@ -72,7 +78,7 @@ pub(crate) fn intake_tx(
     now: f64,
     grace: f64,
     obligation_id: &str,
-    history_before: Option<f64>,
+    route: Intake,
 ) -> Result<Option<i64>> {
     if !now.is_finite() || !grace.is_finite() || grace <= 0. {
         bail!("invalid intake time or grace");
@@ -86,7 +92,7 @@ pub(crate) fn intake_tx(
     let mentioned = msg.text.contains(&format!("<@{owner}>"));
     let mut work = true;
     let mut created = now;
-    if let Some(cutoff) = history_before {
+    if let Intake::Catchup(cutoff) = route {
         let timestamp: f64 = msg.ts.parse()?;
         if !timestamp.is_finite() || !cutoff.is_finite() {
             bail!("invalid catch-up time");
@@ -99,7 +105,7 @@ pub(crate) fn intake_tx(
     }
     let mut record =
         json!({"message":msg,"owner":owner,"grace":grace,"obligation_id":obligation_id});
-    if history_before.is_some() {
+    if matches!(route, Intake::Catchup(_)) {
         record["work"] = json!(work);
     }
     u.record("intake", now, &record.to_string(), true)?;
@@ -126,6 +132,28 @@ pub(crate) fn intake_tx(
     u.open_thread(&session, &msg.workspace, &msg.channel, root, created)?;
     // The channel ledger (#108): what this message refers to.
     u.record_links(&msg.workspace, &msg.channel, &session, &msg.text, created)?;
+    if let Intake::OwnerInstruction(text) = route {
+        let client_id = format!("slack-{}", msg.ts.replace('.', "-"));
+        return match crate::threads::controls::instruct_tx(
+            u,
+            session,
+            text,
+            client_id,
+            Authority::Owner,
+            now,
+        ) {
+            Ok(id) => Ok(Some(id)),
+            Err(error) if error.is::<crate::threads::refusal::Refused>() => {
+                u.note(
+                    "slack_instruction_refused",
+                    &json!({"event_id":msg.event_id,"reason":error.to_string()}).to_string(),
+                    now,
+                )?;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        };
+    }
     if msg.source == "self" || !work {
         return Ok(None);
     }
