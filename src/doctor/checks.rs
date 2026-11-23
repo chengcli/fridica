@@ -390,8 +390,12 @@ async fn machine(
                     }
                 };
                 let name = format!("{label} MCP {}:{}", machine.name, workspace.name);
-                let Some(server) = service.server(&probe.config, &machine.name, &workspace.policy)
-                else {
+                let Some(server) = service.server_at(
+                    &probe.config,
+                    &machine.name,
+                    &workspace.policy,
+                    Some(&workspace.path),
+                ) else {
                     report.add(Status::Skip, name, "workspace policy excludes this server");
                     continue;
                 };

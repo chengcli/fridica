@@ -85,6 +85,23 @@ fn ads_and_overleaf_follow_placement_policy() {
     assert_eq!(paper.args, ["overleaf-mcp"]);
     assert!(paper.env_vars.iter().any(|v| v == "OVERLEAF_GIT_TOKEN"));
     assert!(!paper.auto_approve);
+    policy.mode = "write".into();
+    let workspace = config.machines.get("local").unwrap().workspaces[0].for_slot(2);
+    let server = Overleaf
+        .server_at(&config, "local", &policy, Some(&workspace.path))
+        .unwrap();
+    assert_eq!(
+        server.args,
+        [
+            "overleaf-mcp",
+            "--workspace-write",
+            workspace.path.to_str().unwrap()
+        ]
+    );
+    assert!(Overleaf.server(&config, "local", &policy).is_none());
+    policy.mode = "read-only".into();
+    assert!(!Overleaf.available(&config, "local", &policy));
+    policy.mode = "write".into();
     policy.fetch_repos.push("owner/project".into());
     for service in [Scix, Overleaf] {
         assert!(!service.available(&config, "local", &policy));
@@ -138,4 +155,90 @@ fn bundled_ads_and_overleaf_serve_tools_over_stdio() {
         drop(input);
         assert!(child.wait().unwrap().success());
     }
+}
+
+#[test]
+fn write_mode_overleaf_confines_git_checkouts_to_the_assigned_directory() {
+    use serde_json::{json, Value};
+    use std::{
+        fs,
+        io::Write,
+        os::unix::fs::symlink,
+        process::{Command, Stdio},
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let slot = base.join("worker 2");
+    let remote = base.join("origin");
+    let outside = base.join("other worker");
+    for path in [&slot, &remote, &outside] {
+        fs::create_dir(path).unwrap();
+    }
+    for args in [
+        vec!["init", "-q"],
+        vec![
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=user@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .current_dir(&remote)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    symlink(&outside, slot.join("elsewhere")).unwrap();
+    let config = base.join("interleaf.toml");
+    fs::write(
+        &config,
+        format!(
+            "[projects.paper]\ngit_url = {}\n[projects.sibling]\ngit_url = {}\ndir = {}\n",
+            json!(remote),
+            json!(remote),
+            json!(slot.join("elsewhere/paper"))
+        ),
+    )
+    .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fridica"))
+        .arg("overleaf-mcp")
+        .arg("--workspace-write")
+        .arg(&slot)
+        .current_dir(&outside)
+        .env("INTERLEAF_WORKSPACE", &outside)
+        .env("INTERLEAF_CONFIG", config)
+        .env("HOME", &base)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for (i, project) in ["paper", "sibling"].into_iter().enumerate() {
+        writeln!(input, "{}", json!({"jsonrpc":"2.0","id":i+1,"method":"tools/call","params":{"name":"pull","arguments":{"project":project}}})).unwrap();
+    }
+    drop(input);
+    let result = child.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let rows: Vec<Value> = String::from_utf8(result.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(slot.join("paper/.git").is_dir(), "{rows:?}");
+    assert_ne!(rows[0]["result"]["isError"], true, "{rows:?}");
+    assert_eq!(rows[1]["result"]["isError"], true, "{rows:?}");
+    assert!(!outside.join("paper").exists());
 }

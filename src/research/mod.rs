@@ -1,6 +1,7 @@
 //! Bundled research tools and the worker placements that can run them.
 use crate::config::{registry::Policy, Config};
 use fridica_agent::McpServer;
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 pub enum Service {
@@ -38,8 +39,11 @@ impl Service {
                 Self::Scix => {
                     policy.mode != "read-only" && allows_host(policy, "api.adsabs.harvard.edu")
                 }
-                // Interleaf accepts arbitrary Git remotes and local checkout paths.
-                Self::Overleaf => policy.mode == "full" && policy.any_network(),
+                // Interleaf accepts general Git remotes. Write-mode launches additionally
+                // bind the server to the assigned workspace on the execution target.
+                Self::Overleaf => {
+                    matches!(policy.mode.as_str(), "write" | "full") && policy.any_network()
+                }
             }
     }
     pub fn instructions(self) -> &'static str {
@@ -50,6 +54,16 @@ impl Service {
         }
     }
     pub fn server(self, config: &Config, machine: &str, policy: &Policy) -> Option<McpServer> {
+        self.server_at(config, machine, policy, None)
+    }
+
+    pub fn server_at(
+        self,
+        config: &Config,
+        machine: &str,
+        policy: &Policy,
+        workspace: Option<&Path>,
+    ) -> Option<McpServer> {
         if !self.available(config, machine, policy) {
             return None;
         }
@@ -59,6 +73,11 @@ impl Service {
             Self::Overleaf => fridica_agent::overleaf::overleaf("fridica"),
         };
         server.args = vec![format!("{}-mcp", self.name())];
+        if matches!(self, Self::Overleaf) && policy.mode == "write" {
+            server
+                .args
+                .extend(["--workspace-write".into(), workspace?.to_str()?.into()]);
+        }
         if config
             .machines
             .get(machine)

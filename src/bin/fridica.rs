@@ -36,6 +36,9 @@ enum Command {
     },
     /// Serve the bundled Overleaf project tools over stdio.
     OverleafMcp {
+        /// Confine the server and its subprocesses to writes in this worker workspace.
+        #[arg(long, value_name = "PATH")]
+        workspace_write: Option<PathBuf>,
         /// Check bundled tools and verify project read access when OVERLEAF_PROJECT_ID is set.
         #[arg(long)]
         probe: bool,
@@ -192,7 +195,13 @@ async fn run(cli: Cli) -> Result<()> {
                 tokio::task::spawn_blocking(fridica_agent::scix::run).await??;
             }
         }
-        Command::OverleafMcp { probe } => {
+        Command::OverleafMcp {
+            probe,
+            workspace_write,
+        } => {
+            if let Some(root) = workspace_write {
+                return fridica::exec::overleaf::launch(&root, probe);
+            }
             if probe {
                 if fridica::research::probe_overleaf().await? {
                     println!("fridica-overleaf-mcp:authenticated");

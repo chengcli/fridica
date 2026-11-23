@@ -610,14 +610,12 @@ async fn research_checks_use_worker_probes_and_report_policy_skips() {
     let source = std::fs::read_to_string(&fixture.path).unwrap();
     std::fs::write(
         &fixture.path,
-        source
-            .replace("mode='write'", "mode='full'")
-            .replace("'api.adsabs.harvard.edu'", "'*'"),
+        source.replace("'api.adsabs.harvard.edu'", "'*'"),
     )
     .unwrap();
     fixture.executable(
         "fridica",
-        "#!/bin/sh\n[ \"$*\" = 'overleaf-mcp --probe' ] && echo fridica-overleaf-mcp:authenticated\n",
+        "#!/bin/sh\n[ \"$1\" = overleaf-mcp ] && [ \"$2\" = --workspace-write ] && [ \"$3\" = \"$PWD\" ] && [ \"$4\" = --probe ] && echo fridica-overleaf-mcp:authenticated\n",
     );
     let report = fixture.run().await;
     assert_eq!(

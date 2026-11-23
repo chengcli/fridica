@@ -140,7 +140,7 @@ enabled = false
 [scix]
 enabled = false
 
-# Overleaf Git projects on full-access workspaces with network = ["*"].
+# Overleaf Git projects on write or full workspaces with network = ["*"].
 # Supply OVERLEAF_GIT_TOKEN and optionally ADS_TOKEN for citation checks.
 [overleaf]
 enabled = false
