@@ -1,5 +1,5 @@
 //! Durable Socket Mode intake. Call only from an authenticated Slack connection;
-//! this does not authenticate arbitrary HTTP requests or interpret owner controls.
+//! this does not authenticate arbitrary HTTP requests.
 use super::ingress::normalize;
 use crate::{
     attention,
@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Receiver {
+    pub(crate) observe_only: bool,
     pub(crate) store: Shared,
     pub(crate) config: Arc<Config>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -29,6 +30,7 @@ impl Receiver {
         ids: Arc<dyn Identifiers>,
     ) -> Self {
         Self {
+            observe_only: false,
             store,
             config,
             clock,
@@ -53,6 +55,9 @@ impl Receiver {
         let message = (kind == "events_api" && scoped)
             .then(|| normalize(payload, "socket"))
             .flatten();
+        let instruction = message
+            .as_ref()
+            .and_then(|msg| self.owner_instruction(msg, &payload["event"]));
         let dropped = kind == "events_api"
             && scoped
             && message.is_none()
@@ -76,7 +81,8 @@ impl Receiver {
         self.store.transact(move |u| {
             u.record("slack_envelope",now,&record.to_string(),true)?;
             if let Some(message) = message {
-                attention::intake_tx(u,message,&config.owner.slack_user,now,config.attention.mention_grace,&obligation,None)?;
+                let route = instruction.map_or(attention::Intake::Message, attention::Intake::OwnerInstruction);
+                attention::intake_tx(u,message,&config.owner.slack_user,now,config.attention.mention_grace,&obligation,route)?;
             }
             if dropped {
                 u.note("slack_dropped_mention",&json!({"event_id":record["envelope"]["payload"]["event_id"],"reason":"unsupported_message"}).to_string(),now)?;
@@ -84,6 +90,24 @@ impl Receiver {
             Ok(())
         }).await?;
         Ok(Some(Acknowledgement { envelope_id: id }))
+    }
+    pub(crate) fn owner_instruction(
+        &self,
+        msg: &attention::Message,
+        event: &serde_json::Value,
+    ) -> Option<String> {
+        if self.observe_only
+            || msg.sender != self.config.owner.slack_user
+            || !event["bot_id"].is_null()
+            || !event["app_id"].is_null()
+            || !event["edited"].is_null()
+            || !event["metadata"].is_null()
+        {
+            return None;
+        }
+        let (prefix, body) = msg.text.trim().split_once(char::is_whitespace)?;
+        let body = body.trim();
+        (prefix == "!f" && (1..=4000).contains(&body.chars().count())).then(|| body.to_owned())
     }
     pub(crate) fn scoped(&self, payload: &serde_json::Value) -> bool {
         payload["team_id"] == self.config.slack.workspace

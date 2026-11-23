@@ -374,6 +374,63 @@ async fn machine(
                 report.test(format!("GitHub MCP {}:{}", machine.name, workspace.name), passed,
                     "GitHub MCP executable, authentication, initialization or required tools unavailable");
             }
+            for service in crate::research::SERVICES {
+                if *probe.stop.borrow() || !service.enabled(&probe.config) {
+                    continue;
+                }
+                use crate::research::Service;
+                let (label, success) = match service {
+                    Service::Scix => ("NASA ADS (SciX)", "ADS accepted the worker token"),
+                    Service::Overleaf => (
+                        "Overleaf",
+                        "Overleaf accepted the worker token for the configured project",
+                    ),
+                    Service::Alphaxiv => {
+                        ("alphaXiv", "authenticated and discovered research tools")
+                    }
+                };
+                let name = format!("{label} MCP {}:{}", machine.name, workspace.name);
+                let Some(server) = service.server_at(
+                    &probe.config,
+                    &machine.name,
+                    &workspace.policy,
+                    Some(&workspace.path),
+                ) else {
+                    report.add(Status::Skip, name, "workspace policy excludes this server");
+                    continue;
+                };
+                let passed = match crate::workers::mcp_probe::launch(
+                    &probe.config,
+                    &probe.context.home,
+                    probe.environment.clone(),
+                    machine,
+                    workspace,
+                    server,
+                ) {
+                    Ok((launch, _control)) => {
+                        let marker = format!("fridica-{}-mcp:ready\n", service.name());
+                        match crate::exec::process::run_with_open_stdin(launch, probe.timeout, 4096)
+                            .await
+                        {
+                            Ok(r) if r.returncode == 0 && matches!(service, Service::Overleaf) => {
+                                if r.stdout == marker.as_bytes() {
+                                    report.add(Status::Warn, name, "bundled tools are ready; set OVERLEAF_PROJECT_ID to verify the token against a project");
+                                    continue;
+                                }
+                                r.stdout == b"fridica-overleaf-mcp:authenticated\n"
+                            }
+                            Ok(r) => r.returncode == 0 && r.stdout == marker.as_bytes(),
+                            Err(_) => false,
+                        }
+                    }
+                    Err(_) => false,
+                };
+                if passed {
+                    report.add(Status::Pass, name, success);
+                } else {
+                    report.add(Status::Fail, name, format!("check the worker binary, credentials and service configuration with fridica {}-mcp --probe", service.name()));
+                }
+            }
         }
         let auto = machine
             .workspaces

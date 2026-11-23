@@ -598,15 +598,18 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
         bail!("backend removed");
     }
     let same_backend = w.backend == config.parent.backend;
+    let workspace = space.for_slot(w.slot);
     Ok(WorkerSpec {
         python_env: config.python_envs.get(&m.name).cloned().unwrap_or_default(),
         mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy)
             .into_iter()
-            .chain(crate::alphaxiv::servers(config, &m.name, &space.policy))
+            .chain(crate::research::SERVICES.into_iter().filter_map(|service| {
+                service.server_at(config, &m.name, &workspace.policy, Some(&workspace.path))
+            }))
             .collect(),
         worker_id: w.id.clone(),
         machine: m.for_slot(w.slot),
-        workspace: space.for_slot(w.slot),
+        workspace,
         backend: w.backend.clone(),
         instructions: String::new(),
         // Workers on the parent's backend use the parent's model and effort;

@@ -107,6 +107,58 @@ fn frozen_normalization_preserves_metadata_attachments_and_declared_hardening() 
     }
 }
 #[tokio::test]
+async fn owner_prefix_instructs_the_addressed_thread_once() {
+    let h = Harness::new().await;
+    for (ts, text) in [
+        ("100.1", "!f Start the paper"),
+        ("100.2", "!f  Inspect the TeX file"),
+    ] {
+        let mut event = payload(ts, text);
+        event["event"]["user"] = json!("UOWNER");
+        event["event"]["thread_ts"] = json!("100.1");
+        let input = envelope(event);
+        for _ in 0..2 {
+            h.receiver.receive(&input).await.unwrap().unwrap();
+        }
+    }
+    for (index, (user, text, extra)) in [
+        ("UALICE", "!f peer", json!({})),
+        ("UOWNER", "!foo near miss", json!({})),
+        ("UOWNER", "!f ", json!({})),
+        ("UOWNER", "!f bot", json!({"bot_id":"B1"})),
+        (
+            "UOWNER",
+            "!f echo",
+            json!({"metadata":{"event_type":"fridica_message"}}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut event = payload(&format!("200.{index}"), text);
+        event["event"]["user"] = json!(user);
+        event["event"]
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        h.receiver.receive(&envelope(event)).await.unwrap();
+    }
+    let instructions = h.store.call(|c| {
+        let mut stmt = c.prepare("SELECT session_id, json_extract(payload_json,'$.text') FROM thread_inbox WHERE kind='owner_instruction' ORDER BY id")?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?;
+        Ok(rows.collect::<Result<Vec<_>,_>>()?)
+    }).await.unwrap();
+    assert_eq!(
+        instructions,
+        vec![
+            ("TTEAM:CROOM:100.1".into(), "Start the paper".into()),
+            ("TTEAM:CROOM:100.1".into(), "Inspect the TeX file".into()),
+        ]
+    );
+    assert_eq!(h.count("thread_inbox").await, 7);
+}
+
+#[tokio::test]
 async fn socket_ack_requires_durable_atomic_intake_and_redelivery_deduplicates() {
     let h = Harness::new().await;
     let mut event = payload("100.1", "<@UOWNER> help");

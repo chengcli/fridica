@@ -1,4 +1,4 @@
-//! Host-owned alphaXiv settings; no credentials or I/O.
+//! Host-owned research integration settings; no credentials or I/O.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

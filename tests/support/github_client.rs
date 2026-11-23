@@ -47,17 +47,14 @@ impl Harness {
             [
                 ("HOME".into(), self.dir.path().as_os_str().to_owned()),
                 ("PATH".into(), std::env::var_os("PATH").unwrap()),
-                ("MY_GH_TOKEN".into(), "ghp_synthetic_secret".into()),
+                ("GH_TOKEN".into(), "ghp_synthetic_secret".into()),
                 ("GH_DEBUG".into(), "api".into()),
                 ("GH_REPO".into(), "evil/repo".into()),
                 ("GH_HOST".into(), "evil.invalid".into()),
                 ("FRIDICA_SLACK_TOKEN".into(), "xoxp_synthetic_slack".into()),
                 ("SSH_AUTH_SOCK".into(), "/fake/agent".into()),
             ],
-            &crate::config::schema::GitHub {
-                token_env: "MY_GH_TOKEN".into(),
-                ..Default::default()
-            },
+            &Default::default(),
         )
         .unwrap();
         Gh {
@@ -296,17 +293,12 @@ fn gh_rate_delay_and_environment_selection_do_not_request_new_credentials() {
         assert_eq!(retry_after(&headers, 1000.), expected);
     }
     let (env, _) = environment(
-        [
-            ("GH_TOKEN".into(), "existing".into()),
-            ("MY_GH_TOKEN".into(), "legacy".into()),
-        ],
-        &crate::config::schema::GitHub {
-            token_env: "MY_GH_TOKEN".into(),
-            ..Default::default()
-        },
+        [("FRIDICA_GITHUB_TOKEN".into(), "retired".into())],
+        &Default::default(),
     )
     .unwrap();
-    assert_eq!(env[std::ffi::OsStr::new("GH_TOKEN")], "existing");
+    assert!(!env.contains_key(std::ffi::OsStr::new("GH_TOKEN")));
+    assert!(!env.contains_key(std::ffi::OsStr::new("FRIDICA_GITHUB_TOKEN")));
 }
 
 #[tokio::test]
@@ -418,10 +410,7 @@ fn gh_redaction_handles_dense_token_prefixes_and_proxy_credentials() {
             "HTTPS_PROXY".into(),
             "https://owner:proxy-private@proxy.invalid".into(),
         )],
-        &crate::config::schema::GitHub {
-            token_env: "MY_GH_TOKEN".into(),
-            ..Default::default()
-        },
+        &Default::default(),
     )
     .unwrap();
     assert_eq!(

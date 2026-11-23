@@ -86,14 +86,23 @@ impl<H: History> Catchup<H> {
                 if !self.receiver.scoped(&payload) {
                     continue;
                 }
-                first_read = first_read.min(
-                    payload["event"]["ts"]
-                        .as_str()
-                        .context("missing catch-up timestamp")?
-                        .parse::<f64>()?,
-                );
+                let timestamp = payload["event"]["ts"]
+                    .as_str()
+                    .context("missing catch-up timestamp")?
+                    .parse::<f64>()?;
+                first_read = first_read.min(timestamp);
                 if let Some(message) = normalize(&payload, "catchup") {
-                    prepared.push((message, self.receiver.ids.next("obligation")));
+                    let cutoff = now - DAY;
+                    let route = if timestamp >= cutoff {
+                        self.receiver.owner_instruction(&message, &payload["event"])
+                    } else {
+                        None
+                    }
+                    .map_or(
+                        attention::Intake::Catchup(cutoff),
+                        attention::Intake::OwnerInstruction,
+                    );
+                    prepared.push((message, self.receiver.ids.next("obligation"), route));
                 } else if payload["event"]["text"].as_str().is_some_and(|text| {
                     text.contains(&format!("<@{}>", self.receiver.config.owner.slack_user))
                 }) {
@@ -105,8 +114,8 @@ impl<H: History> Catchup<H> {
             let incomplete_channel = channel.clone();
             let added = self.receiver.store.transact(move |u| {
                 let mut added = 0;
-                for (message,id) in prepared {
-                    if attention::intake_tx(u,message,&config.owner.slack_user,now,config.attention.mention_grace,&id,Some(now-DAY))?.is_some() { added+=1; }
+                for (message,id,route) in prepared {
+                    if attention::intake_tx(u,message,&config.owner.slack_user,now,config.attention.mention_grace,&id,route)?.is_some() { added+=1; }
                 }
                 // A root Slack refuses (e.g. deleted) is skipped, once per root,
                 // so it cannot stall the watermark.

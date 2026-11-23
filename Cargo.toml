@@ -2,7 +2,7 @@
 name = "fridica"
 version = "0.4.0-dev.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.91"
 description = "Durable Slack agent coordination"
 license = "MIT"
 repository = "https://github.com/chengcli/fridica"
@@ -18,7 +18,7 @@ path = "src/bin/fridica.rs"
 [dependencies]
 fridica-core = { version = "0.6.2", features = ["native-secrets"] }
 fridica-store-sqlite = "0.4.0"
-fridica-agent = { version = "0.4.3", features = ["github", "alphaxiv"] }
+fridica-agent = { version = "0.4.6", features = ["github", "alphaxiv", "scix", "overleaf"] }
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

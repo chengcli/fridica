@@ -140,10 +140,10 @@ longer schedules parent turns or channel posts. Legacy queued turns are settled
 without model calls, and queued posts fail with `debrief_removed` before delivery.
 Historical database fields and event projections remain readable for compatibility.
 
-The alphaXiv adapter sits beside GitHub at the worker integration layer. Its
-settings live in config, and fridica-agent owns the MCP protocol and research
-instructions. Fridica gates attachment by workspace network policy and explicit
-`alphaxiv.enabled`; credential values remain in the process environment.
+Fridica attaches the enabled alphaXiv, NASA ADS (SciX) and Overleaf servers to
+eligible local and SSH workers. The same placement checks supply the parent's
+workspace lists and the worker's tool instructions. The fridica-agent crate
+provides the bundled stdio servers. Credentials come from the worker environment.
 
 Python environment paths are host-only machine settings carried in worker specs.
 Activation wraps the transport launch before isolation and credential forwarding;

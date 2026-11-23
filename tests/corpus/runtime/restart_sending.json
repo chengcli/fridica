@@ -236,8 +236,7 @@
             "backend": "codex",
             "excluded_env": [
               "SLACK_APP_TOKEN",
-              "SLACK_USER_TOKEN",
-              "FRIDICA_GITHUB_TOKEN"
+              "SLACK_USER_TOKEN"
             ],
             "idle_timeout": 1800.0,
             "instructions": "Scripted test instructions",
@@ -454,8 +453,7 @@
             "backend": "codex",
             "excluded_env": [
               "SLACK_APP_TOKEN",
-              "SLACK_USER_TOKEN",
-              "FRIDICA_GITHUB_TOKEN"
+              "SLACK_USER_TOKEN"
             ],
             "idle_timeout": 1800.0,
             "instructions": "Scripted test instructions",
@@ -1557,8 +1555,7 @@
                 "backend": "codex",
                 "excluded_env": [
                   "SLACK_APP_TOKEN",
-                  "SLACK_USER_TOKEN",
-                  "FRIDICA_GITHUB_TOKEN"
+                  "SLACK_USER_TOKEN"
                 ],
                 "idle_timeout": 1800.0,
                 "instructions": "Scripted test instructions",
@@ -2610,8 +2607,7 @@
                 "backend": "codex",
                 "excluded_env": [
                   "SLACK_APP_TOKEN",
-                  "SLACK_USER_TOKEN",
-                  "FRIDICA_GITHUB_TOKEN"
+                  "SLACK_USER_TOKEN"
                 ],
                 "idle_timeout": 1800.0,
                 "instructions": "Scripted test instructions",
@@ -3993,8 +3989,7 @@
                 "backend": "codex",
                 "excluded_env": [
                   "SLACK_APP_TOKEN",
-                  "SLACK_USER_TOKEN",
-                  "FRIDICA_GITHUB_TOKEN"
+                  "SLACK_USER_TOKEN"
                 ],
                 "idle_timeout": 1800.0,
                 "instructions": "Scripted test instructions",
@@ -5376,8 +5371,7 @@
                 "backend": "codex",
                 "excluded_env": [
                   "SLACK_APP_TOKEN",
-                  "SLACK_USER_TOKEN",
-                  "FRIDICA_GITHUB_TOKEN"
+                  "SLACK_USER_TOKEN"
                 ],
                 "idle_timeout": 1800.0,
                 "instructions": "Scripted test instructions",
@@ -6759,8 +6753,7 @@
                 "backend": "codex",
                 "excluded_env": [
                   "SLACK_APP_TOKEN",
-                  "SLACK_USER_TOKEN",
-                  "FRIDICA_GITHUB_TOKEN"
+                  "SLACK_USER_TOKEN"
                 ],
                 "idle_timeout": 1800.0,
                 "instructions": "Scripted test instructions",
@@ -8142,8 +8135,7 @@
                 "backend": "codex",
                 "excluded_env": [
                   "SLACK_APP_TOKEN",
-                  "SLACK_USER_TOKEN",
-                  "FRIDICA_GITHUB_TOKEN"
+                  "SLACK_USER_TOKEN"
                 ],
                 "idle_timeout": 1800.0,
                 "instructions": "Scripted test instructions",

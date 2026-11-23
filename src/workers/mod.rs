@@ -6,6 +6,7 @@ pub mod fetch;
 pub mod inputs;
 pub mod instructions;
 pub mod launcher;
+pub(crate) mod mcp_probe;
 pub mod progress;
 pub mod protocol;
 pub(crate) mod redelivery;

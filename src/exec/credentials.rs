@@ -39,7 +39,10 @@ pub fn forward(mut launch: Launch, excluded: &[String], mcp_names: &[String]) ->
             continue;
         };
         if !shell::env_name(name)
-            || name == "GH_CONFIG_DIR"
+            || matches!(
+                name,
+                "GH_CONFIG_DIR" | "INTERLEAF_CONFIG" | "INTERLEAF_WORKSPACE"
+            )
             || !(token_name(name) || mcp_names.iter().any(|n| n == name))
         {
             continue;

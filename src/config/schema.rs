@@ -61,7 +61,6 @@ pub struct GitHub {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<fridica_core::secret::KeyringRef>,
-    pub token_env: String,
     pub cache_seconds: f64,
 }
 impl Default for GitHub {
@@ -70,7 +69,6 @@ impl Default for GitHub {
             mcp: Default::default(),
             enabled: true,
             token: None,
-            token_env: "FRIDICA_GITHUB_TOKEN".into(),
             cache_seconds: 60.,
         }
     }
@@ -149,8 +147,12 @@ pub struct Config {
     pub python_envs: std::collections::BTreeMap<String, String>,
     pub state: State,
     pub github: GitHub,
-    #[serde(default, skip_serializing_if = "super::alphaxiv::Settings::is_default")]
-    pub alphaxiv: super::alphaxiv::Settings,
+    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
+    pub alphaxiv: super::research::Settings,
+    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
+    pub scix: super::research::Settings,
+    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
+    pub overleaf: super::research::Settings,
     pub attention: Attention,
     #[serde(default, skip_serializing_if = "super::isolation::Settings::is_empty")]
     pub isolation: super::isolation::Settings,
@@ -162,12 +164,8 @@ pub struct Config {
     pub fingerprint: String,
 }
 impl Config {
-    pub fn secret_env(&self) -> [&str; 3] {
-        [
-            &self.slack.app_token_env,
-            &self.slack.user_token_env,
-            &self.github.token_env,
-        ]
+    pub fn secret_env(&self) -> [&str; 2] {
+        [&self.slack.app_token_env, &self.slack.user_token_env]
     }
     /// Return only the configured names here; adapters read the actual credentials
     /// just before startup, and must not serialize them into configuration/replay.

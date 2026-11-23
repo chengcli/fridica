@@ -69,7 +69,12 @@ control_socket="private/control.sock"
 async fn active_launch_and_invalid_tokens_fail_before_state_creation() {
     let f = Fixture::new();
     // A bare start is the active daemon; without credentials it stops before state.
-    let output = f.command().output().await.unwrap();
+    let output = f
+        .command()
+        .env("SLACK_APP_TOKEN", "")
+        .output()
+        .await
+        .unwrap();
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("SLACK_"),

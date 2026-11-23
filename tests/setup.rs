@@ -77,14 +77,19 @@ impl Fixture {
 #[tokio::test]
 async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_creation() {
     let f = Fixture::new();
-    let output = f.cli(&["init", "--config", f.path.to_str().unwrap()]).await;
+    let output = f
+        .cli_env(
+            &["init", "--config", f.path.to_str().unwrap()],
+            &[
+                ("ALPHAXIV_TOKEN", "fixture-alpha"),
+                ("ADS_TOKEN", "fixture-ads"),
+                ("OVERLEAF_GIT_TOKEN", "fixture-overleaf"),
+                ("GITHUB_TOKEN", "fixture-github"),
+            ],
+        )
+        .await;
     assert_eq!(output.returncode, 0, "{}", output.stderr);
-    let starter = f.read();
-    let detected_reader = setup::TEMPLATE.replace(
-        "# token = \"keyring://github/read-prs\"",
-        "token = \"keyring://github/read-prs\"",
-    );
-    assert!(starter == setup::TEMPLATE || starter == detected_reader);
+    assert!(!f.read().contains("fixture-"));
     assert!(f.path.with_file_name("contract.md").is_file());
     assert_eq!(
         std::fs::read_to_string(f.path.with_file_name("manifest.yaml")).unwrap(),
@@ -113,7 +118,7 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
         0o700
     );
     assert!(!f.context.home.join("project").exists());
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
     assert!(!f.read().contains("max_wait_replies"));
     let before = f.read();
     assert_ne!(
@@ -127,6 +132,12 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
     assert!(config::load(&f.path, &f.context).is_err());
     std::fs::create_dir(f.context.home.join("project")).unwrap();
     let config = config::load(&f.path, &f.context).unwrap();
+    assert!(
+        config.github.mcp.enabled
+            && config.alphaxiv.enabled
+            && config.scix.enabled
+            && config.overleaf.enabled
+    );
     assert_eq!(
         (
             config.attention.max_echo_replies_per_hour,
@@ -205,7 +216,7 @@ async fn configure_cli_accepts_incomplete_files_preserves_comments_and_deduplica
     );
     assert!(source.contains("# a few sentences about you"));
     assert!(source.contains("# your Slack member ID"));
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
     for args in [
         vec!["--owner-id", "invalid-private-value"],
         vec!["--workspace-id", "UWRONG"],
@@ -232,7 +243,7 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
     let source = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         &path,
-        source.replace("user_token = \"keyring://slack/user-token\"", ""),
+        source.replace("[slack]", "[slack]\nuser_token_env = \"CUSTOM_USER_TOKEN\""),
     )
     .unwrap();
     let before = std::fs::read(&path).unwrap();
@@ -240,15 +251,8 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
         .cli(&["configure", "--detect", "--channel-name", "general"])
         .await;
     assert_eq!(output.returncode, 2);
-    assert!(output.stderr.contains("SLACK_USER_TOKEN"));
+    assert!(output.stderr.contains("CUSTOM_USER_TOKEN"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    std::fs::write(
-        &path,
-        std::str::from_utf8(&before)
-            .unwrap()
-            .replace("SLACK_USER_TOKEN", "CUSTOM_USER_TOKEN"),
-    )
-    .unwrap();
     let output = f
         .cli_env(
             &["configure", "--detect", "--channel-name", "general"],
@@ -258,7 +262,7 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
     assert_eq!(output.returncode, 2);
     assert!(output.stderr.contains("user-token"));
     assert!(!output.stderr.contains("private-custom"));
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
     assert_eq!(
         f.cli(&[
             "configure",
@@ -485,7 +489,7 @@ async fn detected_setup_commits_only_after_selection_and_refuses_file_changes_du
     .unwrap();
     assert!(f.read().contains("UOWNER"));
     assert!(f.read().contains("CROOM"));
-    assert!(!f.context.home.join(".local").exists());
+    assert!(!f.context.home.join(".local/state/fridica").exists());
 }
 
 #[tokio::test]

@@ -674,8 +674,10 @@ fn daemon_resolves_typed_keyring_references_without_exporting_values() {
     impl SecretStore for FixtureStore {
         fn get(&self, name: &str) -> anyhow::Result<Option<Vec<u8>>> {
             Ok(match name {
-                "fridica/test/app" => Some(b"xapp-synthetic".to_vec()),
-                "fridica/test/user" => Some(b"xoxp-synthetic".to_vec()),
+                "fridica/test/app" | "fridica/slack/app-token" => Some(b"xapp-synthetic".to_vec()),
+                "fridica/test/user" | "fridica/slack/user-token" => {
+                    Some(b"xoxp-synthetic".to_vec())
+                }
                 _ => None,
             })
         }
@@ -694,6 +696,9 @@ fn daemon_resolves_typed_keyring_references_without_exporting_values() {
     let root = dir.path();
     setup(root);
     let path = root.join("etc/config.toml");
+    std::fs::write(&path, basic(root)).unwrap();
+    let defaults = config::load(&path, &context(root)).unwrap();
+    fridica::daemon::Credentials::from_store(&defaults, |_| None, &FixtureStore).unwrap();
     let source = basic(root).replace(
         "[slack]",
         "[slack]\napp_token='keyring://test/app'\nuser_token='keyring://test/user'",
@@ -733,8 +738,8 @@ fn secret_commands_read_environment_tokens() {
         ),
         (
             env!("CARGO_BIN_EXE_fridica-secret"),
-            vec!["fridica/github/read-prs"],
-            "FRIDICA_GITHUB_TOKEN",
+            vec!["fridica/slack/user-token"],
+            "SLACK_USER_TOKEN",
         ),
         (
             env!("CARGO_BIN_EXE_fridica"),

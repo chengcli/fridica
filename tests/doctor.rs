@@ -18,7 +18,7 @@ import json, os, sys, time
 from pathlib import Path
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
-assert not any('SLACK' in k or k.startswith('FRIDICA_') or k == 'SECRET_GITHUB' for k in os.environ)
+assert not any('SLACK' in k or k.startswith('FRIDICA_') for k in os.environ)
 with open(os.environ['CALLS'], 'a') as stream:
     stream.write(json.dumps([name,args])+'\n')
 mode = os.environ.get('MODE','')
@@ -59,7 +59,7 @@ sys.exit(92)
 /// it, exit 4 (gh's "not logged in") otherwise, down when asked.
 const GH: &str = r#"#!/usr/bin/python3
 import os, sys
-assert not any('SLACK' in k or k == 'SECRET_GITHUB' for k in os.environ)
+assert not any('SLACK' in k for k in os.environ)
 assert sys.argv[1:4] == ['api', '--hostname', 'github.com'] and sys.argv[-1] == '/rate_limit'
 if os.path.exists(os.path.join(os.environ['HOME'], 'gh-down')):
     sys.exit(1)
@@ -103,7 +103,6 @@ project={}
 path="state.db"
 control_socket="control.sock"
 [github]
-token_env="SECRET_GITHUB"
 "#,
                 json!(root.join("project"))
             ),
@@ -126,7 +125,7 @@ token_env="SECRET_GITHUB"
             ("OUT".into(), root.join("out").into_os_string()),
             ("SLACK_APP_TOKEN".into(), "xapp-private-secret".into()),
             ("SLACK_USER_TOKEN".into(), "xoxp-private-secret".into()),
-            ("SECRET_GITHUB".into(), "private-secret".into()),
+            ("GH_TOKEN".into(), "private-secret".into()),
         ]);
         let fixture = Self {
             dir,
@@ -235,7 +234,7 @@ assert 'UpdateHostKeys=no' in sys.argv
 assert '-A' not in sys.argv
 # Pretend the remote login environment also contains daemon tokens.
 os.environ['SLACK_USER_TOKEN']='xoxp-private-secret'
-os.environ['SECRET_GITHUB']='private-secret'
+os.environ['FRIDICA_OLD_TOKEN']='private-secret'
 os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
 "#,
     );
@@ -264,7 +263,7 @@ async fn github_reader_is_probed_without_recording_and_warns_when_it_cannot_read
     assert_eq!(status(&fixture.run().await, "GitHub reader"), Status::Pass);
     // No token reaches gh: it is not logged in, so repository context is off.
     let mut unauthenticated = Fixture::new();
-    unauthenticated.env.remove(&OsString::from("SECRET_GITHUB"));
+    unauthenticated.env.remove(&OsString::from("GH_TOKEN"));
     let report = unauthenticated.run().await;
     assert_eq!(status(&report, "GitHub reader"), Status::Warn);
     let check = report
@@ -485,7 +484,9 @@ async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
         .await;
     assert_eq!(result.returncode, 0);
     assert!(result.text().contains("0 failed"));
-    fixture.env.remove(std::ffi::OsStr::new("SLACK_APP_TOKEN"));
+    fixture
+        .env
+        .insert("SLACK_APP_TOKEN".into(), "invalid-fixture".into());
     let result = fixture
         .cli(&["doctor", "--local-slack", "--timeout", "2"])
         .await;
@@ -562,9 +563,7 @@ async fn missing_python_environment_is_reported_without_running_worker_backends(
 
 #[tokio::test]
 async fn doctor_finds_tokens_before_init_and_with_incomplete_machine_setup() {
-    let mut f = Fixture::new();
-    f.env
-        .insert("FRIDICA_GITHUB_TOKEN".into(), "synthetic-reader".into());
+    let f = Fixture::new();
     std::fs::remove_file(&f.path).unwrap();
     for initialized in [false, true] {
         if initialized {
@@ -582,4 +581,51 @@ async fn doctor_finds_tokens_before_init_and_with_incomplete_machine_setup() {
         assert!(!report.text().contains("private-secret"));
         assert_eq!(f.path.exists(), initialized);
     }
+}
+
+#[tokio::test]
+async fn research_checks_use_worker_probes_and_report_policy_skips() {
+    let fixture = Fixture::new();
+    fixture.append("\n[scix]\nenabled=true\n[overleaf]\nenabled=true\n");
+    let source = std::fs::read_to_string(&fixture.path).unwrap();
+    std::fs::write(
+        &fixture.path,
+        source.replace(
+            "gpu_confine=false",
+            "gpu_confine=false\nmode='write'\nnetwork=['api.adsabs.harvard.edu']",
+        ),
+    )
+    .unwrap();
+    fixture.executable(
+        "fridica",
+        "#!/bin/sh\n[ \"$*\" = 'scix-mcp --probe' ] && echo fridica-scix-mcp:ready\n",
+    );
+    let report = fixture.run().await;
+    assert_eq!(
+        status(&report, "NASA ADS (SciX) MCP local:project"),
+        Status::Pass
+    );
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Skip);
+
+    let source = std::fs::read_to_string(&fixture.path).unwrap();
+    std::fs::write(
+        &fixture.path,
+        source.replace("'api.adsabs.harvard.edu'", "'*'"),
+    )
+    .unwrap();
+    fixture.executable(
+        "fridica",
+        "#!/bin/sh\n[ \"$1\" = overleaf-mcp ] && [ \"$2\" = --workspace-write ] && [ \"$3\" = \"$PWD\" ] && [ \"$4\" = --probe ] && echo fridica-overleaf-mcp:authenticated\n",
+    );
+    let report = fixture.run().await;
+    assert_eq!(
+        status(&report, "NASA ADS (SciX) MCP local:project"),
+        Status::Fail
+    );
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Pass);
+
+    fixture.executable("fridica", "#!/bin/sh\necho fridica-overleaf-mcp:ready\n");
+    let report = fixture.run().await;
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Warn);
+    assert!(report.text().contains("OVERLEAF_PROJECT_ID"));
 }

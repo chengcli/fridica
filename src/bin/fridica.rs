@@ -28,6 +28,21 @@ enum Command {
         #[arg(long)]
         probe: bool,
     },
+    /// Serve NASA ADS literature and library tools over stdio.
+    ScixMcp {
+        /// Verify the token with an ADS query requesting zero results.
+        #[arg(long)]
+        probe: bool,
+    },
+    /// Serve the bundled Overleaf project tools over stdio.
+    OverleafMcp {
+        /// Confine the server and its subprocesses to writes in this worker workspace.
+        #[arg(long, value_name = "PATH")]
+        workspace_write: Option<PathBuf>,
+        /// Check bundled tools and verify project read access when OVERLEAF_PROJECT_ID is set.
+        #[arg(long)]
+        probe: bool,
+    },
     /// Print the version, source fingerprint and native target.
     BuildInfo,
     /// Initialize fresh v6 state offline; existing legacy databases require migrate.
@@ -172,6 +187,31 @@ async fn run(cli: Cli) -> Result<()> {
                 fridica_agent::alphaxiv::run().await?;
             }
         }
+        Command::ScixMcp { probe } => {
+            if probe {
+                fridica_agent::scix::probe().await?;
+                println!("fridica-scix-mcp:ready");
+            } else {
+                tokio::task::spawn_blocking(fridica_agent::scix::run).await??;
+            }
+        }
+        Command::OverleafMcp {
+            probe,
+            workspace_write,
+        } => {
+            if let Some(root) = workspace_write {
+                return fridica::exec::overleaf::launch(&root, probe);
+            }
+            if probe {
+                if fridica::research::probe_overleaf().await? {
+                    println!("fridica-overleaf-mcp:authenticated");
+                } else {
+                    println!("fridica-overleaf-mcp:ready");
+                }
+            } else {
+                tokio::task::spawn_blocking(fridica_agent::overleaf::run).await??;
+            }
+        }
         Command::GithubMcp(options) => {
             fridica_agent::github::run(fridica_agent::github::Options {
                 read_only: options.read_only,
@@ -231,7 +271,7 @@ async fn run(cli: Cli) -> Result<()> {
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Existing Slack environment or keyring tokens are picked up automatically. Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
+            println!("MCP settings reflect the credentials found during setup. Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
         }
         Command::Configure(options) => options
             .run(&fridica::config::LoadContext::current()?)

@@ -2,16 +2,37 @@
 
 Fridica answers Slack threads as you and delegates work to Claude Code or Codex on your machines. One daemon represents one Slack account. Its local parent agent decides when to reply and what to delegate. Each thread keeps its own conversation, decisions and workers, so a follow-up can continue a job on the same machine.
 
-## Install
+## Set up tokens on macOS or Linux
 
-On the daemon machine, use macOS or Linux with Python 3.11 or newer. In a Python virtual environment, install Fridica and create its configuration.
+Install Fridica in a Python 3.11+ virtual environment with `python -m pip install fridica`. As the OS user who will run the daemon, store the Slack tokens and any worker tokens you already have. The same commands use **Keychain on macOS** and **Secret Service on Linux**. On Linux, run them in a user D-Bus session with an unlocked keyring. Each command prompts for the token with input hidden.
+
+| Credential | Store in the OS keyring | Environment variable |
+| --- | --- | --- |
+| Slack app | `fridica secret set slack/app-token` | `SLACK_APP_TOKEN` |
+| Slack user | `fridica secret set slack/user-token` | `SLACK_USER_TOKEN` |
+| GitHub daemon reader (optional) | `fridica secret set github/read-prs` | Uses existing `gh` credentials when no reader keyring entry is configured |
+| GitHub worker MCP | `fridica secret set github/mcp-token` | `GH_TOKEN` or `GITHUB_TOKEN` |
+| alphaXiv MCP | `fridica secret set alphaxiv/token` | `ALPHAXIV_TOKEN` |
+| NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
+| Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
+
+Slack automatically checks the standard environment variables first and then their keyring entries. You can delete the four standard Slack token assignments from an existing `[slack]` table. Keep any overrides that point to custom names.
+
+To use an environment variable in Bash or Zsh, export it before running `fridica init` and supply it to the daemon at startup. For example, this prompts for an ADS token without putting its value in shell history:
 
 ```sh
-python -m pip install fridica
+export ADS_TOKEN="$(python3 -c 'import getpass; print(getpass.getpass("ADS token: "))')"
+```
+
+## Initialize Fridica
+
+```sh
 fridica init
 ```
 
-For an isolated command-line installation, use `pipx install fridica` in place of the pip command. The wheel includes the native CLI and its credential helper. To install the version in this checkout, run `python -m pip install .` from the repository root with Rust 1.88 or newer.
+On first setup, `init` enables each MCP with a nonblank environment token or a matching keyring entry. An existing local `gh` login also enables GitHub MCP. Discovery runs on the daemon machine and leaves workspace permissions intact. For credentials available only on an SSH worker, enable the corresponding MCP in `config.toml`. After configuring your workspaces, run `fridica doctor` to validate credentials on eligible workers. For Overleaf, also set `OVERLEAF_PROJECT_ID` to the 24-character ID in a project URL so doctor can verify read access.
+
+For an isolated command-line installation, use `pipx install fridica` in place of the pip command. The wheel includes the native CLI and its credential helper. To install the version in this checkout, run `python -m pip install .` from the repository root with Rust 1.91 or newer.
 
 `fridica init` creates four files under `~/.config/fridica/`:
 
@@ -27,7 +48,7 @@ For an existing installation with legacy state, stop the daemon, back up its con
 ### Prepare the machines
 
 - **Daemon:** Install and sign in to the parent backend on this machine. The default is Claude Code. To use Codex, set `backend = "codex"` under `[parent]`.
-- **Workers:** Install and sign in to every backend listed for that machine. Fridica's helpers use `/usr/bin/python3`. On SSH machines, the account must be reachable without a prompt, and the backend commands must be on its noninteractive `PATH`. Install Fridica there too when using the bundled GitHub or alphaXiv tools.
+- **Workers:** Install and sign in to every backend listed for that machine. Fridica's helpers use `/usr/bin/python3`. On SSH machines, the account must be reachable without a prompt, and the backend commands must be on its noninteractive `PATH`. Install Fridica there too when using the bundled GitHub, alphaXiv, ADS or Overleaf tools.
 
 Backend installation guides: [Claude Code](https://code.claude.com/docs/en/setup) and [Codex CLI](https://developers.openai.com/codex/cli).
 
@@ -88,7 +109,7 @@ The generated configuration uses macOS Keychain or Linux Secret Service. On Linu
 
 `fridica secret set slack/app-token` stores the token as a generic password in macOS Keychain or as a secret in the default Linux Secret Service collection (such as GNOME Keyring). Both use the current OS username as the account, `fridica:fridica/slack/app-token` as the service, and the token as the password. The entry has no website. Running `secret set` on an older Fridica entry moves it to this format.
 
-`fridica secret get slack/app-token` writes the token to stdout. Both this command and the `fridica-secret` provider check the corresponding environment variable first (`SLACK_APP_TOKEN`, `SLACK_USER_TOKEN`, or `FRIDICA_GITHUB_TOKEN` for `github/read-prs`). For a custom token, use `fridica secret get example/api-token --env EXAMPLE_API_TOKEN`. If the variable is unset, Fridica reads the stored password.
+`fridica secret get slack/app-token` writes the token to stdout. Both this command and the `fridica-secret` provider check the corresponding environment variable first for Slack credentials (`SLACK_APP_TOKEN` or `SLACK_USER_TOKEN`). For a custom token, use `fridica secret get example/api-token --env EXAMPLE_API_TOKEN`. If the variable is unset, Fridica reads the stored password.
 
 ## Configure machines
 
@@ -126,7 +147,7 @@ The generated template documents machine limits, load-aware placement, GPU confi
 ### Workspaces and permissions
 
 - Writable workspaces normally give each slot its own `worker1/`, `worker2/`, and so on. Set `subfolders = false` for a shared checkout. Jobs there can touch the same files. In managed slot directories, Fridica cleans old scratch files before reuse. Place `.fridica-keep` in a directory to preserve its subtree.
-- Set `[policy].mode` to `read-only`, `write` or `full` and override it per machine or workspace as needed. For Codex's ordinary sandbox, a nonempty `network` list enables general network access. GPU confinement uses the host network and bounds filesystem writes. Declared GPUs are assigned by job slot.
+- The default worker mode is `write`. Set `[policy].mode` to `read-only`, `write` or `full` and override it per machine or workspace as needed. For Codex's ordinary sandbox, a nonempty `network` list enables general network access. GPU confinement uses the host network and bounds filesystem writes. Declared GPUs are assigned by job slot.
 - `approvals = "auto"` uses the backend reviewer. Choose `on-request` for owner decisions on escalation, `untrusted` for more frequent prompts, or `never` to deny escalation. Pending requests appear in the dashboard and in `fridica approvals`.
 - For scoped access to a public GitHub ref, configure `fetch_repos`, `network = []` and `approvals = "on-request"` on a writable workspace without GPU confinement. The worker receives a bare repository and the fetched commit SHA.
 - To use an existing Python virtual environment for worker commands and MCP servers, set `python_env = "~/pyenv"` in the machine table. Fridica activates it on the execution machine.
@@ -148,7 +169,9 @@ fridica start
 
 ## In Slack
 
-Mention the owner in a configured channel and ask for work in a named workspace. For the example workspace above, ask “Run the tests in the project workspace and summarize the failures.” Reply in the same thread to refine the request. The parent can reuse a worker, delegate to several machines, or ask for clarification. Set `[slack].general_messages = false` to turn off unsolicited participation in general conversation.
+From your configured Slack owner account, send `!f <instruction>` in a configured channel to start a thread, or reply with it to instruct an existing thread. For example, send `!f Use the project workspace to inspect <Overleaf project URL> and identify the main TeX file.`
+
+Other channel members can mention the owner and ask for work in a named workspace. For the example workspace above, ask “Run the tests in the project workspace and summarize the failures.” Reply in the same thread to refine the request. The parent can reuse a worker, delegate to several machines, or ask for clarification. Set `[slack].general_messages = false` to turn off unsolicited participation in general conversation.
 
 The parent reads thread history, selected text attachments and worker summaries. It can pass Slack files to a worker as read-only inputs. Workers report results, progress and requested artifacts back through the daemon. The Slack app needs `files:read` to download attachments and `files:write` to upload reports and figures.
 
@@ -167,15 +190,21 @@ token = "keyring://github/read-prs"
 cache_seconds = 60
 ```
 
-Fridica supplies the resolved secret to its `gh` process as `GH_TOKEN`. No interactive login is required. If present, the legacy `FRIDICA_GITHUB_TOKEN` variable overrides the keyring entry. Set `enabled = false` to disable these lookups.
+Fridica supplies the resolved secret to its `gh` process as `GH_TOKEN`. No interactive login is required. When upgrading an existing configuration, remove `token_env` from the top-level `[github]` table. Move any dedicated reader token to the keyring. Set `enabled = false` to disable these lookups.
 
 ## Worker integrations
 
-**GitHub.** The bundled GitHub MCP server is enabled by default for eligible local and SSH workspaces with GitHub network access. Read-only workspaces expose read tools. Writable workspaces can also publish reviews, comments and task-branch changes. Enabling these tools authorizes their use without a second Fridica approval. GitHub enforces the worker credential's repository permissions and branch protections. Scoped-fetch placements receive no GitHub MCP server.
+**GitHub.** The bundled GitHub MCP server runs on eligible local and SSH workspaces with GitHub network access when enabled. Read-only workspaces expose read tools. Writable workspaces can also publish reviews, comments and task-branch changes. Enabling these tools authorizes their use without a second Fridica approval. GitHub enforces the worker credential's repository permissions and branch protections. Scoped-fetch placements receive no GitHub MCP server.
 
 Authenticate as the worker's execution user with `gh auth login --hostname github.com`, or provide a worker `GH_TOKEN`. The daemon's dedicated GitHub reader secret stays with the daemon. Set `[github.mcp].enabled = false` to disable worker GitHub tools.
 
 **alphaXiv.** Set `[alphaxiv].enabled = true`, allow `api.alphaxiv.org` in the workspace network policy, and provide `ALPHAXIV_TOKEN` to the daemon. On an authenticated worker, `fridica alphaxiv-mcp --probe` checks tool discovery without running a search.
+
+**NASA ADS (SciX).** Set `[scix].enabled = true`, allow `api.adsabs.harvard.edu` in the workspace network policy, and provide `ADS_TOKEN`. Workers can search papers, export citations and manage ADS libraries. Because the bundled server includes library edits, Fridica attaches it to writable placements. Run `fridica scix-mcp --probe` on the worker to verify ADS accepts the token.
+
+**Overleaf.** Set `[overleaf].enabled = true` and provide `OVERLEAF_GIT_TOKEN`. Use `network = ["*"]` because the server accepts general Git remotes. The default `write` mode confines Overleaf, Git and TeX writes to the assigned worker directory. The execution machine needs bubblewrap with user namespaces on Linux or the system sandbox on macOS. Install Git on the worker, plus TeX Live for compilation and PDF review. Name the project by link or ID, or set `OVERLEAF_PROJECT_ID` for a default. Citation checks use `ADS_TOKEN`. With the token in the worker environment, `fridica overleaf-mcp --probe` checks tool discovery and reads the default project’s Git references when a project ID is set.
+
+Running `fridica doctor` checks each enabled research server on its eligible local and SSH workspaces. Its ADS check verifies authentication with a zero-result query. Its Overleaf check warns when a project ID is missing and verifies remote read access when one is supplied.
 
 **Worker credentials.** Local workers inherit a filtered daemon environment. SSH workers receive integration credentials over encrypted SSH stdin, including variables such as `GH_TOKEN`, `ALPHAXIV_TOKEN` and `AWS_SECRET_ACCESS_KEY`, plus explicitly named MCP credentials. Forwarded values take precedence over target-local values. Fridica filters configured daemon secrets and Slack credentials before launching agents. [Credential forwarding rules](src/exec/credentials.rs)
 

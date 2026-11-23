@@ -57,15 +57,18 @@ pub fn build(
         "delegation_allowed":request.session["channel"].as_str().is_some_and(|c|config.slack.may_delegate(c)) && request.session["driver"]!="external",
         "limits":{"reply_chars":config.limits.reply_chars,"max_delegations":config.limits.max_delegations_per_turn,"max_workers":config.limits.max_workers_per_thread},
         "repair":{"errors":request.errors,"previous_answer":request.previous}});
-    if config.alphaxiv.enabled {
-        data["alphaxiv_workspaces"] = json!(config
+    for service in crate::research::SERVICES
+        .into_iter()
+        .filter(|s| s.enabled(config))
+    {
+        data[format!("{}_workspaces", service.name())] = json!(config
             .machines
             .machines
             .iter()
             .flat_map(|m| m
                 .workspaces
                 .iter()
-                .filter(|w| crate::alphaxiv::available(config, &m.name, &w.policy))
+                .filter(|w| service.available(config, &m.name, &w.policy))
                 .map(|w| json!({"machine":m.name,"workspace":w.name})))
             .collect::<Vec<_>>());
     }

@@ -36,7 +36,6 @@ fn get_with_env(name: &str, env: Option<&str>) -> Result<()> {
     let variable = env.or(match reference.name() {
         "fridica/slack/app-token" => Some("SLACK_APP_TOKEN"),
         "fridica/slack/user-token" => Some("SLACK_USER_TOKEN"),
-        "fridica/github/read-prs" => Some("FRIDICA_GITHUB_TOKEN"),
         _ => None,
     });
     let value = match variable {

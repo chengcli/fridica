@@ -1,5 +1,6 @@
 //! Configuration transformations preserve comments and never silently discard keys.
-pub mod alphaxiv;
+pub mod research;
+pub use research as alphaxiv;
 pub mod contract;
 pub mod editor;
 pub mod egress;

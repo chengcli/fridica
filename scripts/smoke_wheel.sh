@@ -18,7 +18,9 @@ if [[ -n $expected ]]; then
   [[ $version == "fridica $expected" ]] || { echo "expected fridica $expected" >&2; exit 1; }
 fi
 "$bin/fridica" build-info
-"$bin/fridica" alphaxiv-mcp --help > /dev/null
+for server in alphaxiv-mcp scix-mcp overleaf-mcp; do
+  "$bin/fridica" "$server" --help > /dev/null
+done
 "$bin/python" - "$bin/fridica" <<'PY'
 import json, subprocess, sys
 requests = [

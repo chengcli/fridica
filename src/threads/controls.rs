@@ -57,6 +57,19 @@ pub async fn instruct(
     actor: Authority,
     now: f64,
 ) -> Result<i64> {
+    store
+        .transact(move |u| instruct_tx(u, session, text, client_id, actor, now))
+        .await
+}
+
+pub(crate) fn instruct_tx(
+    u: &mut dyn Unit,
+    session: String,
+    text: String,
+    client_id: String,
+    actor: Authority,
+    now: f64,
+) -> Result<i64> {
     if actor != Authority::Owner || !now.is_finite() {
         bail!(Refused::Forbidden(
             "owner instruction authentication required"
@@ -71,29 +84,25 @@ pub async fn instruct(
     {
         bail!("invalid instruction");
     }
-    store
-        .transact(move |u| {
-            let existing = u.owner_instruction(&session, &client_id)?;
-            if let Some((id, prior)) = existing {
-                if prior != text {
-                    bail!(Refused::Conflict(
-                        "instruction ID reused with different text"
-                    ));
-                }
-                return Ok(id);
-            }
-            let id = apply_tx(
-                u,
-                session,
-                Control::Instruct { text },
-                actor,
-                now,
-                Some(client_id),
-            )?
-            .expect("instruction ID");
-            Ok(id)
-        })
-        .await
+    let existing = u.owner_instruction(&session, &client_id)?;
+    if let Some((id, prior)) = existing {
+        if prior != text {
+            bail!(Refused::Conflict(
+                "instruction ID reused with different text"
+            ));
+        }
+        return Ok(id);
+    }
+    let id = apply_tx(
+        u,
+        session,
+        Control::Instruct { text },
+        actor,
+        now,
+        Some(client_id),
+    )?
+    .expect("instruction ID");
+    Ok(id)
 }
 
 fn apply_tx(

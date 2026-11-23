@@ -81,6 +81,8 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
             "state",
             "github",
             "alphaxiv",
+            "scix",
+            "overleaf",
             "attention",
             "isolation",
             "placement",
@@ -129,6 +131,8 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         state,
         github,
         alphaxiv: decode(root.get("alphaxiv"))?,
+        scix: decode(root.get("scix"))?,
+        overleaf: decode(root.get("overleaf"))?,
         attention,
         isolation,
         placement,
@@ -137,10 +141,16 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };
     super::github_mcp::validate(&config)?;
-    anyhow::ensure!(
-        !config.alphaxiv.enabled || !config.secret_env().contains(&"ALPHAXIV_TOKEN"),
-        "ALPHAXIV_TOKEN cannot also be a master credential"
-    );
+    for (enabled, token) in [
+        (config.alphaxiv.enabled, "ALPHAXIV_TOKEN"),
+        (config.scix.enabled || config.overleaf.enabled, "ADS_TOKEN"),
+        (config.overleaf.enabled, "OVERLEAF_GIT_TOKEN"),
+    ] {
+        anyhow::ensure!(
+            !enabled || !config.secret_env().contains(&token),
+            "{token} cannot also be a master credential"
+        );
+    }
     protect(&config, context)?;
     Ok(config)
 }
@@ -279,12 +289,9 @@ fn egress(root: &Table, base: &Path, context: &LoadContext) -> Result<Egress> {
     }
     Ok(egress)
 }
-/// `[github]`: the token variable name and the cache lifetime.
+/// `[github]`: the reader credential and the cache lifetime.
 fn github(root: &Table) -> Result<GitHub> {
     let github: GitHub = decode(root.get("github"))?;
-    if !env_name(&github.token_env) {
-        bail!("github.token_env must name an environment variable");
-    }
     number(github.cache_seconds, 0., "github.cache_seconds")?;
     Ok(github)
 }

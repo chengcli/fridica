@@ -4,6 +4,7 @@ pub mod attention;
 pub mod cli;
 pub mod config;
 pub mod control;
+pub mod research;
 pub use fridica_core as core;
 pub mod daemon;
 pub mod dashboard;

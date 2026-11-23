@@ -135,7 +135,7 @@ control_socket="control.sock"
 
 #[tokio::test]
 async fn cli_checks_all_backends_without_tokens_state_or_backend_invocation() {
-    let f = Fixture::new();
+    let mut f = Fixture::new();
     let output = f.cli(&[]).await;
     assert!(
         output.returncode == 0,
@@ -151,6 +151,8 @@ async fn cli_checks_all_backends_without_tokens_state_or_backend_invocation() {
     f.pristine();
     let output = f.cli(&["--observe-only"]).await;
     assert_ne!(output.returncode, 0);
+    // Keep a real login keyring out of the active-start refusal check.
+    f.env.insert("SLACK_APP_TOKEN".into(), "".into());
     let output = process::run_once(
         process::Launch {
             argv: vec![
