@@ -77,14 +77,19 @@ impl Fixture {
 #[tokio::test]
 async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_creation() {
     let f = Fixture::new();
-    let output = f.cli(&["init", "--config", f.path.to_str().unwrap()]).await;
+    let output = f
+        .cli_env(
+            &["init", "--config", f.path.to_str().unwrap()],
+            &[
+                ("ALPHAXIV_TOKEN", "fixture-alpha"),
+                ("ADS_TOKEN", "fixture-ads"),
+                ("OVERLEAF_GIT_TOKEN", "fixture-overleaf"),
+                ("GITHUB_TOKEN", "fixture-github"),
+            ],
+        )
+        .await;
     assert_eq!(output.returncode, 0, "{}", output.stderr);
-    let starter = f.read();
-    let detected_reader = setup::TEMPLATE.replace(
-        "# token = \"keyring://github/read-prs\"",
-        "token = \"keyring://github/read-prs\"",
-    );
-    assert!(starter == setup::TEMPLATE || starter == detected_reader);
+    assert!(!f.read().contains("fixture-"));
     assert!(f.path.with_file_name("contract.md").is_file());
     assert_eq!(
         std::fs::read_to_string(f.path.with_file_name("manifest.yaml")).unwrap(),
@@ -127,6 +132,12 @@ async fn init_cli_publishes_private_v4_assets_once_without_state_or_workspace_cr
     assert!(config::load(&f.path, &f.context).is_err());
     std::fs::create_dir(f.context.home.join("project")).unwrap();
     let config = config::load(&f.path, &f.context).unwrap();
+    assert!(
+        config.github.mcp.enabled
+            && config.alphaxiv.enabled
+            && config.scix.enabled
+            && config.overleaf.enabled
+    );
     assert_eq!(
         (
             config.attention.max_echo_replies_per_hour,

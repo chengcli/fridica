@@ -2,14 +2,33 @@
 
 Fridica answers Slack threads as you and delegates work to Claude Code or Codex on your machines. One daemon represents one Slack account. Its local parent agent decides when to reply and what to delegate. Each thread keeps its own conversation, decisions and workers, so a follow-up can continue a job on the same machine.
 
-## Install
+## Set up tokens on macOS or Linux
 
-On the daemon machine, use macOS or Linux with Python 3.11 or newer. In a Python virtual environment, install Fridica and create its configuration.
+Install Fridica in a Python 3.11+ virtual environment with `python -m pip install fridica`. As the OS user who will run the daemon, store the Slack tokens and any worker tokens you already have. The same commands use **Keychain on macOS** and **Secret Service on Linux**. On Linux, run them in a user D-Bus session with an unlocked keyring. Each command prompts for the token with input hidden.
+
+| Credential | Store in the OS keyring | Environment variable |
+| --- | --- | --- |
+| Slack app | `fridica secret set slack/app-token` | `SLACK_APP_TOKEN` |
+| Slack user | `fridica secret set slack/user-token` | `SLACK_USER_TOKEN` |
+| GitHub daemon reader (optional) | `fridica secret set github/read-prs` | Uses existing `gh` credentials when no reader keyring entry is configured |
+| GitHub worker MCP | `fridica secret set github/mcp-token` | `GH_TOKEN` or `GITHUB_TOKEN` |
+| alphaXiv MCP | `fridica secret set alphaxiv/token` | `ALPHAXIV_TOKEN` |
+| NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
+| Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
+
+To use an environment variable in Bash or Zsh, export it before running `fridica init` and supply it to the daemon at startup. For example, this prompts for an ADS token without putting its value in shell history:
 
 ```sh
-python -m pip install fridica
+export ADS_TOKEN="$(python3 -c 'import getpass; print(getpass.getpass("ADS token: "))')"
+```
+
+## Initialize Fridica
+
+```sh
 fridica init
 ```
+
+On first setup, `init` enables each MCP with a nonblank environment token or a matching keyring entry. An existing local `gh` login also enables GitHub MCP. Discovery runs on the daemon machine and leaves workspace permissions intact. For credentials available only on an SSH worker, enable the corresponding MCP in `config.toml`. After configuring your workspaces, run `fridica doctor` to validate credentials on eligible workers. For Overleaf, also set `OVERLEAF_PROJECT_ID` to the 24-character ID in a project URL so doctor can verify read access.
 
 For an isolated command-line installation, use `pipx install fridica` in place of the pip command. The wheel includes the native CLI and its credential helper. To install the version in this checkout, run `python -m pip install .` from the repository root with Rust 1.91 or newer.
 
@@ -171,7 +190,7 @@ Fridica supplies the resolved secret to its `gh` process as `GH_TOKEN`. No inter
 
 ## Worker integrations
 
-**GitHub.** The bundled GitHub MCP server is enabled by default for eligible local and SSH workspaces with GitHub network access. Read-only workspaces expose read tools. Writable workspaces can also publish reviews, comments and task-branch changes. Enabling these tools authorizes their use without a second Fridica approval. GitHub enforces the worker credential's repository permissions and branch protections. Scoped-fetch placements receive no GitHub MCP server.
+**GitHub.** The bundled GitHub MCP server runs on eligible local and SSH workspaces with GitHub network access when enabled. Read-only workspaces expose read tools. Writable workspaces can also publish reviews, comments and task-branch changes. Enabling these tools authorizes their use without a second Fridica approval. GitHub enforces the worker credential's repository permissions and branch protections. Scoped-fetch placements receive no GitHub MCP server.
 
 Authenticate as the worker's execution user with `gh auth login --hostname github.com`, or provide a worker `GH_TOKEN`. The daemon's dedicated GitHub reader secret stays with the daemon. Set `[github.mcp].enabled = false` to disable worker GitHub tools.
 
@@ -179,9 +198,9 @@ Authenticate as the worker's execution user with `gh auth login --hostname githu
 
 **NASA ADS (SciX).** Set `[scix].enabled = true`, allow `api.adsabs.harvard.edu` in the workspace network policy, and provide `ADS_TOKEN`. Workers can search papers, export citations and manage ADS libraries. Because the bundled server includes library edits, Fridica attaches it to writable placements. Run `fridica scix-mcp --probe` on the worker to verify ADS accepts the token.
 
-**Overleaf.** Set `[overleaf].enabled = true` and provide `OVERLEAF_GIT_TOKEN`. Use a dedicated workspace with `mode = "full"` and `network = ["*"]` because the server accepts arbitrary Git remotes and local paths. Install Git on the worker, plus TeX Live for compilation and PDF review. Name the project by link or ID, or set `OVERLEAF_PROJECT_ID` for a default. Citation checks use `ADS_TOKEN`. Run `fridica overleaf-mcp --probe` to check the token setting and discover tools locally. A project pull verifies remote access.
+**Overleaf.** Set `[overleaf].enabled = true` and provide `OVERLEAF_GIT_TOKEN`. Use a dedicated workspace with `mode = "full"` and `network = ["*"]` because the server accepts arbitrary Git remotes and local paths. Install Git on the worker, plus TeX Live for compilation and PDF review. Name the project by link or ID, or set `OVERLEAF_PROJECT_ID` for a default. Citation checks use `ADS_TOKEN`. With the token in the worker environment, `fridica overleaf-mcp --probe` checks tool discovery and reads the default project’s Git references when a project ID is set.
 
-Running `fridica doctor` checks each enabled research server on its eligible local and SSH workspaces. Its ADS check verifies authentication with a zero-result query. Its Overleaf check verifies that the token is set and lists the bundled tools locally. Project access requires a separate pull.
+Running `fridica doctor` checks each enabled research server on its eligible local and SSH workspaces. Its ADS check verifies authentication with a zero-result query. Its Overleaf check warns when a project ID is missing and verifies remote read access when one is supplied.
 
 **Worker credentials.** Local workers inherit a filtered daemon environment. SSH workers receive integration credentials over encrypted SSH stdin, including variables such as `GH_TOKEN`, `ALPHAXIV_TOKEN` and `AWS_SECRET_ACCESS_KEY`, plus explicitly named MCP credentials. Forwarded values take precedence over target-local values. Fridica filters configured daemon secrets and Slack credentials before launching agents. [Credential forwarding rules](src/exec/credentials.rs)
 

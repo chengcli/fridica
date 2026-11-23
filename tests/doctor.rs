@@ -615,7 +615,7 @@ async fn research_checks_use_worker_probes_and_report_policy_skips() {
     .unwrap();
     fixture.executable(
         "fridica",
-        "#!/bin/sh\n[ \"$*\" = 'overleaf-mcp --probe' ] && echo fridica-overleaf-mcp:ready\n",
+        "#!/bin/sh\n[ \"$*\" = 'overleaf-mcp --probe' ] && echo fridica-overleaf-mcp:authenticated\n",
     );
     let report = fixture.run().await;
     assert_eq!(
@@ -623,4 +623,9 @@ async fn research_checks_use_worker_probes_and_report_policy_skips() {
         Status::Fail
     );
     assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Pass);
+
+    fixture.executable("fridica", "#!/bin/sh\necho fridica-overleaf-mcp:ready\n");
+    let report = fixture.run().await;
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Warn);
+    assert!(report.text().contains("OVERLEAF_PROJECT_ID"));
 }

@@ -36,7 +36,7 @@ enum Command {
     },
     /// Serve the bundled Overleaf project tools over stdio.
     OverleafMcp {
-        /// Check the local token setting and tool discovery.
+        /// Check bundled tools and verify project read access when OVERLEAF_PROJECT_ID is set.
         #[arg(long)]
         probe: bool,
     },
@@ -194,8 +194,11 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Command::OverleafMcp { probe } => {
             if probe {
-                fridica_agent::overleaf::probe().await?;
-                println!("fridica-overleaf-mcp:ready");
+                if fridica::research::probe_overleaf().await? {
+                    println!("fridica-overleaf-mcp:authenticated");
+                } else {
+                    println!("fridica-overleaf-mcp:ready");
+                }
             } else {
                 tokio::task::spawn_blocking(fridica_agent::overleaf::run).await??;
             }
@@ -259,7 +262,7 @@ async fn run(cli: Cli) -> Result<()> {
                 path.display(),
                 path.parent().unwrap().join("contract.md").display()
             );
-            println!("Existing Slack environment or keyring tokens are picked up automatically. Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
+            println!("MCP settings reflect the credentials found during setup. Next: use this executable with the same --config path for configure --detect, doctor and start --check-ready; complete the workspaces first. `start` runs the daemon; add --observe-only to record without replying.");
         }
         Command::Configure(options) => options
             .run(&fridica::config::LoadContext::current()?)

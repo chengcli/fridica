@@ -40,6 +40,7 @@ pub struct SystemLauncher {
     pub isolation: crate::exec::isolation::Isolation,
     // Independent bounded probe capacity survives dropped admission futures.
     probes: Arc<Semaphore>,
+    keyring_names: std::sync::OnceLock<Vec<String>>,
 }
 impl SystemLauncher {
     /// Best-effort retention after admission, before inputs or backend work
@@ -73,6 +74,7 @@ impl SystemLauncher {
             ssh_control_directory,
             isolation: crate::exec::isolation::Isolation::new(config, &[])?,
             probes: Arc::new(Semaphore::new(1)),
+            keyring_names: Default::default(),
         })
     }
 }
@@ -187,6 +189,24 @@ impl Launcher for SystemLauncher {
     }
 
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
+        use crate::core::secret::SecretStore;
+        let mut environment = process::scrubbed_environment(
+            self.environment.clone(),
+            &spec.excluded_env,
+            &BTreeMap::new(),
+        );
+        crate::secrets::worker_tokens(&mut environment, &spec.mcp_servers, |entry| {
+            let store = crate::secrets::NativeStore;
+            let names = self
+                .keyring_names
+                .get_or_init(|| store.list().unwrap_or_default());
+            if names.iter().any(|name| name == entry) {
+                store.get(entry)
+            } else {
+                Ok(None)
+            }
+        })
+        .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
         let launch = match spec.machine.transport.as_str() {
             "local" => {
                 let transport = LocalTransport {
@@ -199,7 +219,7 @@ impl Launcher for SystemLauncher {
                         &transport,
                         command,
                         &spec.workspace.path,
-                        self.environment.clone(),
+                        environment,
                         spec.create_cwd(),
                     )
                 } else if command.first().is_some_and(|s| s == "codex")
@@ -217,7 +237,7 @@ impl Launcher for SystemLauncher {
                             transport.launch(
                                 command,
                                 std::path::Path::new("/"),
-                                self.environment.clone(),
+                                environment,
                                 &BTreeMap::new(),
                                 None,
                                 false,
@@ -227,7 +247,7 @@ impl Launcher for SystemLauncher {
                     transport.launch(
                         command,
                         &spec.workspace.path,
-                        self.environment.clone(),
+                        environment,
                         &BTreeMap::new(),
                         None,
                         spec.create_cwd(),
@@ -245,7 +265,7 @@ impl Launcher for SystemLauncher {
                         &transport,
                         command,
                         &spec.workspace.path.to_string_lossy(),
-                        self.environment.clone(),
+                        environment,
                         spec.create_cwd(),
                     )
                 } else if command.first().is_some_and(|s| s == "codex")
@@ -263,7 +283,7 @@ impl Launcher for SystemLauncher {
                             transport.launch(
                                 command,
                                 "/",
-                                self.environment.clone(),
+                                environment,
                                 &BTreeMap::new(),
                                 LaunchOptions::default(),
                             )
@@ -272,7 +292,7 @@ impl Launcher for SystemLauncher {
                     transport.launch(
                         command,
                         &spec.workspace.path.to_string_lossy(),
-                        self.environment.clone(),
+                        environment,
                         &BTreeMap::new(),
                         LaunchOptions {
                             create: spec.create_cwd(),

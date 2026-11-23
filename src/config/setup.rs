@@ -77,15 +77,40 @@ pub fn init_with(path: &Path, starter: impl FnOnce() -> String) -> Result<()> {
     }
     create(path, &starter(), false)
 }
-pub(crate) fn starter_with(names: &[String]) -> String {
+/// Section, standard worker environment variable and dedicated Fridica keyring entry.
+pub(crate) const MCP_TOKENS: [(&str, &str, &str); 4] = [
+    ("github.mcp", "GH_TOKEN", "fridica/github/mcp-token"),
+    ("alphaxiv", "ALPHAXIV_TOKEN", "fridica/alphaxiv/token"),
+    ("scix", "ADS_TOKEN", "fridica/ads/token"),
+    (
+        "overleaf",
+        "OVERLEAF_GIT_TOKEN",
+        "fridica/overleaf/git-token",
+    ),
+];
+
+pub(crate) fn starter_with(
+    names: &[String],
+    has_env: impl Fn(&str) -> bool,
+    gh_login: impl Fn() -> bool,
+) -> String {
+    let mut starter = TEMPLATE.to_owned();
     if names.iter().any(|name| name == "fridica/github/read-prs") {
-        TEMPLATE.replace(
+        starter = starter.replace(
             "# token = \"keyring://github/read-prs\"",
             "token = \"keyring://github/read-prs\"",
-        )
-    } else {
-        TEMPLATE.to_owned()
+        );
     }
+    for (section, variable, entry) in MCP_TOKENS {
+        let available = has_env(variable)
+            || names.iter().any(|name| name == entry)
+            || (section == "github.mcp" && (has_env("GITHUB_TOKEN") || gh_login()));
+        if available {
+            let header = format!("[{section}]\nenabled = ");
+            starter = starter.replace(&format!("{header}false"), &format!("{header}true"));
+        }
+    }
+    starter
 }
 #[derive(Default, Clone)]
 pub struct Identity {
@@ -207,12 +232,27 @@ mod credential_tests {
     use super::*;
 
     #[test]
+    fn starter_enables_only_services_with_worker_credentials() {
+        let starter = starter_with(
+            &["fridica/ads/token".into(), "fridica/github/read-prs".into()],
+            |name| name == "OVERLEAF_GIT_TOKEN",
+            || false,
+        );
+        let doc = starter.parse::<DocumentMut>().unwrap();
+        assert_eq!(doc["scix"]["enabled"].as_bool(), Some(true));
+        assert_eq!(doc["overleaf"]["enabled"].as_bool(), Some(true));
+        assert_eq!(doc["alphaxiv"]["enabled"].as_bool(), Some(false));
+        assert_eq!(doc["github"]["mcp"]["enabled"].as_bool(), Some(false));
+        assert!(starter_with(&[], |_| false, || true).contains("[github.mcp]\nenabled = true"));
+    }
+
+    #[test]
     fn starter_selects_existing_reader_and_standard_slack_references() {
-        let stored = starter_with(&["fridica/github/read-prs".into()]);
+        let stored = starter_with(&["fridica/github/read-prs".into()], |_| false, || false);
         let (slack, github) = loader::credential_settings(&stored).unwrap();
         assert_eq!(github.token.unwrap().name(), "fridica/github/read-prs");
         assert_eq!(slack.app_token.unwrap().name(), "fridica/slack/app-token");
         assert_eq!(slack.user_token.unwrap().name(), "fridica/slack/user-token");
-        assert_eq!(starter_with(&[]), TEMPLATE);
+        assert_eq!(starter_with(&[], |_| false, || false), TEMPLATE);
     }
 }

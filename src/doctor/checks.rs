@@ -383,7 +383,7 @@ async fn machine(
                     Service::Scix => ("NASA ADS (SciX)", "ADS accepted the worker token"),
                     Service::Overleaf => (
                         "Overleaf",
-                        "worker token is set and bundled tools are available locally",
+                        "Overleaf accepted the worker token for the configured project",
                     ),
                     Service::Alphaxiv => {
                         ("alphaXiv", "authenticated and discovered research tools")
@@ -405,9 +405,19 @@ async fn machine(
                 ) {
                     Ok((launch, _control)) => {
                         let marker = format!("fridica-{}-mcp:ready\n", service.name());
-                        crate::exec::process::run_with_open_stdin(launch, probe.timeout, 4096)
+                        match crate::exec::process::run_with_open_stdin(launch, probe.timeout, 4096)
                             .await
-                            .is_ok_and(|r| r.returncode == 0 && r.stdout == marker.as_bytes())
+                        {
+                            Ok(r) if r.returncode == 0 && matches!(service, Service::Overleaf) => {
+                                if r.stdout == marker.as_bytes() {
+                                    report.add(Status::Warn, name, "bundled tools are ready; set OVERLEAF_PROJECT_ID to verify the token against a project");
+                                    continue;
+                                }
+                                r.stdout == b"fridica-overleaf-mcp:authenticated\n"
+                            }
+                            Ok(r) => r.returncode == 0 && r.stdout == marker.as_bytes(),
+                            Err(_) => false,
+                        }
                     }
                     Err(_) => false,
                 };
