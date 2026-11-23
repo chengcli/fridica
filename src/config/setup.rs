@@ -42,6 +42,10 @@ fn create(path: &Path, source: &str, preserve_existing: bool) -> Result<()> {
     editor::sync_directory(path)
 }
 pub fn init(path: &Path) -> Result<()> {
+    init_with(path, || TEMPLATE.to_owned())
+}
+
+pub fn init_with(path: &Path, starter: impl FnOnce() -> String) -> Result<()> {
     if path.file_name().is_some_and(|name| {
         name == "contract.md" || name == "manifest.yaml" || name == "secrets.yml"
     }) {
@@ -71,16 +75,9 @@ pub fn init(path: &Path) -> Result<()> {
             create(&target, content, true)?;
         }
     }
-    create(path, &starter(&crate::secrets::NativeStore), false)
+    create(path, &starter(), false)
 }
-/// A dedicated reader is optional. Keep gh authentication available when the
-/// keyring has no such entry or is unavailable in the current session.
-pub(crate) fn starter(store: &dyn fridica_core::secret::SecretStore) -> String {
-    let names = store.list().unwrap_or_default();
-    starter_with(&names)
-}
-
-fn starter_with(names: &[String]) -> String {
+pub(crate) fn starter_with(names: &[String]) -> String {
     if names.iter().any(|name| name == "fridica/github/read-prs") {
         TEMPLATE.replace(
             "# token = \"keyring://github/read-prs\"",

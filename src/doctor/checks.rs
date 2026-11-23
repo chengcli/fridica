@@ -187,7 +187,7 @@ pub async fn run_with(
                 );
             }
             let source = if absent {
-                Ok(config::setup::starter(&crate::secrets::NativeStore))
+                Ok(crate::secrets::starter_config())
             } else {
                 config::editor::read(path)
             };

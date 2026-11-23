@@ -225,7 +225,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Init { config } => {
             let context = fridica::config::LoadContext::current()?;
             let path = fridica::config::setup::path(config.as_deref(), &context)?;
-            fridica::config::setup::init(&path)?;
+            fridica::config::setup::init_with(&path, fridica::secrets::starter_config)?;
             println!(
                 "Created {}. Agent rules are in {}.",
                 path.display(),
