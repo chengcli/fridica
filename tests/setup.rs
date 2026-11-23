@@ -243,7 +243,7 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
     let source = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
         &path,
-        source.replace("user_token = \"keyring://slack/user-token\"", ""),
+        source.replace("[slack]", "[slack]\nuser_token_env = \"CUSTOM_USER_TOKEN\""),
     )
     .unwrap();
     let before = std::fs::read(&path).unwrap();
@@ -251,15 +251,8 @@ async fn setup_cli_defaults_to_home_and_missing_credentials_cannot_modify_the_fi
         .cli(&["configure", "--detect", "--channel-name", "general"])
         .await;
     assert_eq!(output.returncode, 2);
-    assert!(output.stderr.contains("SLACK_USER_TOKEN"));
+    assert!(output.stderr.contains("CUSTOM_USER_TOKEN"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    std::fs::write(
-        &path,
-        std::str::from_utf8(&before)
-            .unwrap()
-            .replace("SLACK_USER_TOKEN", "CUSTOM_USER_TOKEN"),
-    )
-    .unwrap();
     let output = f
         .cli_env(
             &["configure", "--detect", "--channel-name", "general"],

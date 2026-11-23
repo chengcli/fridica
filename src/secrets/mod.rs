@@ -6,8 +6,21 @@ use std::ffi::OsStr;
 
 pub use fridica_core::secret::NativeStore;
 
+/// Explicit references take priority. Standard Slack variables also have a
+/// conventional keyring entry when the configuration omits the reference.
+pub(crate) fn keyring_name<'a>(
+    variable: &str,
+    reference: Option<&'a KeyringRef>,
+) -> Option<&'a str> {
+    reference.map(KeyringRef::name).or(match variable {
+        "SLACK_APP_TOKEN" => Some("fridica/slack/app-token"),
+        "SLACK_USER_TOKEN" => Some("fridica/slack/user-token"),
+        _ => None,
+    })
+}
+
 /// An explicitly supplied environment credential takes precedence, including
-/// in existing service units. Only consult the keyring for a configured URI.
+/// in existing service units. Otherwise read the configured or conventional keyring entry.
 pub fn resolve(
     store: &dyn SecretStore,
     variable: &str,
@@ -20,17 +33,12 @@ pub fn resolve(
             .context("credential must be UTF-8")?
             .to_owned());
     }
-    let reference =
-        reference.with_context(|| format!("set {variable} or configure a keyring reference"))?;
+    let name = keyring_name(variable, reference)
+        .with_context(|| format!("set {variable} or configure a keyring reference"))?;
     let bytes = store
-        .get(reference.name())
-        .with_context(|| format!("cannot read {} for {variable}", reference.name()))?
-        .with_context(|| {
-            format!(
-                "missing {variable}; run fridica secret set {}",
-                reference.name()
-            )
-        })?;
+        .get(name)
+        .with_context(|| format!("cannot read {name} for {variable}"))?
+        .with_context(|| format!("missing {variable}; run fridica secret set {name}"))?;
     String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("stored credential must be UTF-8"))
 }
 

@@ -247,12 +247,15 @@ mod credential_tests {
     }
 
     #[test]
-    fn starter_selects_existing_reader_and_standard_slack_references() {
+    fn starter_selects_existing_reader_and_omits_slack_credential_overrides() {
         let stored = starter_with(&["fridica/github/read-prs".into()], |_| false, || false);
         let (slack, github) = loader::credential_settings(&stored).unwrap();
         assert_eq!(github.token.unwrap().name(), "fridica/github/read-prs");
-        assert_eq!(slack.app_token.unwrap().name(), "fridica/slack/app-token");
-        assert_eq!(slack.user_token.unwrap().name(), "fridica/slack/user-token");
+        assert!(slack.app_token.is_none() && slack.user_token.is_none());
+        let doc = stored.parse::<DocumentMut>().unwrap();
+        for field in ["app_token", "user_token", "app_token_env", "user_token_env"] {
+            assert!(doc["slack"].get(field).is_none());
+        }
         assert_eq!(starter_with(&[], |_| false, || false), TEMPLATE);
     }
 }

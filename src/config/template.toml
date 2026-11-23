@@ -15,10 +15,6 @@ profile = ""                      # a few sentences about you and your projects,
 workspace = "T000TEAM"
 channels = ["C000CHANNEL"]
 # delegate_channels = ["C000CHANNEL"]   # channels whose members may start worker jobs (default: all)
-app_token = "keyring://slack/app-token"
-user_token = "keyring://slack/user-token"
-app_token_env = "SLACK_APP_TOKEN"
-user_token_env = "SLACK_USER_TOKEN"
 general_messages = true           # consider replying without an @mention (a cheap triage call decides)
 cooldown = 60                     # seconds between unsolicited replies in one channel
 

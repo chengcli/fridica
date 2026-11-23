@@ -36,8 +36,8 @@ pub(super) async fn check(
         );
         let source = if env.is_some() {
             format!("environment variable {variable}")
-        } else if let Some(reference) = reference {
-            format!("keyring entry {}", reference.name())
+        } else if let Some(key) = crate::secrets::keyring_name(variable, reference.as_ref()) {
+            format!("keyring entry {key}")
         } else {
             variable.clone()
         };

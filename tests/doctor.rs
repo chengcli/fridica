@@ -484,7 +484,9 @@ async fn cli_reports_json_and_text_and_preserves_active_launch_gate() {
         .await;
     assert_eq!(result.returncode, 0);
     assert!(result.text().contains("0 failed"));
-    fixture.env.remove(std::ffi::OsStr::new("SLACK_APP_TOKEN"));
+    fixture
+        .env
+        .insert("SLACK_APP_TOKEN".into(), "invalid-fixture".into());
     let result = fixture
         .cli(&["doctor", "--local-slack", "--timeout", "2"])
         .await;
