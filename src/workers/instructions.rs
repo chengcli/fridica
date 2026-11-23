@@ -28,11 +28,12 @@ impl super::backend::Instructions for OwnerInstructions {
         } else {
             "GitHub MCP is unavailable for this placement. Report review findings without claiming GitHub publication."
         };
-        let research = if crate::alphaxiv::available(config, &machine.name, &workspace.policy) {
-            fridica_agent::alphaxiv::INSTRUCTIONS
-        } else {
-            ""
-        };
+        let research = crate::research::SERVICES
+            .into_iter()
+            .filter(|service| service.available(config, &machine.name, &workspace.policy))
+            .map(|service| service.instructions())
+            .collect::<Vec<_>>()
+            .join("\n");
         let data = json!({"owner_id":config.owner.slack_user,"profile":config.owner.profile,"machine":machine.payload(0),"workspace":worker.workspace});
         Ok(format!(
             "{}\n\n{}\n{UNTRUSTED}\n{NO_SIGN_OFF}\n{tools}\n{research}\n\nWorker data:\n{}",

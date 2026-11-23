@@ -374,6 +374,49 @@ async fn machine(
                 report.test(format!("GitHub MCP {}:{}", machine.name, workspace.name), passed,
                     "GitHub MCP executable, authentication, initialization or required tools unavailable");
             }
+            for service in crate::research::SERVICES {
+                if *probe.stop.borrow() || !service.enabled(&probe.config) {
+                    continue;
+                }
+                use crate::research::Service;
+                let (label, success) = match service {
+                    Service::Scix => ("NASA ADS (SciX)", "ADS accepted the worker token"),
+                    Service::Overleaf => (
+                        "Overleaf",
+                        "worker token is set and bundled tools are available locally",
+                    ),
+                    Service::Alphaxiv => {
+                        ("alphaXiv", "authenticated and discovered research tools")
+                    }
+                };
+                let name = format!("{label} MCP {}:{}", machine.name, workspace.name);
+                let Some(server) = service.server(&probe.config, &machine.name, &workspace.policy)
+                else {
+                    report.add(Status::Skip, name, "workspace policy excludes this server");
+                    continue;
+                };
+                let passed = match crate::workers::mcp_probe::launch(
+                    &probe.config,
+                    &probe.context.home,
+                    probe.environment.clone(),
+                    machine,
+                    workspace,
+                    server,
+                ) {
+                    Ok((launch, _control)) => {
+                        let marker = format!("fridica-{}-mcp:ready\n", service.name());
+                        crate::exec::process::run_with_open_stdin(launch, probe.timeout, 4096)
+                            .await
+                            .is_ok_and(|r| r.returncode == 0 && r.stdout == marker.as_bytes())
+                    }
+                    Err(_) => false,
+                };
+                if passed {
+                    report.add(Status::Pass, name, success);
+                } else {
+                    report.add(Status::Fail, name, format!("check the worker binary, credentials and service configuration with fridica {}-mcp --probe", service.name()));
+                }
+            }
         }
         let auto = machine
             .workspaces

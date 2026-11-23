@@ -583,3 +583,47 @@ async fn doctor_finds_tokens_before_init_and_with_incomplete_machine_setup() {
         assert_eq!(f.path.exists(), initialized);
     }
 }
+
+#[tokio::test]
+async fn research_checks_use_worker_probes_and_report_policy_skips() {
+    let fixture = Fixture::new();
+    fixture.append("\n[scix]\nenabled=true\n[overleaf]\nenabled=true\n");
+    let source = std::fs::read_to_string(&fixture.path).unwrap();
+    std::fs::write(
+        &fixture.path,
+        source.replace(
+            "gpu_confine=false",
+            "gpu_confine=false\nmode='write'\nnetwork=['api.adsabs.harvard.edu']",
+        ),
+    )
+    .unwrap();
+    fixture.executable(
+        "fridica",
+        "#!/bin/sh\n[ \"$*\" = 'scix-mcp --probe' ] && echo fridica-scix-mcp:ready\n",
+    );
+    let report = fixture.run().await;
+    assert_eq!(
+        status(&report, "NASA ADS (SciX) MCP local:project"),
+        Status::Pass
+    );
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Skip);
+
+    let source = std::fs::read_to_string(&fixture.path).unwrap();
+    std::fs::write(
+        &fixture.path,
+        source
+            .replace("mode='write'", "mode='full'")
+            .replace("'api.adsabs.harvard.edu'", "'*'"),
+    )
+    .unwrap();
+    fixture.executable(
+        "fridica",
+        "#!/bin/sh\n[ \"$*\" = 'overleaf-mcp --probe' ] && echo fridica-overleaf-mcp:ready\n",
+    );
+    let report = fixture.run().await;
+    assert_eq!(
+        status(&report, "NASA ADS (SciX) MCP local:project"),
+        Status::Fail
+    );
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Pass);
+}

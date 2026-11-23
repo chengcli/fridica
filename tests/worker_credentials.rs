@@ -21,6 +21,8 @@ fn fixture() -> (tempfile::TempDir, Launch) {
             ),
             ("GH_TOKEN".into(), "forwarded-gh-'$()\nsecond-line".into()),
             ("ALPHAXIV_TOKEN".into(), "forwarded-alpha".into()),
+            ("INTERLEAF_CONFIG".into(), "/master/config".into()),
+            ("INTERLEAF_WORKSPACE".into(), "/master/checkout".into()),
             ("OPENAI_API_KEY".into(), "forwarded-model".into()),
             ("CUSTOM_AUTH".into(), "forwarded-custom".into()),
             ("GH_CONFIG_DIR".into(), "/master-only/path".into()),
@@ -38,7 +40,12 @@ async fn ssh_forwards_integration_credentials_without_arguments_or_stdin_corrupt
     let mut launch = credentials::forward(
         launch,
         &["OWNER_TOKEN".into()],
-        &["CUSTOM_AUTH".into(), "GH_CONFIG_DIR".into()],
+        &[
+            "CUSTOM_AUTH".into(),
+            "GH_CONFIG_DIR".into(),
+            "INTERLEAF_CONFIG".into(),
+            "INTERLEAF_WORKSPACE".into(),
+        ],
     )
     .unwrap();
     for value in [
@@ -77,6 +84,8 @@ async fn ssh_forwards_integration_credentials_without_arguments_or_stdin_corrupt
         "FRIDICA_CONTROL_TOKEN",
         "OWNER_TOKEN",
         "GH_CONFIG_DIR",
+        "INTERLEAF_CONFIG",
+        "INTERLEAF_WORKSPACE",
     ] {
         assert!(!env.contains_key(name));
     }

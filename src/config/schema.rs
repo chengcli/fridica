@@ -149,8 +149,12 @@ pub struct Config {
     pub python_envs: std::collections::BTreeMap<String, String>,
     pub state: State,
     pub github: GitHub,
-    #[serde(default, skip_serializing_if = "super::alphaxiv::Settings::is_default")]
-    pub alphaxiv: super::alphaxiv::Settings,
+    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
+    pub alphaxiv: super::research::Settings,
+    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
+    pub scix: super::research::Settings,
+    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
+    pub overleaf: super::research::Settings,
     pub attention: Attention,
     #[serde(default, skip_serializing_if = "super::isolation::Settings::is_empty")]
     pub isolation: super::isolation::Settings,

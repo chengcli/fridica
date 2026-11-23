@@ -3,17 +3,21 @@ use fridica::{
     config::{loader, LoadContext},
 };
 
-#[test]
-fn research_tools_follow_configuration_and_network_policy() {
+fn config() -> fridica::config::Config {
     let dir = tempfile::tempdir().unwrap();
     for name in ["home", "project", "private"] {
         std::fs::create_dir(dir.path().join(name)).unwrap();
     }
-    let config = loader::parse(
-        "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CROOM']\n[alphaxiv]\nenabled=true\n[machines.local.policy]\ngpu_confine=false\nmode='write'\nnetwork=['api.alphaxiv.org']\n[machines.local.workspaces]\nproject='project'\n[state]\npath='private/db'\ncontrol_socket='private/control.sock'\n",
+    loader::parse(
+        "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CROOM']\n[scix]\nenabled=true\n[overleaf]\nenabled=true\n[alphaxiv]\nenabled=true\n[machines.local.policy]\ngpu_confine=false\nmode='write'\nnetwork=['api.alphaxiv.org']\n[machines.local.workspaces]\nproject='project'\n[state]\npath='private/db'\ncontrol_socket='private/control.sock'\n",
         &dir.path().join("config.toml"),
         &LoadContext { home: dir.path().join("home"), runtime_dir: None, uid: users::get_current_uid(), protected: vec![] },
-    ).unwrap();
+    ).unwrap()
+}
+
+#[test]
+fn research_tools_follow_configuration_and_network_policy() {
+    let config = config();
     let mut policy = config.machines.get("local").unwrap().workspaces[0]
         .policy
         .clone();
@@ -41,11 +45,97 @@ fn research_tools_follow_configuration_and_network_policy() {
 
 #[test]
 fn bundled_bridge_reports_missing_credentials_without_leaking_secrets() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
-        .args(["alphaxiv-mcp", "--probe"])
-        .env_remove("ALPHAXIV_TOKEN")
-        .output()
+    for (command, token) in [
+        ("alphaxiv-mcp", "ALPHAXIV_TOKEN"),
+        ("scix-mcp", "ADS_TOKEN"),
+        ("overleaf-mcp", "OVERLEAF_GIT_TOKEN"),
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_fridica"))
+            .args([command, "--probe"])
+            .env_remove(token)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(token));
+    }
+}
+
+#[test]
+fn ads_and_overleaf_follow_placement_policy() {
+    use fridica::research::Service::{Overleaf, Scix};
+    let config = config();
+    let mut policy = config.machines.get("local").unwrap().workspaces[0]
+        .policy
+        .clone();
+    policy.network = vec!["*.adsabs.harvard.edu".into()];
+    policy.mode = "write".into();
+    let ads = Scix.server(&config, "local", &policy).unwrap();
+    assert_eq!(ads.args, ["scix-mcp"]);
+    assert_eq!(ads.env_vars, ["ADS_TOKEN"]);
+    assert!(!ads.auto_approve);
+    assert!(!Overleaf.available(&config, "local", &policy));
+    policy.mode = "read-only".into();
+    assert!(!Scix.available(&config, "local", &policy));
+    policy.mode = "full".into();
+    policy.network = vec!["git.overleaf.com".into()];
+    assert!(!Scix.available(&config, "local", &policy));
+    assert!(!Overleaf.available(&config, "local", &policy));
+    policy.network = vec!["*".into()];
+    let paper = Overleaf.server(&config, "local", &policy).unwrap();
+    assert_eq!(paper.args, ["overleaf-mcp"]);
+    assert!(paper.env_vars.iter().any(|v| v == "OVERLEAF_GIT_TOKEN"));
+    assert!(!paper.auto_approve);
+    policy.fetch_repos.push("owner/project".into());
+    for service in [Scix, Overleaf] {
+        assert!(!service.available(&config, "local", &policy));
+    }
+}
+
+#[test]
+fn bundled_ads_and_overleaf_serve_tools_over_stdio() {
+    use serde_json::{json, Value};
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::{Command, Stdio},
+    };
+    for (command, expected) in [("scix-mcp", "search"), ("overleaf-mcp", "pull")] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_fridica"))
+            .arg(command)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("ADS_TOKEN", "fixture")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut replies = BufReader::new(child.stdout.take().unwrap()).lines();
+        let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}});
+        writeln!(input, "{init}").unwrap();
+        let reply: Value = serde_json::from_str(&replies.next().unwrap().unwrap()).unwrap();
+        assert!(reply["result"]["serverInfo"].is_object(), "{reply}");
+        writeln!(
+            input,
+            "{}",
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+        )
         .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ALPHAXIV_TOKEN"));
+        writeln!(
+            input,
+            "{}",
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})
+        )
+        .unwrap();
+        let reply: Value = serde_json::from_str(&replies.next().unwrap().unwrap()).unwrap();
+        assert!(
+            reply["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == expected),
+            "{reply}"
+        );
+        drop(input);
+        assert!(child.wait().unwrap().success());
+    }
 }

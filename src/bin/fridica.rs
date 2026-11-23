@@ -28,6 +28,18 @@ enum Command {
         #[arg(long)]
         probe: bool,
     },
+    /// Serve NASA ADS literature and library tools over stdio.
+    ScixMcp {
+        /// Verify the token with an ADS query requesting zero results.
+        #[arg(long)]
+        probe: bool,
+    },
+    /// Serve the bundled Overleaf project tools over stdio.
+    OverleafMcp {
+        /// Check the local token setting and tool discovery.
+        #[arg(long)]
+        probe: bool,
+    },
     /// Print the version, source fingerprint and native target.
     BuildInfo,
     /// Initialize fresh v6 state offline; existing legacy databases require migrate.
@@ -170,6 +182,22 @@ async fn run(cli: Cli) -> Result<()> {
                 println!("fridica-alphaxiv-mcp:ready");
             } else {
                 fridica_agent::alphaxiv::run().await?;
+            }
+        }
+        Command::ScixMcp { probe } => {
+            if probe {
+                fridica_agent::scix::probe().await?;
+                println!("fridica-scix-mcp:ready");
+            } else {
+                tokio::task::spawn_blocking(fridica_agent::scix::run).await??;
+            }
+        }
+        Command::OverleafMcp { probe } => {
+            if probe {
+                fridica_agent::overleaf::probe().await?;
+                println!("fridica-overleaf-mcp:ready");
+            } else {
+                tokio::task::spawn_blocking(fridica_agent::overleaf::run).await??;
             }
         }
         Command::GithubMcp(options) => {

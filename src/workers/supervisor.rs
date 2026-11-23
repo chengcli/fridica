@@ -602,7 +602,11 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
         python_env: config.python_envs.get(&m.name).cloned().unwrap_or_default(),
         mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy)
             .into_iter()
-            .chain(crate::alphaxiv::servers(config, &m.name, &space.policy))
+            .chain(
+                crate::research::SERVICES
+                    .into_iter()
+                    .filter_map(|service| service.server(config, &m.name, &space.policy)),
+            )
             .collect(),
         worker_id: w.id.clone(),
         machine: m.for_slot(w.slot),

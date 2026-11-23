@@ -11,7 +11,7 @@ python -m pip install fridica
 fridica init
 ```
 
-For an isolated command-line installation, use `pipx install fridica` in place of the pip command. The wheel includes the native CLI and its credential helper. To install the version in this checkout, run `python -m pip install .` from the repository root with Rust 1.88 or newer.
+For an isolated command-line installation, use `pipx install fridica` in place of the pip command. The wheel includes the native CLI and its credential helper. To install the version in this checkout, run `python -m pip install .` from the repository root with Rust 1.91 or newer.
 
 `fridica init` creates four files under `~/.config/fridica/`:
 
@@ -27,7 +27,7 @@ For an existing installation with legacy state, stop the daemon, back up its con
 ### Prepare the machines
 
 - **Daemon:** Install and sign in to the parent backend on this machine. The default is Claude Code. To use Codex, set `backend = "codex"` under `[parent]`.
-- **Workers:** Install and sign in to every backend listed for that machine. Fridica's helpers use `/usr/bin/python3`. On SSH machines, the account must be reachable without a prompt, and the backend commands must be on its noninteractive `PATH`. Install Fridica there too when using the bundled GitHub or alphaXiv tools.
+- **Workers:** Install and sign in to every backend listed for that machine. Fridica's helpers use `/usr/bin/python3`. On SSH machines, the account must be reachable without a prompt, and the backend commands must be on its noninteractive `PATH`. Install Fridica there too when using the bundled GitHub, alphaXiv, ADS or Overleaf tools.
 
 Backend installation guides: [Claude Code](https://code.claude.com/docs/en/setup) and [Codex CLI](https://developers.openai.com/codex/cli).
 
@@ -176,6 +176,12 @@ Fridica supplies the resolved secret to its `gh` process as `GH_TOKEN`. No inter
 Authenticate as the worker's execution user with `gh auth login --hostname github.com`, or provide a worker `GH_TOKEN`. The daemon's dedicated GitHub reader secret stays with the daemon. Set `[github.mcp].enabled = false` to disable worker GitHub tools.
 
 **alphaXiv.** Set `[alphaxiv].enabled = true`, allow `api.alphaxiv.org` in the workspace network policy, and provide `ALPHAXIV_TOKEN` to the daemon. On an authenticated worker, `fridica alphaxiv-mcp --probe` checks tool discovery without running a search.
+
+**NASA ADS (SciX).** Set `[scix].enabled = true`, allow `api.adsabs.harvard.edu` in the workspace network policy, and provide `ADS_TOKEN`. Workers can search papers, export citations and manage ADS libraries. Because the bundled server includes library edits, Fridica attaches it to writable placements. Run `fridica scix-mcp --probe` on the worker to verify ADS accepts the token.
+
+**Overleaf.** Set `[overleaf].enabled = true` and provide `OVERLEAF_GIT_TOKEN`. Use a dedicated workspace with `mode = "full"` and `network = ["*"]` because the server accepts arbitrary Git remotes and local paths. Install Git on the worker, plus TeX Live for compilation and PDF review. Name the project by link or ID, or set `OVERLEAF_PROJECT_ID` for a default. Citation checks use `ADS_TOKEN`. Run `fridica overleaf-mcp --probe` to check the token setting and discover tools locally. A project pull verifies remote access.
+
+Running `fridica doctor` checks each enabled research server on its eligible local and SSH workspaces. Its ADS check verifies authentication with a zero-result query. Its Overleaf check verifies that the token is set and lists the bundled tools locally. Project access requires a separate pull.
 
 **Worker credentials.** Local workers inherit a filtered daemon environment. SSH workers receive integration credentials over encrypted SSH stdin, including variables such as `GH_TOKEN`, `ALPHAXIV_TOKEN` and `AWS_SECRET_ACCESS_KEY`, plus explicitly named MCP credentials. Forwarded values take precedence over target-local values. Fridica filters configured daemon secrets and Slack credentials before launching agents. [Credential forwarding rules](src/exec/credentials.rs)
 

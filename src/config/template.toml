@@ -139,3 +139,13 @@ path = "~/.local/state/fridica/state.sqlite3"
 # Supply ALPHAXIV_TOKEN in the daemon environment.
 [alphaxiv]
 enabled = false
+
+# NASA ADS searches and library edits on writable workspaces.
+# Allow api.adsabs.harvard.edu in network and supply ADS_TOKEN.
+[scix]
+enabled = false
+
+# Overleaf Git projects on full-access workspaces with network = ["*"].
+# Supply OVERLEAF_GIT_TOKEN and optionally ADS_TOKEN for citation checks.
+[overleaf]
+enabled = false
