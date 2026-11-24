@@ -16,6 +16,10 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 | NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
 | Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
 
+Native Overleaf comments and pending Track Changes use a dedicated desktop login:
+`fridica overleaf-auth login --expected-email EMAIL --project PROJECT_ID --resources /absolute/overleaf-native`.
+No model client or worker is needed to sign in. See the [portable bundle, scope and optional recipient setup](integrations/overleaf/README.md).
+
 Slack automatically checks the standard environment variables first and then their keyring entries. You can delete the four standard Slack token assignments from an existing `[slack]` table. Keep any overrides that point to custom names.
 
 To use an environment variable in Bash or Zsh, export it before running `fridica init` and supply it to the daemon at startup. For example, this prompts for an ADS token without putting its value in shell history:

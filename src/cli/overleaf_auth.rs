@@ -4,10 +4,14 @@ use crate::secrets::NativeStore;
 use anyhow::Result;
 use clap::Subcommand;
 
+mod login;
+
 const ENTRY: &str = "fridica/overleaf/native-session";
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Sign in with the dedicated Overleaf browser; no model backend or worker required.
+    Login(login::Options),
     /// Describe the scoped sign-in flow without reading credentials or contacting Overleaf.
     Plan,
     /// Report configured saved native-session status without performing a network request.
@@ -16,13 +20,19 @@ pub enum Command {
     Revoke,
     /// Receive the owner helper's verified session over stdin and save to the OS store.
     /// Never pass a cookie in argv or invoke from an MCP worker.
-    ImportVerifiedSession,
+    ImportVerifiedSession {
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
+    },
     /// Bind native forwarding to one actual worker and registered placement until revoked.
     BindRecipient {
         #[arg(long)]
         config: std::path::PathBuf,
         #[arg(long)]
         worker_id: String,
+        /// Exact job channel. May already be configured by login.
+        #[arg(long)]
+        channel: Option<String>,
         #[arg(long)]
         machine: String,
         #[arg(long)]
@@ -35,14 +45,15 @@ pub enum Command {
 
 pub fn run(command: Command) -> Result<()> {
     match command {
+        Command::Login(options) => login::run(options)?,
         Command::Plan => println!(
             "{}",
             serde_json::json!({
-                "live_validated":false,"project":crate::config::overleaf::PROJECT,
+                "live_validated":false,"scope":"explicit expected email, project and optional channel in owner configuration",
                 "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,
-                "login":"portable owner-login.mjs reuses upstream dedicated-profile login and saved session",
+                "login":"fridica overleaf-auth login reuses upstream dedicated-profile login and saved session",
                 "lifetime":"actual cookie/server expiry or owner revocation; optional explicitly timed grant",
-                "recipient":"default deny; exact dungeon3:snapy worker and C0CL1NW0DGS job channel",
+                "recipient":"default deny; separately bind an actual worker, registered placement and exact channel",
                 "transport":"OS credential store and existing encrypted SSH stdin route",
                 "platform":"owner helper needs Node >=20 and Chrome; listener needs this Fridica feature build",
                 "revocation":"delete entry, stop holder workers and invalidate the dedicated Overleaf session"
@@ -74,7 +85,7 @@ pub fn run(command: Command) -> Result<()> {
             NativeStore.delete(ENTRY)?;
             println!("Native session entry removed. Running workers retain their copies: stop those sessions and invalidate the isolated Overleaf session to complete revocation.");
         }
-        Command::ImportVerifiedSession => {
+        Command::ImportVerifiedSession { config } => {
             use std::io::Read;
             let mut raw = String::new();
             std::io::stdin()
@@ -82,6 +93,17 @@ pub fn run(command: Command) -> Result<()> {
                 .read_to_string(&mut raw)
                 .map_err(|_| anyhow::anyhow!("cannot read verified native session"))?;
             crate::config::overleaf::validate_session(&raw)?;
+            if let Some(path) = config {
+                let source = crate::config::editor::read(&path)?;
+                let document = source.parse::<toml_edit::DocumentMut>()?;
+                let settings: crate::config::overleaf::Settings =
+                    crate::config::loader::decode(document.get("overleaf"))?;
+                let scope = settings
+                    .native_scope
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("configure native login scope first"))?;
+                crate::config::overleaf::validate_session_scope(&raw, scope)?;
+            }
             // Session renewal cannot silently bind a different account.
             if let Some(previous) = NativeStore.get(ENTRY)? {
                 let old: serde_json::Value = serde_json::from_slice(&previous).map_err(|_| {
@@ -100,12 +122,13 @@ pub fn run(command: Command) -> Result<()> {
         Command::BindRecipient {
             config,
             worker_id,
+            channel,
             machine,
             workspace,
             expires_at,
         } => {
             validate_expiry(expires_at)?;
-            bind_recipient(&config, worker_id, machine, workspace, expires_at)?;
+            bind_recipient(&config, worker_id, channel, machine, workspace, expires_at)?;
             println!("Native recipient bound in owner configuration until revoked or an explicit deadline. Load this configuration during activation; no credential was read or forwarded.");
         }
     }
@@ -123,6 +146,7 @@ fn validate_expiry(expires_at: Option<u64>) -> Result<()> {
 fn bind_recipient(
     path: &std::path::Path,
     worker_id: String,
+    channel: Option<String>,
     machine: String,
     workspace: String,
     expires_at: Option<u64>,
@@ -143,7 +167,23 @@ fn bind_recipient(
         expires_at,
     };
     recipient.validate()?;
+    let mut scope = config.overleaf.native_scope.clone().ok_or_else(|| {
+        anyhow::anyhow!("run overleaf-auth login with explicit account/project first")
+    })?;
+    if let Some(channel) = channel {
+        scope.channel = Some(channel);
+    }
+    scope.validate()?;
+    let channel = scope
+        .channel
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("an explicit --channel is required for forwarding"))?;
+    anyhow::ensure!(
+        config.slack.channels.iter().any(|c| c == channel),
+        "native channel must be in the owner Slack allowlist"
+    );
     let mut document = source.parse::<DocumentMut>()?;
+    document["overleaf"]["native_scope"]["channel"] = value(channel);
     let mut table = Table::new();
     table["worker_id"] = value(recipient.worker_id);
     table["machine"] = value(recipient.machine);

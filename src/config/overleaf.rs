@@ -5,8 +5,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const NATIVE_ENV: &str = "OVERLEAF_NATIVE_SESSION";
 pub const NATIVE_ENTRY: &str = "fridica/overleaf/native-session";
-pub const PROJECT: &str = "6b0483a71b304b7fd2141775";
-pub const CHANNEL: &str = "C0CL1NW0DGS";
 pub const OPERATIONS: [&str; 7] = [
     "list_comments",
     "read_comment_thread",
@@ -32,11 +30,60 @@ pub struct Settings {
     pub native_adapter: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_recipient: Option<Recipient>,
+    /// Explicit owner scope; absent scope denies forwarding even with a saved session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_scope: Option<Scope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login: Option<Login>,
 }
 impl Settings {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
+}
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Login {
+    pub resources: Option<std::path::PathBuf>,
+    pub node: Option<std::path::PathBuf>,
+    pub browser: Option<std::path::PathBuf>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scope {
+    pub expected_email: String,
+    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+}
+impl Scope {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            valid_id(&self.project) && valid_email(&self.expected_email),
+            "native login requires an explicit account email and 24-character project ID"
+        );
+        ensure!(
+            self.channel
+                .as_deref()
+                .is_none_or(|c| super::loader::slack_id(c, "CG")),
+            "native channel must be an explicit Slack channel ID"
+        );
+        Ok(())
+    }
+}
+fn valid_id(id: &str) -> bool {
+    id.len() == 24
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+fn valid_email(email: &str) -> bool {
+    !email.is_empty()
+        && email.len() <= 254
+        && email.is_ascii()
+        && email.split('@').count() == 2
+        && email.split('@').all(|v| !v.is_empty())
+        && !email.bytes().any(|b| b <= 32 || b == 127)
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,8 +105,10 @@ impl Recipient {
             "recipient requires a worker UUID"
         );
         ensure!(
-            self.machine == "dungeon3" && self.workspace == "snapy",
-            "native recipient must be dungeon3:snapy"
+            [&self.machine, &self.workspace]
+                .iter()
+                .all(|s| !s.is_empty() && !s.chars().any(char::is_control)),
+            "native recipient requires an explicit registered machine and workspace"
         );
         ensure!(
             self.expires_at != Some(0),
@@ -84,6 +133,16 @@ pub fn validate(config: &super::Config) -> Result<()> {
             .all(|s| !s.is_empty() && !s.chars().any(char::is_control)),
         "native adapter argv contains an empty/control argument"
     );
+    if let Some(scope) = &config.overleaf.native_scope {
+        scope.validate()?;
+        ensure!(
+            scope
+                .channel
+                .as_ref()
+                .is_none_or(|c| config.slack.channels.contains(c)),
+            "native channel must be in the owner Slack allowlist"
+        );
+    }
     if let Some(r) = &config.overleaf.native_recipient {
         r.validate()?;
         ensure!(
@@ -120,16 +179,11 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
         serde_json::from_str(raw).map_err(|_| anyhow::anyhow!("invalid native session"))?;
     ensure!(
         s.schema == 2
-            && s.projects == [PROJECT]
+            && s.projects.len() == 1
+            && valid_id(&s.projects[0])
             && s.operations == OPERATIONS
-            && s.account_id.len() == 24
-            && s.account_id.bytes().all(|b| b.is_ascii_hexdigit())
-            && !s.expected_email.is_empty()
-            && s.expected_email.len() <= 254
-            && s.expected_email.is_ascii()
-            && s.expected_email.split('@').count() == 2
-            && s.expected_email.split('@').all(|v| !v.is_empty())
-            && !s.expected_email.bytes().any(|b| b <= 32 || b == 127)
+            && valid_id(&s.account_id)
+            && valid_email(&s.expected_email)
             && s.expires_at.is_none_or(|t| t > now()),
         "native session outside scope or expired"
     );
@@ -157,13 +211,33 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
         r.validate()?;
     }
     ensure!(
-        s.channel.as_deref().is_none_or(|c| c == CHANNEL),
+        s.channel
+            .as_deref()
+            .is_none_or(|c| super::loader::slack_id(c, "CG")),
         "native channel mismatch"
     );
     Ok(())
 }
-pub(crate) fn bound_session(raw: &str, recipient: &Recipient) -> Result<String> {
+pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<()> {
     validate_session(raw)?;
+    scope.validate()?;
+    let s: Session = serde_json::from_str(raw)?;
+    ensure!(
+        s.projects == [scope.project.clone()]
+            && s.expected_email == scope.expected_email
+            && s.channel
+                .as_ref()
+                .is_none_or(|c| Some(c) == scope.channel.as_ref()),
+        "saved native session does not match configured account/project/channel"
+    );
+    Ok(())
+}
+pub(crate) fn bound_session(raw: &str, recipient: &Recipient, scope: &Scope) -> Result<String> {
+    validate_session_scope(raw, scope)?;
+    let channel = scope
+        .channel
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("explicit native channel required"))?;
     let mut value: serde_json::Value = serde_json::from_str(raw)?;
     if let Some(deadline) = recipient.expires_at {
         value["expires_at"] = serde_json::json!(value["expires_at"]
@@ -171,7 +245,7 @@ pub(crate) fn bound_session(raw: &str, recipient: &Recipient) -> Result<String> 
             .map_or(deadline, |t| t.min(deadline)));
     }
     value["recipient"] = serde_json::to_value(recipient)?;
-    value["channel"] = CHANNEL.into();
+    value["channel"] = channel.as_str().into();
     let raw = value.to_string();
     validate_session(&raw)?;
     Ok(raw)
@@ -180,8 +254,15 @@ pub(crate) fn bound_session(raw: &str, recipient: &Recipient) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    const PROJECT: &str = "333333333333333333333333";
+    const CHANNEL: &str = "CEXAMPLE";
     #[test]
     fn grant_is_exact_and_lifetime_is_not_artificially_shortened() {
+        let scope = Scope {
+            expected_email: "owner@example.invalid".into(),
+            project: PROJECT.into(),
+            channel: Some(CHANNEL.into()),
+        };
         let r = Recipient {
             worker_id: "worker-11111111-1111-4111-8111-111111111111".into(),
             machine: "dungeon3".into(),
@@ -190,7 +271,7 @@ mod tests {
         };
         let s = serde_json::json!({"schema":2,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":"owner@example.invalid", "projects":[PROJECT], "operations":OPERATIONS});
         let b: serde_json::Value =
-            serde_json::from_str(&bound_session(&s.to_string(), &r).unwrap()).unwrap();
+            serde_json::from_str(&bound_session(&s.to_string(), &r, &scope).unwrap()).unwrap();
         assert!(b["expires_at"].is_null());
         assert_eq!(b["channel"], CHANNEL);
         assert!(!r.permits(
@@ -198,13 +279,15 @@ mod tests {
             "dungeon3",
             "snapy"
         ));
-        assert!(
-            validate_session(&s.to_string().replace(PROJECT, "222222222222222222222222")).is_err()
-        );
+        assert!(validate_session_scope(
+            &s.to_string().replace(PROJECT, "222222222222222222222222"),
+            &scope
+        )
+        .is_err());
         let mut timed = r;
         timed.expires_at = Some(now() + 60);
         let b: serde_json::Value =
-            serde_json::from_str(&bound_session(&s.to_string(), &timed).unwrap()).unwrap();
+            serde_json::from_str(&bound_session(&s.to_string(), &timed, &scope).unwrap()).unwrap();
         assert_eq!(b["expires_at"], timed.expires_at.unwrap());
     }
 }

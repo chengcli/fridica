@@ -767,7 +767,7 @@ fn string(item: Option<&Item>) -> Result<Option<String>> {
     item.map(|i| i.as_str().map(str::to_owned).context("expected a string"))
         .transpose()
 }
-fn decode<T: DeserializeOwned>(item: Option<&Item>) -> Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(item: Option<&Item>) -> Result<T> {
     Ok(serde_json::from_value(object(item)?)?)
 }
 fn object(item: Option<&Item>) -> Result<Value> {

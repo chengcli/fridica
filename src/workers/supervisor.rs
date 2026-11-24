@@ -629,7 +629,12 @@ fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<Work
         excluded_env: config.secret_env().into_iter().map(str::to_owned).collect(),
         slot: w.slot,
     };
-    if session_id.split(':').nth(1) == Some(crate::config::overleaf::CHANNEL)
+    if config
+        .overleaf
+        .native_scope
+        .as_ref()
+        .and_then(|s| s.channel.as_deref())
+        .is_some_and(|channel| session_id.split(':').nth(1) == Some(channel))
         && config
             .overleaf
             .native_recipient
@@ -646,7 +651,12 @@ fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<Work
                 "--workspace".into(),
                 spec.workspace.path.to_string_lossy().into_owned(),
                 "--channel".into(),
-                crate::config::overleaf::CHANNEL.into(),
+                config
+                    .overleaf
+                    .native_scope
+                    .as_ref()
+                    .and_then(|s| s.channel.clone())
+                    .expect("authorized channel"),
                 "--worker".into(),
                 w.id.clone(),
             ]);

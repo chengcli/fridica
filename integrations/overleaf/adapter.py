@@ -21,8 +21,6 @@ import time
 import urllib.request
 import uuid
 
-PROJECT = "6b0483a71b304b7fd2141775"
-CHANNEL = "C0CL1NW0DGS"
 ORIGIN = "https://www.overleaf.com"
 OPERATIONS = ["list_comments", "read_comment_thread", "add_comment", "reply_comment",
               "read_file", "list_tracked_changes", "find_and_replace"]
@@ -47,10 +45,10 @@ def session(raw, worker, channel):
     require(len(raw) <= 16384)
     s = json.loads(raw)
     require(isinstance(s, dict) and s.get("schema") == 2)
-    require(s.get("projects") == [PROJECT] and s.get("operations") == OPERATIONS)
-    require(s.get("channel") == channel == CHANNEL)
+    require(isinstance(s.get("projects"), list) and len(s["projects"]) == 1 and re.fullmatch(r"[0-9a-f]{24}", s["projects"][0]) and s.get("operations") == OPERATIONS)
+    require(s.get("channel") == channel and re.fullmatch(r"[CG][A-Z0-9]+", channel))
     r = s.get("recipient", {})
-    require(r.get("worker_id") == worker and r.get("machine") == "dungeon3" and r.get("workspace") == "snapy")
+    require(r.get("worker_id") == worker and all(isinstance(r.get(k), str) and r[k] and not any(ord(c) < 32 for c in r[k]) for k in ("machine", "workspace")))
     require(re.fullmatch(r"worker-[0-9a-f-]{36}", worker))
     for deadline in (s.get("expires_at"), r.get("expires_at")):
         require(deadline is None or type(deadline) is int and deadline > time.time(), "Native session expired; owner login/rebinding required")
@@ -82,7 +80,7 @@ class Meta(html.parser.HTMLParser):
 def identity(body, s):
     m = Meta()
     m.feed(body)
-    require(m.values.get("ol-project_id") == PROJECT, "Native project verification failed")
+    require(m.values.get("ol-project_id") == s["projects"][0], "Native project verification failed")
     user = json.loads(m.values.get("ol-user", "{}"))
     require(user.get("_id", user.get("id")) == s["account_id"]
             and user.get("email", "").lower() == s["expected_email"].lower(), "Native account verification failed")
@@ -95,7 +93,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def verify_identity(s):
     # Independent, fixed HTTPS account/project check. No dashboard listing or redirects.
-    request = urllib.request.Request(f"{ORIGIN}/project/{PROJECT}", headers={"Cookie": s["cookie"], "Accept": "text/html"})
+    request = urllib.request.Request(f"{ORIGIN}/project/{s['projects'][0]}", headers={"Cookie": s["cookie"], "Accept": "text/html"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
         with opener.open(request, timeout=15) as response:
@@ -186,14 +184,14 @@ def native_peer(node, root, state, cookie=""):
         os.close(fd)
 
 
-def arguments(name, given, schema):
+def arguments(name, given, schema, project):
     require(name in NAMES and isinstance(given, dict))
     op = NAMES[name]
     args = dict(given)
     opid = args.pop("operation_id", None)
     require(set(args) <= set(schema["properties"]))
-    require(args.get("project_id", PROJECT) == PROJECT)
-    args["project_id"] = PROJECT
+    require(args.get("project_id", project) == project)
+    args["project_id"] = project
     if "thread_id" in args:
         require(isinstance(args["thread_id"], str) and re.fullmatch(r"[0-9a-f]{24}", args["thread_id"]))
     if "path" in args:
@@ -278,13 +276,13 @@ class Adapter:
 
     def dispatch(self, method, params):
         if method == "initialize":
-            return {**self.builtin.info, "instructions": "Use built-in Interleaf for Git/compile. Native review tools are fixed to SNAP V3. Native suggestions must remain pending; never accept/reject author changes."}
+            return {**self.builtin.info, "instructions": "Use built-in Interleaf for Git/compile. Native review tools are restricted to the owner-configured project. Native suggestions must remain pending; never accept/reject author changes."}
         if method == "tools/list":
             tools = self.builtin.call(method, params)["tools"]
-            for name, op in NAMES.items():
+            for name, op in (NAMES.items() if self.grant else []):
                 tool = json.loads(json.dumps(self.schemas[op]))
                 tool["name"] = name
-                tool["inputSchema"]["properties"]["project_id"] = {"type": "string", "const": PROJECT, "default": PROJECT}
+                tool["inputSchema"]["properties"]["project_id"] = {"type": "string", "const": self.grant["projects"][0], "default": self.grant["projects"][0]}
                 if op in WRITES:
                     tool["inputSchema"]["properties"]["operation_id"] = {"type": "string", "description": "Stable UUID; reuse after ambiguous outcomes to prevent replay."}
                     tool["inputSchema"].setdefault("required", []).append("operation_id")
@@ -298,8 +296,8 @@ class Adapter:
             return self.builtin.call(method, params)
         name = params.get("name")
         require(name in NAMES)
-        op, args, opid = arguments(name, params.get("arguments", {}), self.schemas[NAMES[name]]["inputSchema"])
         require(self.grant is not None, "Native session not configured; owner login and explicit recipient binding required")
+        op, args, opid = arguments(name, params.get("arguments", {}), self.schemas[NAMES[name]]["inputSchema"], self.grant["projects"][0])
         s = session(self.raw, self.options.worker, self.options.channel)
         verify_identity(s)
         def call():
@@ -323,7 +321,7 @@ def main():
     p.add_argument("--builtin", required=True)
     p.add_argument("--workspace", required=True)
     p.add_argument("--worker", required=True)
-    p.add_argument("--channel", choices=[CHANNEL], required=True)
+    p.add_argument("--channel", required=True)
     o = p.parse_args()
     adapter = None
     def stop(*_):

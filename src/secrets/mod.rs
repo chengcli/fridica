@@ -183,7 +183,7 @@ mod tests {
         ]);
         let mut server = fridica_agent::overleaf::overleaf("fridica");
         server.env_vars.push("OVERLEAF_NATIVE_SESSION".into());
-        let raw = serde_json::json!({"schema":2,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":"owner@example.invalid", "projects":[crate::config::overleaf::PROJECT],"operations":crate::config::overleaf::OPERATIONS,"expires_at":crate::config::overleaf::now()+600}).to_string();
+        let raw = serde_json::json!({"schema":2,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":"owner@example.invalid", "projects":["333333333333333333333333"],"operations":crate::config::overleaf::OPERATIONS,"expires_at":crate::config::overleaf::now()+600}).to_string();
         worker_tokens(&mut environment, &[server], true, |entry| {
             assert_eq!(entry, crate::config::overleaf::NATIVE_ENTRY);
             Ok(Some(raw.as_bytes().to_vec()))
@@ -194,7 +194,7 @@ mod tests {
             raw.as_str()
         );
         assert!(crate::config::overleaf::validate_session(
-            &raw.replace(crate::config::overleaf::PROJECT, "222222222222222222222222")
+            &raw.replace("333333333333333333333333", "invalid-project")
         )
         .is_err());
     }

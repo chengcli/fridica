@@ -42,6 +42,7 @@ pub struct SystemLauncher {
     probes: Arc<Semaphore>,
     keyring_names: std::sync::OnceLock<Vec<String>>,
     native_recipient: Option<crate::config::overleaf::Recipient>,
+    native_scope: Option<crate::config::overleaf::Scope>,
 }
 impl SystemLauncher {
     /// Best-effort retention after admission, before inputs or backend work
@@ -77,6 +78,7 @@ impl SystemLauncher {
             probes: Arc::new(Semaphore::new(1)),
             keyring_names: Default::default(),
             native_recipient: config.overleaf.native_recipient.clone(),
+            native_scope: config.overleaf.native_scope.clone(),
         })
     }
 }
@@ -86,7 +88,10 @@ impl Launcher for SystemLauncher {
     }
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         let current = crate::exec::isolation::Isolation::new(config, &[])?;
-        if current != self.isolation || config.overleaf.native_recipient != self.native_recipient {
+        if current != self.isolation
+            || config.overleaf.native_recipient != self.native_recipient
+            || config.overleaf.native_scope != self.native_scope
+        {
             anyhow::bail!("worker isolation configuration changed; rebuild runtime adapters");
         }
         Ok(())
@@ -203,9 +208,14 @@ impl Launcher for SystemLauncher {
             }) && spec.mcp_servers.iter().any(|s| {
                 s.name == "overleaf"
                     && s.env_vars.iter().any(|n| n == NATIVE_ENV)
-                    && s.args
-                        .windows(2)
-                        .any(|a| a[0] == "--channel" && a[1] == crate::config::overleaf::CHANNEL)
+                    && s.args.windows(2).any(|a| {
+                        a[0] == "--channel"
+                            && self
+                                .native_scope
+                                .as_ref()
+                                .and_then(|s| s.channel.as_deref())
+                                == Some(a[1].as_str())
+                    })
                     && s.args
                         .windows(2)
                         .any(|a| a[0] == "--worker" && a[1] == spec.worker_id)
@@ -249,6 +259,7 @@ impl Launcher for SystemLauncher {
                     self.native_recipient
                         .as_ref()
                         .expect("authorized recipient"),
+                    self.native_scope.as_ref().expect("authorized scope"),
                 )
                 .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
                 environment.insert(NATIVE_ENV.into(), raw.into());

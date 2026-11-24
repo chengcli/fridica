@@ -9,6 +9,8 @@ import uuid
 import adapter as a
 
 ROOT = Path(__file__).resolve().parent
+PROJECT = "333333333333333333333333"
+CHANNEL = "CEXAMPLE"
 WORKER = "worker-11111111-1111-4111-8111-111111111111"
 
 class AdapterChecks(unittest.TestCase):
@@ -29,30 +31,30 @@ class AdapterChecks(unittest.TestCase):
 
     def test_scope_and_pending_only(self):
         grant = dict(schema=2, cookie="overleaf_session2=fixture", account_id="1" * 24,
-                     expected_email="owner@example.invalid", projects=[a.PROJECT], operations=a.OPERATIONS,
-                     channel=a.CHANNEL, recipient=dict(worker_id=WORKER, machine="dungeon3", workspace="snapy"))
-        self.assertEqual(a.session(json.dumps(grant), WORKER, a.CHANNEL), grant)
-        for key, value in (("channel", "OTHER"), ("projects", ["2" * 24]), ("expires_at", 1)):
+                     expected_email="owner@example.invalid", projects=[PROJECT], operations=a.OPERATIONS,
+                     channel=CHANNEL, recipient=dict(worker_id=WORKER, machine="dungeon3", workspace="snapy"))
+        self.assertEqual(a.session(json.dumps(grant), WORKER, CHANNEL), grant)
+        for key, value in (("channel", "OTHER"), ("projects", ["invalid"]), ("expires_at", 1)):
             with self.assertRaises(ValueError):
-                a.session(json.dumps({**grant, key: value}), WORKER, a.CHANNEL)
+                a.session(json.dumps({**grant, key: value}), WORKER, CHANNEL)
         with self.assertRaises(ValueError):
-            a.session(json.dumps(grant), "worker-22222222-2222-4222-8222-222222222222", a.CHANNEL)
+            a.session(json.dumps(grant), "worker-22222222-2222-4222-8222-222222222222", CHANNEL)
         schema = {"properties": {k: {} for k in ["project_id", "path", "old_string", "new_string", "expected_version", "track", "strict_version", "thread_id", "content"]}}
         for name, args in (("native_accept_changes", {}), ("native_reply_comment", {"project_id": "2" * 24}),
                            ("native_suggest_edit", {"track": "off"}), ("native_add_comment", {})):
             with self.assertRaises(ValueError):
-                a.arguments(name, args, schema)
+                a.arguments(name, args, schema, PROJECT)
         op, args, _ = a.arguments("native_suggest_edit", dict(old_string="a", new_string="b", expected_version=3,
-                                 operation_id=str(uuid.uuid4())), schema)
+                                 operation_id=str(uuid.uuid4())), schema, PROJECT)
         self.assertEqual(op, "find_and_replace")
         self.assertTrue(args["strict_version"])
         self.assertEqual(args["track"], "on")
 
     def test_expected_account_and_project(self):
-        grant = {"account_id": "1" * 24, "expected_email": "owner@example.invalid"}
-        body = '<meta name="ol-project_id" content="' + a.PROJECT + '\"><meta name="ol-user" content=\'' + json.dumps({"_id": "1" * 24, "email": "owner@example.invalid"}) + "'>"
+        grant = {"projects": [PROJECT], "account_id": "1" * 24, "expected_email": "owner@example.invalid"}
+        body = '<meta name="ol-project_id" content="' + PROJECT + '\"><meta name="ol-user" content=\'' + json.dumps({"_id": "1" * 24, "email": "owner@example.invalid"}) + "'>"
         a.identity(body, grant)
-        for changed in (body.replace("owner@", "other@"), body.replace(a.PROJECT, "2" * 24)):
+        for changed in (body.replace("owner@", "other@"), body.replace(PROJECT, "2" * 24)):
             with self.assertRaises(ValueError):
                 a.identity(changed, grant)
 
