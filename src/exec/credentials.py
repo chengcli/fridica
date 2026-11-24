@@ -30,6 +30,9 @@ def receive():
         or not isinstance(v, str) or "\0" in v for k, v in values.items()
     ):
         raise ValueError("invalid credential frame")
+    # Never inherit an unchecked target-side native session. Only the trusted
+    # launcher's validated, recipient-bound frame may supply this credential.
+    os.environ.pop("OVERLEAF_NATIVE_SESSION", None)
     os.environ.update(values)
     os.execv("/bin/sh", ["sh", "-c", sys.argv[2]])
 

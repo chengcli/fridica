@@ -1,4 +1,5 @@
 //! Configuration transformations preserve comments and never silently discard keys.
+pub mod overleaf;
 pub mod research;
 pub use research as alphaxiv;
 pub mod contract;

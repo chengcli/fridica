@@ -175,11 +175,13 @@ impl CliParent {
         let timeout = Duration::try_from_secs_f64(self.config.parent.timeout)
             .map_err(|_| failure("parent_invalid_timeout"))?;
         let excluded = self.config.secret_env().map(str::to_owned);
-        let environment = process::scrubbed_environment(
+        let mut environment = process::scrubbed_environment(
             self.options.environment.clone(),
             &excluded,
             &BTreeMap::new(),
         );
+        // The coordinator is never the worker recipient of a native session.
+        environment.remove(std::ffi::OsStr::new(crate::config::overleaf::NATIVE_ENV));
         let now = self.clock.now();
         let intent = json!({"backend":backend,"argv":argv,"prompt":prompt,"schema":schema,"model":model,"timeout":timeout.as_secs_f64()});
         let seq = self

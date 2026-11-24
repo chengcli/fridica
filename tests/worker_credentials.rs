@@ -25,6 +25,10 @@ fn fixture() -> (tempfile::TempDir, Launch) {
             ("INTERLEAF_WORKSPACE".into(), "/master/checkout".into()),
             ("OPENAI_API_KEY".into(), "forwarded-model".into()),
             ("CUSTOM_AUTH".into(), "forwarded-custom".into()),
+            (
+                "OVERLEAF_NATIVE_SESSION".into(),
+                "synthetic-native-envelope".into(),
+            ),
             ("GH_CONFIG_DIR".into(), "/master-only/path".into()),
             ("SLACK_USER_TOKEN".into(), "xoxp-private".into()),
             ("DISGUISED_TOKEN".into(), "xoxb-private".into()),
@@ -42,6 +46,7 @@ async fn ssh_forwards_integration_credentials_without_arguments_or_stdin_corrupt
         &["OWNER_TOKEN".into()],
         &[
             "CUSTOM_AUTH".into(),
+            "OVERLEAF_NATIVE_SESSION".into(),
             "GH_CONFIG_DIR".into(),
             "INTERLEAF_CONFIG".into(),
             "INTERLEAF_WORKSPACE".into(),
@@ -53,6 +58,7 @@ async fn ssh_forwards_integration_credentials_without_arguments_or_stdin_corrupt
         "forwarded-alpha",
         "forwarded-model",
         "forwarded-custom",
+        "synthetic-native-envelope",
         "private-control",
         "private-owner",
         "xoxp-private",
@@ -77,6 +83,7 @@ async fn ssh_forwards_integration_credentials_without_arguments_or_stdin_corrupt
     assert_eq!(env["ALPHAXIV_TOKEN"], "forwarded-alpha");
     assert_eq!(env["OPENAI_API_KEY"], "forwarded-model");
     assert_eq!(env["CUSTOM_AUTH"], "forwarded-custom");
+    assert_eq!(env["OVERLEAF_NATIVE_SESSION"], "synthetic-native-envelope");
     assert_eq!(env["TARGET_ONLY_TOKEN"], "target-keep");
     for name in [
         "SLACK_USER_TOKEN",

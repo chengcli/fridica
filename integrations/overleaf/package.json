@@ -1,0 +1,9 @@
+{
+  "name": "fridica-overleaf-adapter",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Process-only integration of the unmodified AGPL Overleaf MCP",
+  "license": "MIT",
+  "dependencies": { "@netique/overleaf-mcp": "0.4.0" },
+  "engines": { "node": ">=20" }
+}

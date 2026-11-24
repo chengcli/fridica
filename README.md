@@ -250,3 +250,8 @@ Build a wheel with `maturin build --release --locked --out dist`. The wheel smok
 ## License
 
 [MIT](LICENSE)
+
+The optional [scoped native Overleaf adapter](integrations/overleaf/README.md)
+uses a pinned, unmodified AGPL MCP process alongside Interleaf. Its current
+upstream reconnect behavior keeps anchored creation and tracked writes gated;
+see the integration notes for authentication, deployment and readiness limits.

@@ -41,6 +41,7 @@ pub struct SystemLauncher {
     // Independent bounded probe capacity survives dropped admission futures.
     probes: Arc<Semaphore>,
     keyring_names: std::sync::OnceLock<Vec<String>>,
+    native_recipient: Option<crate::config::overleaf::Recipient>,
 }
 impl SystemLauncher {
     /// Best-effort retention after admission, before inputs or backend work
@@ -75,6 +76,7 @@ impl SystemLauncher {
             isolation: crate::exec::isolation::Isolation::new(config, &[])?,
             probes: Arc::new(Semaphore::new(1)),
             keyring_names: Default::default(),
+            native_recipient: config.overleaf.native_recipient.clone(),
         })
     }
 }
@@ -84,7 +86,7 @@ impl Launcher for SystemLauncher {
     }
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         let current = crate::exec::isolation::Isolation::new(config, &[])?;
-        if current != self.isolation {
+        if current != self.isolation || config.overleaf.native_recipient != self.native_recipient {
             anyhow::bail!("worker isolation configuration changed; rebuild runtime adapters");
         }
         Ok(())
@@ -129,25 +131,29 @@ impl Launcher for SystemLauncher {
                 .acquire_owned()
                 .await
                 .map_err(|_| failure(Failure::Refusal, "worker_isolation_probe_unavailable"))?;
+            let mut probe_environment = self.environment.clone();
+            probe_environment.remove(std::ffi::OsStr::new(crate::config::overleaf::NATIVE_ENV));
+            let mut probe_excluded = spec.excluded_env.clone();
+            probe_excluded.push(crate::config::overleaf::NATIVE_ENV.into());
             let launch = match spec.machine.transport.as_str() {
                 "local" => self.isolation.preflight(
                     &LocalTransport {
                         machine: spec.machine.clone(),
                         home: self.home.clone(),
-                        excluded_env: spec.excluded_env.clone(),
+                        excluded_env: probe_excluded.clone(),
                     },
                     &base.path,
-                    self.environment.clone(),
+                    probe_environment.clone(),
                 ),
                 "ssh" => {
                     let mut launch = self.isolation.preflight_remote(
                         &SshTransport {
                             machine: spec.machine.clone(),
-                            excluded_env: spec.excluded_env.clone(),
+                            excluded_env: probe_excluded.clone(),
                             control_directory: self.ssh_control_directory.clone(),
                         },
                         &base.path.to_string_lossy(),
-                        self.environment.clone(),
+                        probe_environment.clone(),
                     );
                     if let Ok(launch) = &mut launch {
                         crate::exec::isolation::read_only_ssh_probe(launch);
@@ -189,24 +195,81 @@ impl Launcher for SystemLauncher {
     }
 
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
+        use crate::config::overleaf::NATIVE_ENV;
         use crate::core::secret::SecretStore;
+        let native_allowed =
+            self.native_recipient.as_ref().is_some_and(|r| {
+                r.permits(&spec.worker_id, &spec.machine.name, &spec.workspace.name)
+            }) && spec.mcp_servers.iter().any(|s| {
+                s.name == "overleaf"
+                    && s.env_vars.iter().any(|n| n == NATIVE_ENV)
+                    && s.args
+                        .windows(2)
+                        .any(|a| a[0] == "--channel" && a[1] == crate::config::overleaf::CHANNEL)
+                    && s.args
+                        .windows(2)
+                        .any(|a| a[0] == "--worker" && a[1] == spec.worker_id)
+            }) && !spec.excluded_env.iter().any(|n| n == NATIVE_ENV);
+        let mut spec = spec.clone();
+        if !native_allowed {
+            spec.excluded_env.push(NATIVE_ENV.into());
+        }
         let mut environment = process::scrubbed_environment(
             self.environment.clone(),
             &spec.excluded_env,
             &BTreeMap::new(),
         );
-        crate::secrets::worker_tokens(&mut environment, &spec.mcp_servers, |entry| {
-            let store = crate::secrets::NativeStore;
-            let names = self
-                .keyring_names
-                .get_or_init(|| store.list().unwrap_or_default());
-            if names.iter().any(|name| name == entry) {
-                store.get(entry)
-            } else {
-                Ok(None)
-            }
-        })
+        crate::secrets::worker_tokens(
+            &mut environment,
+            &spec.mcp_servers,
+            native_allowed,
+            |entry| {
+                let store = crate::secrets::NativeStore;
+                if entry == crate::config::overleaf::NATIVE_ENTRY {
+                    return store.get(entry);
+                }
+                let names = self
+                    .keyring_names
+                    .get_or_init(|| store.list().unwrap_or_default());
+                if names.iter().any(|name| name == entry) {
+                    store.get(entry)
+                } else {
+                    Ok(None)
+                }
+            },
+        )
         .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+        if native_allowed {
+            if let Some(raw) = environment
+                .get(std::ffi::OsStr::new(NATIVE_ENV))
+                .and_then(|value| value.to_str())
+            {
+                let raw = crate::config::overleaf::bound_session(
+                    raw,
+                    self.native_recipient
+                        .as_ref()
+                        .expect("authorized recipient"),
+                )
+                .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+                environment.insert(NATIVE_ENV.into(), raw.into());
+            }
+        }
+        let native_available =
+            native_allowed && environment.contains_key(std::ffi::OsStr::new(NATIVE_ENV));
+        if !native_available && !spec.excluded_env.iter().any(|n| n == NATIVE_ENV) {
+            spec.excluded_env.push(NATIVE_ENV.into());
+        }
+        // This inner command guard also strips target-side ambient credentials after
+        // Python activation. Confined/Codex-startup helpers use excluded_env instead.
+        let guarded = |command: Vec<String>| {
+            if native_available {
+                command
+            } else {
+                let mut words = vec!["/usr/bin/env".into(), "-u".into(), NATIVE_ENV.into()];
+                words.extend(command);
+                words
+            }
+        };
         let launch = match spec.machine.transport.as_str() {
             "local" => {
                 let transport = LocalTransport {
@@ -245,7 +308,7 @@ impl Launcher for SystemLauncher {
                         })
                 } else {
                     transport.launch(
-                        command,
+                        guarded(command),
                         &spec.workspace.path,
                         environment,
                         &BTreeMap::new(),
@@ -290,7 +353,7 @@ impl Launcher for SystemLauncher {
                         })
                 } else {
                     transport.launch(
-                        command,
+                        guarded(command),
                         &spec.workspace.path.to_string_lossy(),
                         environment,
                         &BTreeMap::new(),

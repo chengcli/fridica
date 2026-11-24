@@ -151,8 +151,8 @@ pub struct Config {
     pub alphaxiv: super::research::Settings,
     #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
     pub scix: super::research::Settings,
-    #[serde(default, skip_serializing_if = "super::research::Settings::is_default")]
-    pub overleaf: super::research::Settings,
+    #[serde(default, skip_serializing_if = "super::overleaf::Settings::is_default")]
+    pub overleaf: super::overleaf::Settings,
     pub attention: Attention,
     #[serde(default, skip_serializing_if = "super::isolation::Settings::is_empty")]
     pub isolation: super::isolation::Settings,

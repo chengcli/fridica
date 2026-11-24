@@ -141,10 +141,12 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };
     super::github_mcp::validate(&config)?;
+    super::overleaf::validate(&config)?;
     for (enabled, token) in [
         (config.alphaxiv.enabled, "ALPHAXIV_TOKEN"),
         (config.scix.enabled || config.overleaf.enabled, "ADS_TOKEN"),
         (config.overleaf.enabled, "OVERLEAF_GIT_TOKEN"),
+        (config.overleaf.enabled, "OVERLEAF_NATIVE_SESSION"),
     ] {
         anyhow::ensure!(
             !enabled || !config.secret_env().contains(&token),

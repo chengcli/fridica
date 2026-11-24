@@ -20,6 +20,9 @@ enum Command {
     /// Manage Fridica credentials in the current user's OS credential store.
     #[command(subcommand)]
     Secret(fridica::cli::secret::Command),
+    /// Manage the dedicated scoped Overleaf web session.
+    #[command(subcommand)]
+    OverleafAuth(fridica::cli::overleaf_auth::Command),
     /// Serve the bundled GitHub MCP tools over stdio on a worker machine.
     GithubMcp(GithubMcpArgs),
     /// Serve the bundled alphaXiv literature research MCP tools over stdio.
@@ -176,6 +179,10 @@ fn database_path(database: Option<PathBuf>, config: &Path) -> Result<PathBuf> {
 }
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::OverleafAuth(command) => {
+            tokio::task::spawn_blocking(move || fridica::cli::overleaf_auth::run(command))
+                .await??;
+        }
         Command::Secret(command) => {
             tokio::task::spawn_blocking(move || fridica::cli::secret::run(command)).await??;
         }
