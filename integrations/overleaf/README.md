@@ -1,107 +1,101 @@
 # Scoped native Overleaf MCP integration
 
-This adapter composes the existing bundled Interleaf Git/compile tools with a
-separate, **unmodified** `@netique/overleaf-mcp@0.4.0` process. It exposes native
-comment list/full-thread read/reply and pending-change inspection under the
-existing `overleaf` server. Anchored comment creation and pending tracked edits
-are wired but **not activated**: this pin retries `applyOtUpdate` after an ambiguous
-socket-close failure. The required no-replay guarantee cannot be supplied by an
-outer MCP adapter. Do not describe this candidate as fully ready.
+The existing `overleaf` server composes bundled Interleaf Git/compile tools with
+`@netique/overleaf-mcp` in a separate process. Native comment list, full-thread
+read, anchored creation, reply, file read, pending tracked-change inspection and
+tracked suggestions are enabled by the adapter. Suggestions require an observed
+version, `strict_version=true` and `track=on`; accept/reject and untracked native
+writes are not exposed. A source/package check is not live Overleaf validation.
 
-## Pin and license
+## Dependency and narrow correction
 
-- Upstream source: [netique/overleaf-mcp@cd248f856ba63af449eb58cb0eb0af04fd933ac0](https://github.com/netique/overleaf-mcp/tree/cd248f856ba63af449eb58cb0eb0af04fd933ac0).
-- npm version: `0.4.0`; registry SHA-512 integrity:
-  `sha512-gJtiF9tUWWB2GPwBTPIWNyNu49L7wLkwq8oBmGhRYtKJixu4RqukewtM0VMZ9rtmKrhCzbUf1E/aOx9u/ocrZg==`.
-- `package-lock.json` pins the complete process dependency graph. Install with
-  `npm ci --ignore-scripts --no-audit --no-fund` in this directory (Node >=20).
-- Upstream is AGPL-3.0-or-later. Its package retains `LICENSE`, `README.md`, and
-  `CHANGELOG.md`. Preserve those notices and provide the pinned corresponding
-  source when redistributing. The adapter calls MCP over stdio; it imports,
-  ports, or copies no upstream implementation into Fridica's MIT Rust code.
+Upstream is `@netique/overleaf-mcp@0.4.0`, source
+[`cd248f856ba63af449eb58cb0eb0af04fd933ac0`](https://github.com/netique/overleaf-mcp/tree/cd248f856ba63af449eb58cb0eb0af04fd933ac0).
+Its published registry integrity is
+`sha512-gJtiF9tUWWB2GPwBTPIWNyNu49L7wLkwq8oBmGhRYtKJixu4RqukewtM0VMZ9rtmKrhCzbUf1E/aOx9u/ocrZg==`.
+The integration pins the necessary no-replay correction at
+[`happysky19/overleaf-mcp-native@e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981`](https://github.com/happysky19/overleaf-mcp-native/commit/e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981),
+branch `fix/no-ot-replay-20261124`. Its package-lock integrity is
+`sha512-m+xcz1MuYENEntPC+ANfYz/L2cBhkWbTOW4EqifSbEEuyG63XkBJKZIQGGXUQyzYuRKCe2qQuRIT+0A4yWnbTw==`.
 
-## Capabilities verified in the pinned source
+The fork changes only `applyOtUpdate` in `src/api/socket.ts`, adds one lost-ACK
+check and an explicit `prepare` build hook. It never automatically resubmits an
+attempted mutation. It clears stale document state, reconnects/re-reads when
+possible, and returns an uncertain outcome for caller reconciliation. Login,
+CDP, dedicated-profile capture, cookie storage and native comment/OT protocol
+remain upstream code. No generated dist or dependencies are committed.
 
-The source anchors below all refer to the full upstream commit above.
-`src/tools/comments.ts` registers `list_comments`, `read_comment_thread`,
-`add_comment`, and `reply_comment`. Full messages come from
-`read_comment_thread`; the `list_comments(full=true)` implementation does not
-actually populate `full_thread`, so use the dedicated read tool.
-`add_comment` posts the first message then anchors it with a comment OT operation.
-`src/ot/editPipeline.ts` submits native `meta.tc` updates;
-`src/tools/trackedChanges.ts` lists pending native ranges. This is native Track
-Changes, not TeX annotation, latexdiff, or a Git edit. Source inspection and
-credential-free tool discovery do **not** establish live Overleaf behavior.
+AGPL-3.0-or-later applies to the upstream process and correction. Preserve its
+LICENSE/notices and corresponding source. The portable archive contains those
+notices and `upstream-source.tar.gz` at the exact fork revision. Fridica's MIT
+integration does not copy the native protocol or implement a browser/CDP client.
 
-`src/api/socket.ts` (`withReconnectingSocket`, `applyOtUpdate`) retries an OT emit
-once after a socket-close error, including closure after submission but before
-acknowledgement. There is no configuration switch to disable it. Consequently
-`native_add_comment` and `native_suggest_edit` fail before any network call.
-The smallest remaining dependency change is upstream support for refusing
-ambiguous OT retries; then pin that unmodified release and remove the two-entry
-`REPLAY_UNSAFE` gate after the retained reviewer checks the delta. No upstream
-source is patched here, and no issue/PR is created by this branch.
+## One owner login and reuse
 
-The adapter exposes only seven native operations: list comments, read thread,
-add (gated), reply, read file, list tracked changes, and suggest edit (gated).
-Suggestions require an observed native version, `strict_version=true`, and
-`track=on`. Accept/reject, tracking-mode changes, comment resolution/deletion,
-project discovery/creation, and direct untracked native edits are not exposed.
-Built-in Interleaf retains its existing Git/compile behavior and permissions.
+`owner-login.mjs` uses upstream's saved-cookie store, or its original
+`captureCookie` function when login is needed. Upstream owns the persistent
+**dedicated** Chrome profile, Network domain, location check and ordinary
+human-controlled login/SSO window. These are accepted upstream behavior. The
+helper never reads an everyday browser profile, password/MFA fields or provider
+cookies. It selects only `overleaf_session2` and optional `GCLB` from the returned
+Overleaf cookies and verifies the expected account and fixed SNAP V3 page over
+HTTPS. Account/project mismatch or a transient server failure does not trigger
+an automatic new login. No 30-minute lease is imposed.
 
-## Authentication and scope
+Upstream's dedicated store uses a private directory and a mode-0600 cookie file;
+the dedicated Chrome profile is retained. The verified, scoped envelope also goes
+to Fridica's OS credential store through the `import-verified-session` stdin
+bridge. No cookie is placed in argv, config, logs or stdout. Session renewal
+cannot silently change the saved account. The optional `--expires-at` is only
+for an explicitly timed grant. Otherwise reuse ends on actual server/cookie
+expiry or owner revocation.
 
-The host owner config binds one actual worker UUID on `dungeon3:snapy`.
-The supervisor additionally requires job channel `C0CL1NW0DGS`. All native calls
-are fixed to project `6b0483a71b304b7fd2141775`. The launcher denies credential
-lookup/forwarding by default, strips ambient copies from other workers and the
-coordinator, and forwards the bound session using the existing encrypted SSH
-stdin framing. Never put the cookie in argv, TOML, logs, or ordinary files.
+The existing encrypted SSH stdin route forwards only to the explicitly bound
+actual `dungeon3:snapy` worker UUID in job channel `C0CL1NW0DGS`. All native calls
+are fixed to SNAP V3 `6b0483a71b304b7fd2141775` and the seven methods above. The
+worker independently rechecks account/project before operations and supplies
+upstream through a sealed Linux memfd. Worker browser fallback is disabled.
+Coordinator/other-worker forwarding remains denied. Built-in Git/compile behavior
+is retained. These are application gates around an account-wide session cookie,
+not server-issued cryptographic project scopes.
 
-The previously reviewed `fridica overleaf-auth sign-in` owner helper is reused.
-It opens a fresh human-controlled Chrome window on macOS using anonymous CDP
-pipes; the human supplies credentials/MFA/SSO. It polls only cookies applicable
-to the fixed Overleaf project URL and selects `overleaf_session2` plus `GCLB`.
-It has no request subscriptions, Network.enable, Fetch.enable, DOM scripts,
-existing-profile access, provider-cookie reads, global cookie dumps, or browser
-URL firewall. Independent fixed-project HTTPS verification checks the expected
-email and binds the account ID. Cleanup precedes saving to the dedicated OS
-credential store. Failed/cancelled acquisition does not save a session.
+Every write requires a stable `operation_id` UUID. Durable safe receipts prevent
+adapter replay; reuse the UUID when an outcome is unknown. Re-read/reconcile an
+uncertain comment anchor or tracked suggestion; never retry with a new UUID as
+a substitute. Existing comments and the tracked trial must not be duplicated.
+Revoke by removing the OS entry and binding, stopping holder workers, clearing
+the dedicated upstream store/profile and invalidating that Overleaf session.
+Deleting the OS entry alone does not invalidate saved or running copies.
 
-Upstream's packaged `overleaf-mcp login` is deliberately **not used**: at this
-pin it enables the network domain, evaluates a page script and uses a persistent
-profile. Neither the inspected official Fridica base nor this pinned upstream
-package supplies a compatible packaged owner login command. The retained
-Fridica owner helper must be available on the owner platform; a Linux candidate
-or a passing `--help` check is not a macOS build/login verification. This change
-performs no Mac build or login and does not install or activate a listener.
+## Install and invoke
 
-The worker adapter rechecks account ID/email and project with a fixed HTTPS
-request before each native operation, disallowing proxies and redirects. The
-upstream subprocess then performs its own identity bootstrap via `/project` and
-connects only to the supplied project. The project-list tool is never exposed.
-A sealed Linux memfd, reached through a temporary symlink, supplies upstream's
-cookie store; there is no secret-bearing worker disk file. Other credentials,
-NODE_OPTIONS, proxy variables and browser settings are not inherited by that
-process. Browser fallback is disabled with an explicit nonexistent executable:
-auth expiry cannot open another login or trigger an HTTP mutation retry.
-Session validity ends at actual cookie/server expiry, owner revocation, or an
-explicit optional deadline; there is no artificial 30-minute lease.
+The portable archive is built on dungeon3. It contains JS dependencies and needs
+no npm installation or compiler on the Mac. Use the available Node executable
+and Google Chrome. After transferring the archive and checking its reported
+SHA-256, install on the owner Mac:
 
-An Overleaf cookie remains an account-wide bearer. These are application gates,
-not server-issued project scopes. A trusted worker holding a credential is not
-cryptographically prevented from bypassing its adapter. Revocation requires
-removing the owner entry/config binding, stopping holder sessions and invalidating
-the dedicated Overleaf session; deleting a saved entry alone is insufficient.
+```sh
+mkdir -p "$HOME/Library/Application Support/Fridica"
+tar -xzf fridica-overleaf-portable-20261124.tar.gz -C "$HOME/Library/Application Support/Fridica"
+/Applications/ChatGPT.app/Contents/Resources/node "$HOME/Library/Application Support/Fridica/overleaf-native/owner-login.mjs" --expected-email "$OVERLEAF_EXPECTED_EMAIL" --fridica "$FRIDICA_FEATURE_BIN" --config "$FRIDICA_OWNER_CONFIG" --worker-id "$AUTHORIZED_WORKER_ID"
+```
 
-## Deployment and owner invocation
+The email, absolute feature-binary/config paths and actual recipient UUID are
+explicit owner inputs, not inferred from a channel or another agent. Complete
+the human login/MFA if Chrome opens. The helper saves the verified session and
+binds the recipient; reload through ordinary owner controls. It does not start
+a worker, send a message or modify a manuscript.
 
-Provision the inspected Fridica branch with its ordinary dependencies, and
-install the adapter on the worker under its assigned writable folder. No
-changes to Interleaf or fridica-agent are needed. The old custom branches are
-historical recovery inputs, not build dependencies of this branch.
+**Platform requirement:** the host listener must run this Fridica feature branch
+for the import bridge and recipient gates. The portable JS archive does not
+upgrade an existing listener. A compatible macOS Fridica binary must be supplied
+by the normal build/distribution path (Rust >=1.91, macOS SDK/linker and ordinary
+crate dependencies if building). This job builds on dungeon3 only; the retained
+Linux candidate cannot run on macOS. No macOS build, human login, OS-store write,
+listener activation or live native write is claimed by this package.
 
-In the owner config, keeping the current `[overleaf]` settings, set:
+On the worker, use the installed adapter and Node >=20; Python >=3.10 and Linux
+memfd are required. Preserve existing `[overleaf]` settings, adding:
 
 ```toml
 [overleaf]
@@ -109,41 +103,19 @@ enabled = true
 native_adapter = ["/absolute/python3", "/assigned/folder/fridica/integrations/overleaf/adapter.py", "--node", "/absolute/node"]
 ```
 
-With the owner-platform helper installed, the one-time commands are:
+For source deployment on dungeon3, run `npm ci --no-audit --no-fund` in this
+directory with Node/npm on PATH. The pinned Git dependency's explicit prepare
+hook builds its dist; do not use `--ignore-scripts`. To recreate the portable
+archive, run `python package-portable.py --upstream /assigned/folder/upstream
+--output /assigned/folder/fridica-overleaf-portable-20261124.tar.gz`.
 
-```sh
-fridica overleaf-auth sign-in --expected-email "$OVERLEAF_EXPECTED_EMAIL"
-fridica overleaf-auth bind-recipient --config "$FRIDICA_OWNER_CONFIG" --worker-id "$AUTHORIZED_WORKER_ID" --machine dungeon3 --workspace snapy
-```
+## Focused verification
 
-These placeholders must be the existing account email, real owner configuration,
-and intended actual recipient. `--expires-at UNIX_SECONDS` is optional only for
-an expressly timed grant. Load the updated owner configuration using the normal
-Fridica owner controls. Subsequent allowed operations reuse the stored session.
-No sign-in is performed by installation or tool discovery. Existing comments
-and the pending tracked trial must not be replayed, accepted, or rejected.
-
-Every native write requires a stable `operation_id` UUID. A receipt containing
-only a payload hash/state/safe identifiers is persisted before submission; the
-adapter never retries writes and rejects reused IDs with changed payloads.
-Unknown outcomes require reading/reconciling the existing thread. Keep the
-`.fridica-overleaf-receipts` directory with the assigned workspace. A new UUID
-is a new operation; callers must reuse IDs for retries.
-
-## Focused checks
-
-```sh
-TASK_NODE=/absolute/node TASK_TMP=/assigned/folder python -m unittest discover -s integrations/overleaf -p test_adapter.py -v
-cargo test --lib overleaf
-cargo test --lib secrets::tests
-cargo test --test native_recipient --test worker_credentials
-cargo test --test parent native_recipient_never_includes_parent_backend
-cargo build --bin fridica
-```
-
-The four Python checks cover actual pinned subprocess discovery/memory-only
-credential delivery, scope/tracking/replay gates, expected account/project, and
-durable receipt replay prevention. The Rust checks cover the retained acquisition
-selection and credential route. None logs in or mutates Overleaf. Live login,
-read-only inspection of existing comments/changes, and any expressly requested
-new write remain separate evidence stages.
+The affected owner helper check is `node --test owner-login.test.mjs`. The one
+existing Rust boundary smoke is `cargo test --test native_recipient --locked
+--offline`. The fork's one lost-ACK check is
+`node --test --import tsx tests/unit/socketLostAck.spec.ts`; it fails before the
+correction and passes after it. Package/tool discovery is credential-free.
+These checks do not authenticate or modify Overleaf. Live login, read-only
+comment/change inspection and any expressly requested new write remain separate
+verification steps; no extra review round or broad test matrix is required.

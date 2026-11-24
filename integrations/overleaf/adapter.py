@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCP policy/composition adapter; no Overleaf editing/comment protocol here.
 
-The AGPL package runs unmodified in its own process. Only its MCP interface is
+The pinned AGPL package runs in its own process. Only its MCP interface is
 used. Linux memfd supplies its cookie *store* without a secret-bearing disk file.
 """
 import argparse
@@ -29,11 +29,8 @@ OPERATIONS = ["list_comments", "read_comment_thread", "add_comment", "reply_comm
 NAMES = {"native_" + name: name for name in OPERATIONS}
 NAMES["native_suggest_edit"] = NAMES.pop("native_find_and_replace")
 WRITES = {"add_comment", "reply_comment", "find_and_replace"}
-# 0.4.0 retries applyOtUpdate after socket-close, including a lost acknowledgement.
-# No adapter can safely intercept that inside an unmodified process. Fail closed.
-REPLAY_UNSAFE = {"add_comment", "find_and_replace"}
 PIN = "0.4.0"
-SOURCE = "cd248f856ba63af449eb58cb0eb0af04fd933ac0"
+SOURCE = "e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981"
 LIMIT = 8 * 1024 * 1024
 
 
@@ -168,6 +165,8 @@ def native_peer(node, root, state, cookie=""):
     require(sys.platform == "linux" and hasattr(os, "memfd_create"), "Native worker requires Linux memfd")
     pkg = root / "node_modules/@netique/overleaf-mcp"
     require(json.loads((pkg / "package.json").read_text())["version"] == PIN, "Upstream package pin mismatch")
+    installed = json.loads((root / "node_modules/.package-lock.json").read_text())
+    require(installed["packages"]["node_modules/@netique/overleaf-mcp"]["resolved"].endswith("#" + SOURCE), "Upstream source pin mismatch")
     store = state / "overleaf-mcp"
     store.mkdir(mode=0o700)
     fd = os.memfd_create("fridica-overleaf-session", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
@@ -206,8 +205,6 @@ def arguments(name, given, schema):
         require(args.get("track", "on") == "on" and args.get("strict_version", True) is True)
         require(type(args.get("expected_version")) is int and args["expected_version"] >= 0, "Read the current native version before suggesting an edit")
         args.update(track="on", strict_version=True)
-    require(op not in REPLAY_UNSAFE,
-            "Not activated: pinned upstream retries applyOtUpdate after a lost socket acknowledgement; no-replay requires an upstream fix. No write was sent.")
     return op, args, opid
 
 
@@ -281,7 +278,7 @@ class Adapter:
 
     def dispatch(self, method, params):
         if method == "initialize":
-            return {**self.builtin.info, "instructions": "Use built-in Interleaf for Git/compile. Native review tools are fixed to SNAP V3. Native add/suggest are gated pending the upstream no-replay fix; never accept/reject author changes."}
+            return {**self.builtin.info, "instructions": "Use built-in Interleaf for Git/compile. Native review tools are fixed to SNAP V3. Native suggestions must remain pending; never accept/reject author changes."}
         if method == "tools/list":
             tools = self.builtin.call(method, params)["tools"]
             for name, op in NAMES.items():
@@ -291,8 +288,6 @@ class Adapter:
                 if op in WRITES:
                     tool["inputSchema"]["properties"]["operation_id"] = {"type": "string", "description": "Stable UUID; reuse after ambiguous outcomes to prevent replay."}
                     tool["inputSchema"].setdefault("required", []).append("operation_id")
-                if op in REPLAY_UNSAFE:
-                    tool["description"] = "NOT ACTIVATED: upstream reconnect replay needs fixing. " + tool["description"]
                 if op == "find_and_replace":
                     tool["inputSchema"]["properties"]["track"] = {"const": "on", "type": "string"}
                     tool["inputSchema"]["properties"]["strict_version"] = {"const": True, "type": "boolean"}

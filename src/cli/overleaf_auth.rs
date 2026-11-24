@@ -1,11 +1,10 @@
-//! Owner entry point for a separate native Overleaf authorization. No cookie import.
+//! Owner-only verified session import, status, revocation and recipient binding.
 use crate::core::secret::SecretStore;
 use crate::secrets::NativeStore;
 use anyhow::Result;
 use clap::Subcommand;
 
 const ENTRY: &str = "fridica/overleaf/native-session";
-mod managed;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -15,15 +14,9 @@ pub enum Command {
     Status,
     /// Remove the dedicated store entry; already running workers require separate revocation.
     Revoke,
-    /// Open one dedicated human-controlled Chrome login on macOS.
-    SignIn {
-        /// Expected email of the existing Overleaf account; verified against server metadata.
-        #[arg(long)]
-        expected_email: String,
-        /// Optional Unix timestamp, only for an explicitly timed owner grant.
-        #[arg(long)]
-        expires_at: Option<u64>,
-    },
+    /// Receive the owner helper's verified session over stdin and save to the OS store.
+    /// Never pass a cookie in argv or invoke from an MCP worker.
+    ImportVerifiedSession,
     /// Bind native forwarding to one actual worker and registered placement until revoked.
     BindRecipient {
         #[arg(long)]
@@ -45,19 +38,14 @@ pub fn run(command: Command) -> Result<()> {
         Command::Plan => println!(
             "{}",
             serde_json::json!({
-                "live_enabled":false,"upstream":"@netique/overleaf-mcp@0.4.0","upstream_source":"cd248f856ba63af449eb58cb0eb0af04fd933ac0","gated_operations":["add_comment","find_and_replace"],"gate_reason":"upstream applyOtUpdate reconnect replay","project":"6b0483a71b304b7fd2141775","account":"existing happysky19 Overleaf account; bind verified server account ID at sign-in",
-                "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,"lease_seconds":null,
-                "lifetime":"reuse saved session until actual cookie/server expiry or owner revocation; --expires-at only for an explicitly timed grant",
-                "adapter":"chrome-cdp-pipe", "platform_supported":cfg!(target_os = "macos"),
-                "mechanism":"fresh temporary Chrome profile on macOS; anonymous CDP pipes; one human login window; no existing profile or cookie import",
-                "browser":"ordinary human-controlled Overleaf login, site resources, dashboard redirects and human-selected SSO; no browser URL firewall or SSO-origin setup; no page contents or provider cookies collected",
-                "capture":"only fixed-Overleaf-URL cookie polling; no request events, Fetch interception, DOM inspection or page scripts; fixed-project verification retries pending login within five minutes",
-                "identity":"--expected-email verifies the existing account and enrolls its server ID during the same login",
-                "recipient":"default deny; exact dungeon3:snapy worker plus C0CL1NW0DGS job channel; optional explicit expiry",
-                "transport":"existing encrypted SSH stdin framing to assigned worker; session supplied to the unmodified AGPL process through a sealed memory store",
-                "activation":"install this owner command and the pinned worker adapter; bind one recipient; reload owner configuration",
-                "revocation":"delete entry, stop identified native-session workers, invalidate isolated Overleaf session; deletion alone cannot revoke running copies",
-                "limitation":"account bearer cookie; project/method/recipient gates are application authorization, not cryptographic project scoping or server-issued token permissions"
+                "live_validated":false,"project":crate::config::overleaf::PROJECT,
+                "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,
+                "login":"portable owner-login.mjs reuses upstream dedicated-profile login and saved session",
+                "lifetime":"actual cookie/server expiry or owner revocation; optional explicitly timed grant",
+                "recipient":"default deny; exact dungeon3:snapy worker and C0CL1NW0DGS job channel",
+                "transport":"OS credential store and existing encrypted SSH stdin route",
+                "platform":"owner helper needs Node >=20 and Chrome; listener needs this Fridica feature build",
+                "revocation":"delete entry, stop holder workers and invalidate the dedicated Overleaf session"
             })
         ),
         Command::Status => {
@@ -79,21 +67,35 @@ pub fn run(command: Command) -> Result<()> {
             };
             println!(
                 "{}",
-                serde_json::json!({"tools_verified":false,"native":status,"live_validated":false,"sign_in_adapter_available":cfg!(target_os = "macos")})
+                serde_json::json!({"tools_verified":false,"native":status,"live_validated":false,"login_helper":"owner-login.mjs"})
             );
         }
         Command::Revoke => {
             NativeStore.delete(ENTRY)?;
             println!("Native session entry removed. Running workers retain their copies: stop those sessions and invalidate the isolated Overleaf session to complete revocation.");
         }
-        Command::SignIn {
-            expected_email,
-            expires_at,
-        } => {
-            validate_expiry(expires_at)?;
-            tokio::runtime::Handle::current()
-                .block_on(managed::sign_in(&expected_email, expires_at))?;
-            println!("Native Overleaf session saved for SNAP V3. Native anchored comments and tracked edits remain gated pending upstream no-replay support. Reused until cookie/server expiry, any explicit deadline, or owner revocation. No worker was started or credential forwarded.");
+        Command::ImportVerifiedSession => {
+            use std::io::Read;
+            let mut raw = String::new();
+            std::io::stdin()
+                .take(16385)
+                .read_to_string(&mut raw)
+                .map_err(|_| anyhow::anyhow!("cannot read verified native session"))?;
+            crate::config::overleaf::validate_session(&raw)?;
+            // Session renewal cannot silently bind a different account.
+            if let Some(previous) = NativeStore.get(ENTRY)? {
+                let old: serde_json::Value = serde_json::from_slice(&previous).map_err(|_| {
+                    anyhow::anyhow!("invalid saved session; explicit revocation required")
+                })?;
+                let new: serde_json::Value = serde_json::from_str(&raw)?;
+                anyhow::ensure!(
+                    old["account_id"] == new["account_id"]
+                        && old["expected_email"] == new["expected_email"],
+                    "native account changed; explicit revocation required"
+                );
+            }
+            NativeStore.set(ENTRY, raw.as_bytes())?;
+            println!("Verified native session saved. No worker started or credential forwarded.");
         }
         Command::BindRecipient {
             config,

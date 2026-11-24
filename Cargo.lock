@@ -1001,14 +1001,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "cookie",
  "fridica-agent",
  "fridica-core",
  "fridica-slack",
  "fridica-store-sqlite",
  "fs2",
  "futures-util",
- "html-escape",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -2008,12 +2006,6 @@ checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
 ]
-
-[[package]]
-name = "html-escape"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "http"
@@ -3922,7 +3914,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

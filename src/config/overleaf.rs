@@ -100,7 +100,7 @@ pub fn validate(config: &super::Config) -> Result<()> {
     Ok(())
 }
 
-/// Credential envelope only; Overleaf's protocol remains in the unmodified AGPL subprocess.
+/// Credential envelope only; Overleaf's protocol remains in the separate AGPL subprocess.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Session {

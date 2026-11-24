@@ -27,7 +27,7 @@ class AdapterChecks(unittest.TestCase):
             finally:
                 peer.close()
 
-    def test_scope_and_pending_only_and_reconnect_gate(self):
+    def test_scope_and_pending_only(self):
         grant = dict(schema=2, cookie="overleaf_session2=fixture", account_id="1" * 24,
                      expected_email="owner@example.invalid", projects=[a.PROJECT], operations=a.OPERATIONS,
                      channel=a.CHANNEL, recipient=dict(worker_id=WORKER, machine="dungeon3", workspace="snapy"))
@@ -42,9 +42,11 @@ class AdapterChecks(unittest.TestCase):
                            ("native_suggest_edit", {"track": "off"}), ("native_add_comment", {})):
             with self.assertRaises(ValueError):
                 a.arguments(name, args, schema)
-        with self.assertRaisesRegex(ValueError, "No write was sent"):
-            a.arguments("native_suggest_edit", dict(old_string="a", new_string="b", expected_version=3,
-                        operation_id=str(uuid.uuid4())), schema)
+        op, args, _ = a.arguments("native_suggest_edit", dict(old_string="a", new_string="b", expected_version=3,
+                                 operation_id=str(uuid.uuid4())), schema)
+        self.assertEqual(op, "find_and_replace")
+        self.assertTrue(args["strict_version"])
+        self.assertEqual(args["track"], "on")
 
     def test_expected_account_and_project(self):
         grant = {"account_id": "1" * 24, "expected_email": "owner@example.invalid"}
