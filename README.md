@@ -132,6 +132,47 @@ The generated configuration uses macOS Keychain or Linux Secret Service. On Linu
 
 `fridica secret get slack/app-token` writes the token to stdout. Both this command and the `fridica-secret` provider check the corresponding environment variable first for Slack credentials (`SLACK_APP_TOKEN` or `SLACK_USER_TOKEN`). For a custom token, use `fridica secret get example/api-token --env EXAMPLE_API_TOKEN`. If the variable is unset, Fridica reads the stored password.
 
+### Copy stored credentials to another machine
+
+macOS and Linux can each send or receive credentials. Install a version of Fridica with `secret copy` on both machines. The destination must accept SSH connections. The sender checks the remote PATH, then common user, Python environment and system install locations, including `~/pyenv/bin/fridica`. For a custom location, pass an absolute path from the source machine, for example `fridica secret copy --remote-bin /opt/fridica/bin/fridica user@linux-host`. Each Linux account involved needs a user D-Bus session with an unlocked Secret Service keyring. When sending to a Mac, enable Remote Login and make sure the SSH account can write to its unlocked Keychain.
+
+#### Set up the Linux keyring
+
+If the Linux machine needs a Secret Service provider, run the command for its distribution on that machine.
+
+| Distribution | Install command |
+| --- | --- |
+| Red Hat Enterprise Linux 9 or 10 | `sudo dnf install gnome-keyring` |
+| Ubuntu | `sudo apt update && sudo apt install gnome-keyring dbus-user-session` |
+
+If Fridica is on the remote PATH, you can run this optional check from the source machine using the same SSH account you will use for the transfer.
+
+```sh
+ssh user@linux-host 'fridica secret copy --help && fridica secret list'
+```
+
+The first command verifies that SSH can find a compatible Fridica build. The second lists stored names and can succeed with an empty list on a new machine. If it reports a D-Bus error, check that the SSH account has an active user D-Bus session. If it reports a locked keyring, unlock that account's default keyring. An SSH key login can leave it locked on a headless server.
+
+#### Transfer credentials
+
+To copy from Linux to a Mac, run this command on Linux.
+
+```sh
+fridica secret copy user@mac-host
+```
+
+To send to Linux, run the same command from either macOS or Linux with the Linux destination.
+
+```sh
+fridica secret copy user@linux-host
+```
+
+With just a destination, Fridica copies all credentials it discovers from standard token environment variables and the source keyring. For each name, a nonempty exported token takes precedence over its keyring value. For GitHub MCP, the order is `GH_TOKEN`, then `GITHUB_TOKEN`, then the keyring. Custom keyring entries are included. If the source keyring is unavailable and exported tokens are present, Fridica reports the keyring issue and continues with the available tokens.
+
+To select a subset, pass exact names or quoted patterns, for example `fridica secret copy user@linux-host 'slack/*' ads/token`. A star matches any sequence of characters in the name, including slashes. Every pattern must match at least one available name. Use `--from-env` to restrict the copy to exported tokens.
+
+The command sends the selected values over SSH standard input. It replaces matching entries in the destination account's keyring and lists each copied credential name after the transfer succeeds. If a keyring write fails partway through, earlier writes may have succeeded. You can rerun the same command. When moving the daemon, run `fridica doctor` on the destination to check its credentials. If the destination only runs SSH workers, select just the worker credentials you need.
+
 ## Configure machines
 
 Edit the existing tables in `config.toml`. Choose only the backends installed on each machine and point each workspace at an **existing directory**. The starter lists both Claude and Codex and uses `~/project` as a placeholder. For example, a local Codex installation with one checkout can use:

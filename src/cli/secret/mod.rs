@@ -6,6 +6,8 @@ use std::io::{self, Write};
 use crate::core::secret::{KeyringRef, SecretStore};
 use crate::secrets::NativeStore;
 
+mod transfer;
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Prompt for a new or replacement secret with terminal echo disabled.
@@ -21,10 +23,34 @@ pub enum Command {
     Delete { name: String },
     /// List stored Fridica references without reading their values.
     List,
+    /// Copy credentials to an SSH host. Environment tokens take precedence over keyring entries.
+    Copy {
+        /// SSH destination, such as user@host or a configured host alias.
+        destination: String,
+        /// Absolute path to the remote Fridica executable. Omit for automatic discovery.
+        #[arg(long)]
+        remote_bin: Option<String>,
+        /// Read standard token environment variables instead of the local keyring.
+        #[arg(long)]
+        from_env: bool,
+        /// Names or quoted * patterns. Omit to copy all available entries from the selected source.
+        #[arg(value_name = "PATTERN")]
+        names: Vec<String>,
+    },
+    #[command(hide = true)]
+    Receive,
 }
 
 fn reference(name: &str) -> Result<String> {
     Ok(KeyringRef::named(name)?.name().to_owned())
+}
+
+fn stored_names(store: &dyn SecretStore) -> Result<Vec<String>> {
+    let mut names = store.list()?;
+    names.retain(|name| reference(name).is_ok_and(|canonical| canonical == *name));
+    names.sort_unstable();
+    names.dedup();
+    Ok(names)
 }
 
 pub fn get(name: &str) -> Result<()> {
@@ -58,6 +84,19 @@ fn get_with_env(name: &str, env: Option<&str>) -> Result<()> {
 
 pub fn run(command: Command) -> Result<()> {
     match command {
+        Command::Copy {
+            destination,
+            names,
+            from_env,
+            remote_bin,
+        } => transfer::copy(
+            &NativeStore,
+            &destination,
+            &names,
+            from_env,
+            remote_bin.as_deref(),
+        ),
+        Command::Receive => transfer::receive(&NativeStore, io::stdin().lock()),
         Command::Set { name } => {
             let name = reference(&name)?;
             let value = rpassword::prompt_password(format!("New value for {name}: "))?;
@@ -70,13 +109,8 @@ pub fn run(command: Command) -> Result<()> {
         Command::Get { name, env } => get_with_env(&name, env.as_deref()),
         Command::Delete { name } => NativeStore.delete(&reference(&name)?),
         Command::List => {
-            let mut names = NativeStore.list()?;
-            names.sort_unstable();
-            names.dedup();
-            for name in names {
-                if reference(&name).is_ok_and(|canonical| canonical == name) {
-                    writeln!(io::stdout().lock(), "{name}")?;
-                }
+            for name in stored_names(&NativeStore)? {
+                writeln!(io::stdout().lock(), "{name}")?;
             }
             Ok(())
         }
