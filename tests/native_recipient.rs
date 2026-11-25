@@ -30,6 +30,8 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         "allowed",
     ] {
         let dir = tempfile::tempdir().unwrap();
+        // This directory is also the SSH control directory, independent of umask.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("work")).unwrap();
         std::fs::create_dir(root.join("bin")).unwrap();
