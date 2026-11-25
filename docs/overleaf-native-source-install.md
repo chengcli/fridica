@@ -3,7 +3,9 @@
 > Linux source installation and credential-free login preparation passed for this
 > change. The npm HTTPS/SSH source-metadata mismatch in [issue #162](https://github.com/chengcli/fridica/issues/162)
 > is corrected; the exact repository, immutable SHA, version and module checks remain.
-> macOS execution, real login and listener activation remain separately unverified.
+> The owner-side receipt below confirms credential-free macOS FD/MCP and receipt
+> checks. Real login, sandboxed local/SSH launch, authenticated native operations,
+> the latest Mac Rust build and listener activation remain unverified/deferred.
 
 This is a trial of `integrate/overleaf-upstream-20261124`, **not** official main
 or PyPI v0.10.3. It builds the branch's own development version. Use a separate
@@ -286,30 +288,43 @@ not TeX diffs. Preparation alone does not prove authentication or operation.
 
 ## Credential-free Darwin check before deployment
 
-The following invocation is provided for an owner to run on macOS; it was **not
-executed on a Mac** during this change. It consumes/closes the inherited FD,
-checks cached discovery and performs an actual upstream MCP initialize/tool-list
-handshake with a fake cookie, verifies no worker cookie
-file is created, then exercises existing safe-receipt persistence/replay checks.
-It opens no browser, contacts no Overleaf server and runs no model worker. Use
-the matching prepared resources and an ordinary Node executable:
+An owner-side verification receipt dated **2026-11-24** reports successful macOS
+execution using Python **3.11.12** and standalone Node **24.22.3**, against the
+matching `portable12030afb` resources. The receipt confirms the bundle SHA-256
+`9fde67d2a6fe2e5588b512ec0bf5bd0a8aeb04414870774dec98f1675ccf094f`.
+The following command ran from those resources and returned
+**`Ran 2 tests in 1.882s`, `OK`**. This is supplied owner-side evidence, not an
+execution by the source worker; the command was not rerun for this documentation
+update.
 
 ```sh
 cd "$FRIDICA_RESOURCES"
 TASK_NODE="$NODE_BIN" TASK_TMP="$FRIDICA_ROOT" python3 -m unittest test_adapter.AdapterChecks.test_actual_pinned_upstream_discovery_and_memory_session test_adapter.AdapterChecks.test_receipt_prevents_replay_after_success_and_unknown_outcome
 ```
 
+The checks verified actual inherited-FD consumption, caching and closure,
+upstream MCP initialization/tool listing, absence of a cookie file, and receipt
+prevention of replay after both success and unknown outcomes. Execution used
+scratch `HOME`/`TMPDIR` and synthetic fixtures only; the scratch was emptied.
+The owner also reports a separate Darwin inherited-FD/cache/fail-closed probe
+and directory `fsync` passed; their commands were not supplied in this receipt.
+No browser, Keychain, real account, Overleaf request, model worker, service or
+configuration change was involved. Private receipt records remain local; no
+owner paths are published here.
+
 Safe receipts use exclusive creation, file and directory `fsync`, and atomic
 replacement in the assigned workspace on both platforms. A persistence error
 before dispatch refuses the write; never suppress it or bypass the receipt.
-Darwin filesystem behavior, actual sandboxed launch and SSH forwarding remain
-owner-side verification steps. Keep activation deferred if these fail.
+These fixture checks do not establish actual sandboxed local/SSH launch or
+authenticated native operation, and did not activate a listener or another
+user's machine.
 
 ## Verification limits
 
-The installation/preparation smoke is on Linux with isolated owner configuration
-and no credentials, model backend, browser or listener. Desktop browser login,
-OS-store use, SSH forwarding and live native calls require each owner's separate
-authorized activation. macOS source build/activation was not exercised by this
-smoke; these commands are instructions, not a claim that another owner's setup
-has been activated.
+The installation/preparation smoke ran on Linux with isolated owner configuration
+and no credentials, model backend, browser or listener. The credential-free
+Darwin results above are attributed solely to the supplied owner-side receipt.
+Real login and OS-store use, sandboxed local-or-SSH launch, authenticated native
+operations and the latest Mac Rust build remain unverified/deferred. Listener
+activation remains deferred; these results do not establish end-to-end readiness
+or authorize activation on another user's machine.
