@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import uuid
 import adapter as a
 
@@ -20,9 +20,27 @@ class AdapterChecks(unittest.TestCase):
         self.assertTrue(a.pinned_source(source.replace("git+https://", "git+ssh://git@")))
         self.assertFalse(a.pinned_source(source.replace("happysky19/", "other/")))
         self.assertFalse(a.pinned_source(source.replace(a.SOURCE, a.SOURCE[:12])))
+        class InspectSession(a.Peer):
+            def __init__(self, argv, env, cwd, fds):
+                # Consume the actual inherited socket before the real MCP handshake;
+                # tools/list alone would not exercise upstream auth/discovery.
+                bootstrap = """
+                    import assert from 'node:assert/strict';
+                    import { fstatSync } from 'node:fs';
+                    import { pathToFileURL } from 'node:url';
+                    const entry = pathToFileURL(process.argv[1]);
+                    const { loadStored } = await import(new URL('./auth/cookieStore.js', entry));
+                    const { discoverCookie } = await import(new URL('./auth/discover.js', entry));
+                    assert.equal((await loadStored('https://www.overleaf.com')).cookie, 'overleaf_session2=fixture');
+                    assert.throws(() => fstatSync(Number(process.env.OL_SESSION_FD)), { code: 'EBADF' });
+                    assert.equal(await discoverCookie('https://www.overleaf.com'), 'overleaf_session2=fixture');
+                    await import(entry);
+                """
+                super().__init__([argv[0], '--input-type=module', '-e', bootstrap, argv[1]], env, cwd, fds)
         with tempfile.TemporaryDirectory(dir=os.environ["TASK_TMP"]) as directory:
             state = Path(directory)
-            peer = a.native_peer(os.environ["TASK_NODE"], ROOT, state, "overleaf_session2=fixture")
+            with patch.object(a, 'Peer', InspectSession):
+                peer = a.native_peer(os.environ["TASK_NODE"], ROOT, state, "overleaf_session2=fixture")
             try:
                 self.assertEqual(peer.info["serverInfo"]["version"], a.PIN)
                 names = {t["name"] for t in peer.call("tools/list")["tools"]}

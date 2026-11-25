@@ -287,8 +287,9 @@ not TeX diffs. Preparation alone does not prove authentication or operation.
 ## Credential-free Darwin check before deployment
 
 The following invocation is provided for an owner to run on macOS; it was **not
-executed on a Mac** during this change. It performs an actual upstream MCP
-initialize/tool-list handshake with a fake cookie, verifies no worker cookie
+executed on a Mac** during this change. It consumes/closes the inherited FD,
+checks cached discovery and performs an actual upstream MCP initialize/tool-list
+handshake with a fake cookie, verifies no worker cookie
 file is created, then exercises existing safe-receipt persistence/replay checks.
 It opens no browser, contacts no Overleaf server and runs no model worker. Use
 the matching prepared resources and an ordinary Node executable:
