@@ -16,9 +16,21 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 | NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
 | Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
 
-Native Overleaf comments and pending Track Changes use a dedicated desktop login:
-`fridica overleaf-auth login --expected-email EMAIL --project PROJECT_ID --resources /absolute/overleaf-native`.
-No model client or worker is needed to sign in. See the [portable bundle, scope and optional recipient setup](integrations/overleaf/README.md).
+Native Overleaf comments and pending Track Changes use a dedicated desktop login.
+This integration version requires its matching Fridica build and supplied companion
+bundle; installing the public pip release alone does not provide this setup.
+The project ID is the 24-character string immediately after `/project/` in an editor URL.
+For the fictional URL `https://www.overleaf.com/project/0123456789abcdef01234567`,
+the ID is `0123456789abcdef01234567`. Assume the example account is `alice@example.com`
+and the bundle has been extracted to `overleaf-native` in your home directory's
+`Downloads` folder (`$HOME/Downloads/overleaf-native`). Substitute your own authorized
+account, project ID and real extracted bundle location before running:
+
+```sh
+fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567 --resources "$HOME/Downloads/overleaf-native"
+```
+
+No model client or worker is needed to sign in. See the [portable bundle, scope and optional recipient setup](integrations/overleaf/README.md#standalone-owner-login).
 
 Slack automatically checks the standard environment variables first and then their keyring entries. You can delete the four standard Slack token assignments from an existing `[slack]` table. Keep any overrides that point to custom names.
 

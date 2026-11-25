@@ -69,31 +69,49 @@ Deleting the OS entry alone does not invalidate saved or running copies.
 
 ## Standalone owner login
 
-Use `fridica overleaf-auth login` from an ordinary desktop terminal. It does not
-initialize a model backend, start a listener/worker or require an internal worker
-UUID. macOS and desktop Linux need Node >=20, a Chromium-family browser and a
-working OS credential store. Node is found on PATH or standard system locations;
+Use `fridica overleaf-auth login` from an ordinary desktop terminal; Codex and
+Claude Desktop are not required. Login does not initialize a model backend,
+start a listener/worker or require a worker UUID. macOS and desktop Linux need
+Node >=20, Chrome/Chromium and a working OS credential store (macOS Keychain or
+Linux Secret Service). Node is found on PATH or standard system locations;
 `--node /absolute/node` overrides it. Upstream discovers Chrome/Chromium (and its
 other supported browsers); `--browser /absolute/browser` overrides discovery.
 No model client, npm or compiler is required to use a prepared portable bundle.
 
-Install the feature Fridica binary through the normal platform distribution
-path. Extract the supplied portable archive with its accompanying SHA-256 into
-an owner-controlled directory. The extracted `overleaf-native` directory carries
+Use the matching Fridica integration build and supplied companion bundle;
+installing the public pip release alone does not provide this setup. Check the
+archive's supplied SHA-256 and extract it into an owner-controlled directory.
+The extracted `overleaf-native` directory carries
 pinned JS dependencies, licenses and corresponding AGPL source. A release may
 place it in `<prefix>/share/fridica/overleaf-native`; automatic discovery also
 checks beside the owner config, `~/Library/Application Support/Fridica` on macOS,
 and `$XDG_DATA_HOME/fridica` (default `~/.local/share/fridica`) on Linux. Otherwise
-pass `--resources`. This is a supplied bundle, not an automatic dependency download.
+pass `--resources`. No dependency download or npm installation is needed.
+
+For this fictional example, the expected account is `alice@example.com` and the
+editor URL is `https://www.overleaf.com/project/0123456789abcdef01234567`.
+The project ID is the 24-character string immediately after `/project/`:
+`0123456789abcdef01234567`. Assume the extracted `overleaf-native` directory is
+in your home directory's `Downloads` folder (`$HOME/Downloads/overleaf-native`).
+Substitute your own authorized account, project ID and real bundle location:
 
 ```sh
-# First login: explicitly choose the account and one authorized project.
-fridica overleaf-auth login --expected-email "$OVERLEAF_EXPECTED_EMAIL" --project "$OVERLEAF_PROJECT_ID" --resources "$OVERLEAF_BUNDLE_DIR"
-# Later use: scope/resources are saved; valid dedicated sessions are reused.
+fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567 --resources "$HOME/Downloads/overleaf-native"
+```
+
+Complete the browser login and any MFA yourself. Fridica verifies the expected
+account and project before saving the session. Subsequent invocations reuse
+the saved scope/resources and valid session:
+
+```sh
 fridica overleaf-auth login
 ```
 
-Use `--config /absolute/config.toml` for a nondefault owner config. Missing config
+AI agents: extract the project ID from the authorized editor URL; never guess it.
+Leave password and MFA entry to the human.
+
+Use `--config /absolute/config.toml` for a nondefault owner config, substituting
+its actual absolute path; use the same option on subsequent invocations. Missing config
 is initialized through ordinary Fridica setup; Slack and workers may be configured
 later. Login parses only Overleaf settings. On first use,
 Fridica materializes its embedded helper into a private, versioned directory
@@ -105,12 +123,10 @@ the exact expected account and project over HTTPS before saving an unbound
 session. Human login/MFA is needed only when the upstream saved session is absent
 or actually expired. No artificial renewal interval is imposed.
 
-Optional recipient binding is a separate owner action once an actual worker
-exists and the ordinary Overleaf adapter is installed in its registered workspace:
-
-```sh
-fridica overleaf-auth bind-recipient --config "$FRIDICA_OWNER_CONFIG" --worker-id "$AUTHORIZED_WORKER_ID" --machine "$REGISTERED_MACHINE" --workspace "$REGISTERED_WORKSPACE" --channel "$AUTHORIZED_CHANNEL_ID"
-```
+Login saves a session; it does not enable forwarding. Recipient binding is a
+separate, explicit owner action once a worker and its adapter are ready. Use
+`fridica overleaf-auth bind-recipient` with the actual `--config`, `--worker-id`,
+registered `--machine` and `--workspace`, and authorized `--channel` values.
 
 The channel must be in the owner's Slack allowlist. Missing scope, missing
 channel or missing recipient denies forwarding. The launcher compares saved
@@ -119,20 +135,6 @@ independently verifies identity/project on every native operation. Optional
 `--expires-at UNIX_SECONDS` applies only to an owner-requested timed grant.
 Neither command activates or reloads the listener; use existing owner controls
 when idle. Configuration is not authorization to access another account/project.
-
-The nonsecret configuration additions are:
-
-```toml
-[overleaf.native_scope]
-expected_email = "owner@example.invalid"
-project = "0123456789abcdef01234567"
-# channel = "CEXAMPLE" # required only for forwarding
-
-[overleaf.login]
-resources = "/absolute/overleaf-native"
-# node = "/absolute/node"
-# browser = "/absolute/chromium"
-```
 
 ### Upgrade from the prototype
 
