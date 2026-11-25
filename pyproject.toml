@@ -22,6 +22,9 @@ classifiers = [
 # links no Python ABI, so one py3-none-<platform> wheel serves every Python version.
 bindings = "bin"
 strip = true
+# package-portable.py --wheel-data stages fridica.data/data/share/fridica/overleaf-native.
+# Maturin's standard wheel data directory is optional for explicit source installs.
+exclude = [{ path = "fridica.data/**/*", format = "sdist" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

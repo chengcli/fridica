@@ -18,20 +18,22 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 
 Native Overleaf comments and pending Track Changes use a dedicated desktop login.
 Start with the [public-source installation and local/SSH worker guide](docs/overleaf-native-source-install.md).
-This integration version needs its matching Fridica build and prepared JS resources,
-either from that source installation or a supplied companion bundle. It is a
-feature-branch trial; installing the official PyPI v0.10.3 release alone does not
-provide this setup.
+Wheels built from this integration include the pinned JS resources and discover
+them automatically. Ordinary Node >=20, Chrome/Chromium and an OS credential
+store are still needed; npm, Rust and manual resource copying are not needed
+for a built wheel. This is a feature-branch trial, not an update to the already
+published PyPI v0.10.3 package.
 The project ID is the 24-character string immediately after `/project/` in an editor URL.
 For the fictional URL `https://www.overleaf.com/project/0123456789abcdef01234567`,
-the ID is `0123456789abcdef01234567`. Assume the example account is `alice@example.com`
-and the bundle has been extracted to `overleaf-native` in your home directory's
-`Downloads` folder (`$HOME/Downloads/overleaf-native`). Substitute your own authorized
-account, project ID and real extracted bundle location before running:
+the ID is `0123456789abcdef01234567`. Substitute your own authorized account and
+project ID before running:
 
 ```sh
-fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567 --resources "$HOME/Downloads/overleaf-native"
+fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567
 ```
+
+Source installs still require the guide's explicit npm preparation and
+`--resources`; prepared companion bundles and that override remain supported.
 
 No model client or worker is needed to sign in. See the [portable bundle, scope and optional recipient setup](integrations/overleaf/README.md#standalone-owner-login).
 

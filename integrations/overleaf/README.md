@@ -92,27 +92,26 @@ Linux Secret Service). Node is found on PATH or standard system locations;
 other supported browsers); `--browser /absolute/browser` overrides discovery.
 No model client, npm or compiler is required to use a prepared portable bundle.
 
-Use the matching Fridica integration build and either the prepared public-source
-directory from the guide or a supplied companion bundle; installing the public
-pip release alone does not provide this setup. For a bundle, check the archive's
-supplied SHA-256 and extract it into an owner-controlled directory.
-The extracted `overleaf-native` directory carries
-pinned JS dependencies, licenses and corresponding AGPL source. A release may
-place it in `<prefix>/share/fridica/overleaf-native`; automatic discovery also
-checks beside the owner config, `~/Library/Application Support/Fridica` on macOS,
-and `$XDG_DATA_HOME/fridica` (default `~/.local/share/fridica`) on Linux. Otherwise
-pass `--resources`. A prepared bundle needs no dependency download or npm
-installation. A source checkout needs the guide's locked npm preparation first.
+Wheels built from this integration install prepared resources at
+`<prefix>/share/fridica/overleaf-native`, which the CLI discovers automatically.
+They contain pinned pure-JS dependencies, adapter/helper, licenses/notices and
+exact corresponding AGPL source. No npm, Rust or manual copying is needed to
+use a built wheel; the already published PyPI v0.10.3 release lacks this feature.
+For an explicit source install, follow the guide's locked npm preparation and
+pass `--resources /absolute/prepared/integrations/overleaf`. Prepared companion
+bundles also remain supported: verify the supplied SHA-256 and extract into an
+owner-controlled directory before passing its `overleaf-native` directory.
+Discovery also checks beside the owner config,
+`~/Library/Application Support/Fridica` on macOS, and `$XDG_DATA_HOME/fridica`
+(default `~/.local/share/fridica`) on Linux.
 
 For this fictional example, the expected account is `alice@example.com` and the
 editor URL is `https://www.overleaf.com/project/0123456789abcdef01234567`.
 The project ID is the 24-character string immediately after `/project/`:
-`0123456789abcdef01234567`. Assume the extracted `overleaf-native` directory is
-in your home directory's `Downloads` folder (`$HOME/Downloads/overleaf-native`).
-Substitute your own authorized account, project ID and real bundle location:
+`0123456789abcdef01234567`. For a built wheel, substitute your own authorized account and project ID:
 
 ```sh
-fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567 --resources "$HOME/Downloads/overleaf-native"
+fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567
 ```
 
 Complete the browser login and any MFA yourself. Fridica verifies the expected
@@ -194,7 +193,7 @@ For this compatibility delta, run `node --test owner-login.test.mjs` here and
 The adapter's existing actual-process smoke is
 `TASK_NODE=/absolute/node TASK_TMP=/assigned/scratch python3 -m unittest test_adapter.AdapterChecks.test_actual_pinned_upstream_discovery_and_memory_session`.
 The source guide records credential-free installation/preparation and the
-unexecuted Darwin handshake/receipt command. All execution for this delta was
+supplied owner-side Darwin handshake/receipt results. All execution for this delta was
 on Linux, with no live login or manuscript access.
 
 Existing preparation/recipient coverage remains in `tests/native_recipient.rs`;
@@ -205,3 +204,24 @@ here). Package/tool discovery is credential-free.
 These checks do not authenticate or modify Overleaf. Live login, read-only
 comment/change inspection and any expressly requested new write remain separate
 verification steps; no extra review round or broad test matrix is required.
+
+## Building release-wheel resources
+
+With ordinary Node/npm and Git on PATH, run from the repository root:
+
+```sh
+npm ci --prefix integrations/overleaf --no-audit --no-fund
+python integrations/overleaf/package-portable.py --wheel-data
+maturin build --release --locked --out wheelhouse
+scripts/smoke_wheel.sh wheelhouse/*.whl
+```
+
+The existing packager fetches only the lock's exact source revision, or accepts
+`--upstream /absolute/clean/pinned-checkout` to reuse it. It verifies the installed
+pin/modules and rejects native Node addons, then stages Maturin's standard
+`fridica.data/data/share/fridica/overleaf-native` tree. The wheel includes source
+and dependency notices; the sdist excludes this generated tree. Release and CI
+wheel jobs run these preparation steps; ordinary Cargo checks require no npm.
+The smoke installs a fresh venv and validates automatic resource discovery,
+licenses/source and synthetic `login --prepare-only` with only Node on its PATH.
+It does not authenticate, open a browser, bind a recipient or start a worker.

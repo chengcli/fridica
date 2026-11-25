@@ -14,6 +14,38 @@ state backup. Do not assume another release's database is compatible. No private
 archive or model-client application is needed. A prepared public checkout can
 serve directly as `--resources`.
 
+## Built wheel alternative
+
+Wheels built by this branch's packaging workflows include the pinned JS MCP,
+adapter/helper, license notices and exact corresponding AGPL source under
+`<venv>/share/fridica/overleaf-native`. Install a compatible built wheel in a fresh
+venv with `python -m pip install /path/to/fridica.whl`; with ordinary Node >=20 on
+PATH, run `fridica overleaf-auth login --expected-email alice@example.com
+--project 0123456789abcdef01234567` using your authorized account/project instead
+of these fictional values. No `--resources`, npm, Rust, private bundle or model
+client is needed. Add `--prepare-only` for a credential-free preparation check.
+Actual login still requires Chromium and an unlocked OS store; recipient binding
+and idle activation remain separate. This describes a built integration wheel,
+not the already published PyPI v0.10.3 release.
+
+Source builds below remain explicit: `pip install .` alone builds the CLI;
+prepare the locked npm resources and pass `--resources`. To build a self-contained
+wheel from source, use the [wheel staging commands](../integrations/overleaf/README.md#building-release-wheel-resources)
+before Maturin. On a wheel-installed worker, point `native_adapter` at its own
+`<venv>/share/fridica/overleaf-native/adapter.py` with that worker's Python/Node;
+the same scope, channel, recipient and sandbox requirements below still apply.
+
+The packaging follow-up verified a Linux x86_64 `manylinux_2_34` wheel with
+Maturin 1.16.0 and Python 3.11. It installed into a fresh isolated venv and passed
+`scripts/smoke_wheel.sh`: synthetic `login --prepare-only` discovered the installed
+resources without `--resources`, with only Node on the preparation PATH.
+The surrounding Linux namespace disabled networking and hid the original source
+checkout, previous install and private bundles. Pin, adapter, license notices
+and corresponding-source hash checks passed. The sdist retained source-install
+inputs and excluded generated dependencies/data. This does not validate the
+release workflow's manylinux_2_28/macOS wheels, real login, authenticated worker
+confinement or activation; those checks were not run in this packaging follow-up.
+
 ## 1. Build and prepare on the owner's desktop
 
 Use macOS or desktop Linux with Python **>=3.11**, its venv/pip support,
@@ -103,7 +135,8 @@ Resources can also be a prepared companion bundle; automatic discovery checks
 `overleaf-native` beside the config, `<prefix>/share/fridica/overleaf-native`,
 `~/Library/Application Support/Fridica/overleaf-native`, and
 `$XDG_DATA_HOME/fridica/overleaf-native` (default `~/.local/share/fridica/overleaf-native`).
-Public PyPI alone does not supply these integration resources.
+The already published PyPI v0.10.3 package does not supply these integration resources;
+wheels built from this branch do.
 
 ## 3. Prepare an eligible registered macOS or Linux worker
 
