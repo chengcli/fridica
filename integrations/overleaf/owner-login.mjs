@@ -104,13 +104,21 @@ async function control(executable, args, input = '') {
   });
 }
 
+export const SOURCE = '42135403af5e76b80348303d742a5e1fe4da6d30';
+export function pinnedSource(resolved) {
+  return ['https://', 'git+https://', 'ssh://git@', 'git+ssh://git@'].some(prefix =>
+    ['', '.git'].some(suffix => resolved ===
+      `${prefix}github.com/happysky19/overleaf-mcp-native${suffix}#${SOURCE}`));
+}
+
 export async function checkResources() {
   const pkg = JSON.parse(await readFile(new URL('./node_modules/@netique/overleaf-mcp/package.json', import.meta.url)));
   const lock = JSON.parse(await readFile(new URL('./node_modules/.package-lock.json', import.meta.url)));
-  require(pkg.version === '0.4.0' && lock.packages['node_modules/@netique/overleaf-mcp'].resolved ===
-    'git+https://github.com/happysky19/overleaf-mcp-native.git#e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981', 'Pinned Overleaf dependency missing or mismatched');
+  require(pkg.version === '0.4.0' && pinnedSource(lock.packages?.['node_modules/@netique/overleaf-mcp']?.resolved),
+    'Pinned Overleaf dependency missing or mismatched');
   await import('./node_modules/@netique/overleaf-mcp/dist/auth/cookieStore.js');
   await import('./node_modules/@netique/overleaf-mcp/dist/auth/browserLogin.js');
+  await import('./node_modules/@netique/overleaf-mcp/dist/auth/sessionFd.js');
 }
 
 async function main() {

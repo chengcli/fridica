@@ -2,7 +2,7 @@
 """MCP policy/composition adapter; no Overleaf editing/comment protocol here.
 
 The pinned AGPL package runs in its own process. Only its MCP interface is
-used. Linux memfd supplies its cookie *store* without a secret-bearing disk file.
+used. An inherited anonymous socket supplies its session without a disk store.
 """
 import argparse
 import hashlib
@@ -13,6 +13,7 @@ from pathlib import Path
 import queue
 import re
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -28,7 +29,7 @@ NAMES = {"native_" + name: name for name in OPERATIONS}
 NAMES["native_suggest_edit"] = NAMES.pop("native_find_and_replace")
 WRITES = {"add_comment", "reply_comment", "find_and_replace"}
 PIN = "0.4.0"
-SOURCE = "e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981"
+SOURCE = "42135403af5e76b80348303d742a5e1fe4da6d30"
 LIMIT = 8 * 1024 * 1024
 
 
@@ -159,29 +160,36 @@ class Peer:
         self.process.stdout.close()
 
 
+def pinned_source(resolved):
+    return resolved in {
+        f"{prefix}github.com/happysky19/overleaf-mcp-native{suffix}#{SOURCE}"
+        for prefix in ("https://", "git+https://", "ssh://git@", "git+ssh://git@")
+        for suffix in ("", ".git")
+    }
+
+
 def native_peer(node, root, state, cookie=""):
-    require(sys.platform == "linux" and hasattr(os, "memfd_create"), "Native worker requires Linux memfd")
+    require(sys.platform in {"linux", "darwin"}, "Native worker requires macOS or Linux")
     pkg = root / "node_modules/@netique/overleaf-mcp"
     require(json.loads((pkg / "package.json").read_text())["version"] == PIN, "Upstream package pin mismatch")
     installed = json.loads((root / "node_modules/.package-lock.json").read_text())
-    require(installed["packages"]["node_modules/@netique/overleaf-mcp"]["resolved"].endswith("#" + SOURCE), "Upstream source pin mismatch")
-    store = state / "overleaf-mcp"
-    store.mkdir(mode=0o700)
-    fd = os.memfd_create("fridica-overleaf-session", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
-    try:
-        import fcntl
-        os.fchmod(fd, 0o600)
-        os.write(fd, json.dumps({"hosts": {"www.overleaf.com": {"cookie": cookie, "savedAt": int(time.time() * 1000)}}}).encode())
-        os.lseek(fd, 0, os.SEEK_SET)
-        fcntl.fcntl(fd, fcntl.F_ADD_SEALS, fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
-        (store / "cookie.json").symlink_to(f"/proc/self/fd/{fd}")
+    require(pinned_source(installed["packages"]["node_modules/@netique/overleaf-mcp"]["resolved"]), "Upstream source pin mismatch")
+    payload = json.dumps({"baseUrl": ORIGIN, "cookie": cookie}).encode()
+    require(len(payload) <= 16384)
+    reader, writer = socket.socketpair()
+    with reader, writer:
+        # Queue the bounded envelope and EOF before launch. No thread or disk file;
+        # only the receiving descriptor survives exec on macOS and Linux.
+        writer.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+        writer.settimeout(3)
+        writer.sendall(payload)
+        writer.shutdown(socket.SHUT_WR)
         # No inherited credentials, proxy settings, NODE_OPTIONS, browser/profile config.
         # A nonexistent explicit browser path disables fallback discovery/re-login/retry.
-        env = {"PATH": "/usr/bin:/bin", "XDG_CONFIG_HOME": str(state), "OL_BASE_URL": ORIGIN,
+        # Injected upstream mode bypasses the actual Darwin/Linux cookie store.
+        env = {"PATH": "/usr/bin:/bin", "OL_SESSION_FD": str(reader.fileno()), "OL_BASE_URL": ORIGIN,
                "OL_BROWSER": str(state / "login-disabled"), "OL_MCP_LOG_LEVEL": "error"}
-        return Peer([node, str(pkg / "dist/index.js")], env, str(state), (fd,))
-    finally:
-        os.close(fd)
+        return Peer([node, str(pkg / "dist/index.js")], env, str(state), (reader.fileno(),))
 
 
 def arguments(name, given, schema, project):

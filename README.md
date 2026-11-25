@@ -17,8 +17,11 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 | Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
 
 Native Overleaf comments and pending Track Changes use a dedicated desktop login.
-This integration version requires its matching Fridica build and supplied companion
-bundle; installing the public pip release alone does not provide this setup.
+Start with the [public-source installation and local/SSH worker guide](docs/overleaf-native-source-install.md).
+This integration version needs its matching Fridica build and prepared JS resources,
+either from that source installation or a supplied companion bundle. It is a
+feature-branch trial; installing the official PyPI v0.10.3 release alone does not
+provide this setup.
 The project ID is the 24-character string immediately after `/project/` in an editor URL.
 For the fictional URL `https://www.overleaf.com/project/0123456789abcdef01234567`,
 the ID is `0123456789abcdef01234567`. Assume the example account is `alice@example.com`

@@ -1,5 +1,11 @@
 # Scoped native Overleaf MCP integration
 
+**Installing from public source?** Follow the [source installation, owner login
+and local/SSH worker guide](../../docs/overleaf-native-source-install.md). It covers
+pip/npm preparation, actual recipient discovery, idle activation and native reads
+without a private archive. This feature-branch trial is separate from official
+main and PyPI v0.10.3.
+
 The existing `overleaf` server composes bundled Interleaf Git/compile tools with
 `@netique/overleaf-mcp` in a separate process. Native comment list, full-thread
 read, anchored creation, reply, file read, pending tracked-change inspection and
@@ -13,17 +19,24 @@ Upstream is `@netique/overleaf-mcp@0.4.0`, source
 [`cd248f856ba63af449eb58cb0eb0af04fd933ac0`](https://github.com/netique/overleaf-mcp/tree/cd248f856ba63af449eb58cb0eb0af04fd933ac0).
 Its published registry integrity is
 `sha512-gJtiF9tUWWB2GPwBTPIWNyNu49L7wLkwq8oBmGhRYtKJixu4RqukewtM0VMZ9rtmKrhCzbUf1E/aOx9u/ocrZg==`.
-The integration pins the necessary no-replay correction at
-[`happysky19/overleaf-mcp-native@e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981`](https://github.com/happysky19/overleaf-mcp-native/commit/e4ad4f97d5730a448e5a2c3aa60838ef2d1f8981),
-branch `fix/no-ot-replay-20261124`. Its package-lock integrity is
-`sha512-m+xcz1MuYENEntPC+ANfYz/L2cBhkWbTOW4EqifSbEEuyG63XkBJKZIQGGXUQyzYuRKCe2qQuRIT+0A4yWnbTw==`.
+The integration pins the no-replay correction and inherited-session transport at
+[`happysky19/overleaf-mcp-native@42135403af5e76b80348303d742a5e1fe4da6d30`](https://github.com/happysky19/overleaf-mcp-native/commit/42135403af5e76b80348303d742a5e1fe4da6d30),
+branch `fix/inherited-session-fd-20261124`. Its package-lock integrity is
+`sha512-T40Szds5KDonX/iDwPP/Rl3BksZgww7rVc6Sul4b7AUTp1LIC9o918lXeaZ1k93YxG2Ks3cN4cF7VjbnuPmpxw==`.
 
-The fork changes only `applyOtUpdate` in `src/api/socket.ts`, adds one lost-ACK
-check and an explicit `prepare` build hook. It never automatically resubmits an
+The fork corrects `applyOtUpdate` in `src/api/socket.ts`, retains one lost-ACK
+check and an explicit `prepare` build hook, and adds the optional `OL_SESSION_FD`
+transport with one focused injection/cache/fail-closed smoke. It never automatically resubmits an
 attempted mutation. It clears stale document state, reconnects/re-reads when
-possible, and returns an uncertain outcome for caller reconciliation. Login,
+possible, and returns an uncertain outcome for caller reconciliation. Ordinary owner login,
 CDP, dedicated-profile capture, cookie storage and native comment/OT protocol
-remain upstream code. No generated dist or dependencies are committed.
+remain upstream code. Injected worker mode reads a bounded JSON envelope once
+from an anonymous inherited descriptor and caches it in memory. It bypasses the
+actual cookie store on both macOS and Linux (Darwin ignores `XDG_CONFIG_HOME`),
+closes the descriptor, and refuses disk/browser fallback on invalid or expired
+sessions. Only the descriptor number is in the upstream environment. Exact
+repository/full-SHA HTTPS and SSH npm metadata are accepted; other sources,
+branches, shortened SHAs and mismatched versions are rejected. No generated dist or dependencies are committed.
 
 AGPL-3.0-or-later applies to the upstream process and correction. Preserve its
 LICENSE/notices and corresponding source. The portable archive contains those
@@ -50,11 +63,12 @@ cannot silently change the saved account. The optional `--expires-at` is only
 for an explicitly timed grant. Otherwise reuse ends on actual server/cookie
 expiry or owner revocation.
 
-The existing encrypted SSH stdin route forwards only to the explicitly bound
+The existing local launch or encrypted SSH stdin route forwards only to the explicitly bound
 actual worker UUID, registered machine/workspace and configured job channel.
 All native calls are fixed to the single configured project and seven methods above. The
 worker independently rechecks account/project before operations and supplies
-upstream through a sealed Linux memfd. Worker browser fallback is disabled.
+upstream through a portable anonymous socketpair and `pass_fds`, with no worker
+credential file. Worker browser fallback is disabled.
 Coordinator/other-worker forwarding remains denied. Built-in Git/compile behavior
 is retained. These are application gates around an account-wide session cookie,
 not server-issued cryptographic project scopes.
@@ -78,15 +92,17 @@ Linux Secret Service). Node is found on PATH or standard system locations;
 other supported browsers); `--browser /absolute/browser` overrides discovery.
 No model client, npm or compiler is required to use a prepared portable bundle.
 
-Use the matching Fridica integration build and supplied companion bundle;
-installing the public pip release alone does not provide this setup. Check the
-archive's supplied SHA-256 and extract it into an owner-controlled directory.
+Use the matching Fridica integration build and either the prepared public-source
+directory from the guide or a supplied companion bundle; installing the public
+pip release alone does not provide this setup. For a bundle, check the archive's
+supplied SHA-256 and extract it into an owner-controlled directory.
 The extracted `overleaf-native` directory carries
 pinned JS dependencies, licenses and corresponding AGPL source. A release may
 place it in `<prefix>/share/fridica/overleaf-native`; automatic discovery also
 checks beside the owner config, `~/Library/Application Support/Fridica` on macOS,
 and `$XDG_DATA_HOME/fridica` (default `~/.local/share/fridica`) on Linux. Otherwise
-pass `--resources`. No dependency download or npm installation is needed.
+pass `--resources`. A prepared bundle needs no dependency download or npm
+installation. A source checkout needs the guide's locked npm preparation first.
 
 For this fictional example, the expected account is `alice@example.com` and the
 editor URL is `https://www.overleaf.com/project/0123456789abcdef01234567`.
@@ -156,8 +172,8 @@ there. Building Fridica requires Rust >=1.91 and the ordinary platform linker/SD
 The portable archive is platform-independent JS, not a Fridica binary or Node
 runtime. Live authentication and native writes are separate from resource checks.
 
-On the worker, use the installed adapter and Node >=20; Python >=3.10 and Linux
-memfd are required. Preserve existing `[overleaf]` settings, adding:
+On macOS or Linux workers, use the installed adapter, Node >=20 and Python
+>=3.10 with POSIX `pass_fds` and `socketpair`. No memfd or procfs is required. Preserve existing `[overleaf]` settings, adding:
 
 ```toml
 [overleaf]
@@ -173,12 +189,19 @@ archive, run `python package-portable.py --upstream /assigned/folder/upstream
 
 ## Focused verification
 
-The standalone preparation/recipient smoke is included in `tests/native_recipient.rs`.
-The affected owner helper check is `node --test owner-login.test.mjs`. The one
-existing Rust boundary smoke is `cargo test --test native_recipient --locked
---offline`. The fork's one lost-ACK check is
+For this compatibility delta, run `node --test owner-login.test.mjs` here and
+`node --test tests/unit/sessionFd.spec.mjs` in the built upstream checkout.
+The adapter's existing actual-process smoke is
+`TASK_NODE=/absolute/node TASK_TMP=/assigned/scratch python3 -m unittest test_adapter.AdapterChecks.test_actual_pinned_upstream_discovery_and_memory_session`.
+The source guide records credential-free installation/preparation and the
+unexecuted Darwin handshake/receipt command. All execution for this delta was
+on Linux, with no live login or manuscript access.
+
+Existing preparation/recipient coverage remains in `tests/native_recipient.rs`;
+it was not rerun for this JS/Python delta. The fork's retained lost-ACK check is
 `node --test --import tsx tests/unit/socketLostAck.spec.ts`; it fails before the
-correction and passes after it. Package/tool discovery is credential-free.
+earlier no-replay correction and passes after it (historical result, not rerun
+here). Package/tool discovery is credential-free.
 These checks do not authenticate or modify Overleaf. Live login, read-only
 comment/change inspection and any expressly requested new write remain separate
 verification steps; no extra review round or broad test matrix is required.

@@ -14,7 +14,12 @@ CHANNEL = "CEXAMPLE"
 WORKER = "worker-11111111-1111-4111-8111-111111111111"
 
 class AdapterChecks(unittest.TestCase):
-    def test_actual_pinned_upstream_discovery_and_memory_store(self):
+    def test_actual_pinned_upstream_discovery_and_memory_session(self):
+        source = f"git+https://github.com/happysky19/overleaf-mcp-native.git#{a.SOURCE}"
+        self.assertTrue(a.pinned_source(source))
+        self.assertTrue(a.pinned_source(source.replace("git+https://", "git+ssh://git@")))
+        self.assertFalse(a.pinned_source(source.replace("happysky19/", "other/")))
+        self.assertFalse(a.pinned_source(source.replace(a.SOURCE, a.SOURCE[:12])))
         with tempfile.TemporaryDirectory(dir=os.environ["TASK_TMP"]) as directory:
             state = Path(directory)
             peer = a.native_peer(os.environ["TASK_NODE"], ROOT, state, "overleaf_session2=fixture")
@@ -22,7 +27,7 @@ class AdapterChecks(unittest.TestCase):
                 self.assertEqual(peer.info["serverInfo"]["version"], a.PIN)
                 names = {t["name"] for t in peer.call("tools/list")["tools"]}
                 self.assertTrue(set(a.OPERATIONS) <= names)
-                self.assertTrue((state / "overleaf-mcp/cookie.json").is_symlink())
+                self.assertFalse((state / "overleaf-mcp/cookie.json").exists())
                 for f in state.rglob("*"):
                     if f.is_file() and not f.is_symlink():
                         self.assertNotIn(b"fixture", f.read_bytes())

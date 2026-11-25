@@ -20,7 +20,7 @@ assert subprocess.check_output(['git', '-C', str(args.upstream), 'rev-parse', 'H
 assert not subprocess.check_output(['git', '-C', str(args.upstream), 'status', '--porcelain'])
 assert not list((root / 'node_modules').rglob('*.node')), 'native dependency is not portable'
 source = subprocess.check_output(['git', '-C', str(args.upstream), 'archive', '--format=tar.gz', '--prefix=overleaf-mcp/', revision])
-files = ['owner-login.mjs', 'owner-login.test.mjs', 'adapter.py', 'package.json', 'package-lock.json', 'README.md']
+files = ['owner-login.mjs', 'owner-login.test.mjs', 'adapter.py', 'test_adapter.py', 'package.json', 'package-lock.json', 'README.md']
 with tarfile.open(args.output, 'w:gz') as archive:
     for name in files + ['node_modules']:
         archive.add(root / name, arcname='overleaf-native/' + name)
