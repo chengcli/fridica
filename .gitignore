@@ -10,3 +10,8 @@ tokens*
 target/
 *.pdf
 credentials.env
+node_modules/
+.fridica-overleaf-receipts/
+.overleaf-mcp-*/
+fridica.data/
+wheelhouse/

@@ -266,7 +266,7 @@ impl Supervisor {
             };
             let mut view = w.clone();
             view.slot = slot;
-            let spec = make_spec(&config, &view).and_then(|mut spec| {
+            let spec = make_spec(&config, &view, &j.session_id).and_then(|mut spec| {
                 spec.instructions = self.factory.instructions(&config, &view)?;
                 if spec.instructions.trim().is_empty() {
                     bail!("worker instructions are empty");
@@ -588,7 +588,7 @@ impl Supervisor {
         Ok(())
     }
 }
-fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
+fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<WorkerSpec> {
     let m = config.machines.get(&w.machine).context("machine removed")?;
     if m.transport == "slurm" {
         bail!("Slurm execution is unsupported");
@@ -599,7 +599,7 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
     }
     let same_backend = w.backend == config.parent.backend;
     let workspace = space.for_slot(w.slot);
-    Ok(WorkerSpec {
+    let mut spec = WorkerSpec {
         python_env: config.python_envs.get(&m.name).cloned().unwrap_or_default(),
         mcp_servers: crate::github::mcp::servers(config, &m.name, &space.policy)
             .into_iter()
@@ -628,7 +628,44 @@ fn make_spec(config: &Config, w: &WorkerRecord) -> Result<WorkerSpec> {
         idle_timeout: config.limits.worker_idle,
         excluded_env: config.secret_env().into_iter().map(str::to_owned).collect(),
         slot: w.slot,
-    })
+    };
+    if config
+        .overleaf
+        .native_scope
+        .as_ref()
+        .and_then(|s| s.channel.as_deref())
+        .is_some_and(|channel| session_id.split(':').nth(1) == Some(channel))
+        && config
+            .overleaf
+            .native_recipient
+            .as_ref()
+            .is_some_and(|r| r.permits(&w.id, &w.machine, &w.workspace))
+    {
+        if let Some(server) = spec.mcp_servers.iter_mut().find(|s| s.name == "overleaf") {
+            let builtin = server.command.clone();
+            server.command = config.overleaf.native_adapter[0].clone();
+            server.args = config.overleaf.native_adapter[1..].to_vec();
+            server.args.extend([
+                "--builtin".into(),
+                builtin,
+                "--workspace".into(),
+                spec.workspace.path.to_string_lossy().into_owned(),
+                "--channel".into(),
+                config
+                    .overleaf
+                    .native_scope
+                    .as_ref()
+                    .and_then(|s| s.channel.clone())
+                    .expect("authorized channel"),
+                "--worker".into(),
+                w.id.clone(),
+            ]);
+            server
+                .env_vars
+                .push(crate::config::overleaf::NATIVE_ENV.into());
+        }
+    }
+    Ok(spec)
 }
 pub fn frame(job: &Job, w: &WorkerRecord) -> String {
     let role = if w.role == "general" {

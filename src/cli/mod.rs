@@ -3,6 +3,7 @@ pub mod candidate;
 pub mod dashboard;
 pub mod doctor;
 pub mod migrate;
+pub mod overleaf_auth;
 pub mod secret;
 pub mod setup;
 pub mod start;

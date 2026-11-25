@@ -141,10 +141,12 @@ pub fn parse(source: &str, path: &Path, context: &LoadContext) -> Result<Config>
         fingerprint: format!("{:x}", Sha256::digest(source.as_bytes())),
     };
     super::github_mcp::validate(&config)?;
+    super::overleaf::validate(&config)?;
     for (enabled, token) in [
         (config.alphaxiv.enabled, "ALPHAXIV_TOKEN"),
         (config.scix.enabled || config.overleaf.enabled, "ADS_TOKEN"),
         (config.overleaf.enabled, "OVERLEAF_GIT_TOKEN"),
+        (config.overleaf.enabled, "OVERLEAF_NATIVE_SESSION"),
     ] {
         anyhow::ensure!(
             !enabled || !config.secret_env().contains(&token),
@@ -765,7 +767,7 @@ fn string(item: Option<&Item>) -> Result<Option<String>> {
     item.map(|i| i.as_str().map(str::to_owned).context("expected a string"))
         .transpose()
 }
-fn decode<T: DeserializeOwned>(item: Option<&Item>) -> Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(item: Option<&Item>) -> Result<T> {
     Ok(serde_json::from_value(object(item)?)?)
 }
 fn object(item: Option<&Item>) -> Result<Value> {

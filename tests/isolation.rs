@@ -404,7 +404,11 @@ async fn system_launcher_applies_isolation_only_to_confined_local_workers() {
     );
     spec.workspace.policy.gpu_confine = Some(false);
     let launch = launcher.launch(&spec, vec!["/bin/true".into()]).unwrap();
-    assert_eq!(launch.argv, vec!["/bin/true"]);
+    // Unconfined launches still strip an unauthorized native session.
+    assert_eq!(
+        launch.argv,
+        vec!["/usr/bin/env", "-u", "OVERLEAF_NATIVE_SESSION", "/bin/true"]
+    );
     assert!(!launch
         .env
         .contains_key(std::ffi::OsStr::new("FRIDICA_MCP_KEY")));

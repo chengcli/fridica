@@ -16,6 +16,27 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 | NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
 | Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
 
+Native Overleaf comments and pending Track Changes use a dedicated desktop login.
+Start with the [public-source installation and local/SSH worker guide](docs/overleaf-native-source-install.md).
+Wheels built from this integration include the pinned JS resources and discover
+them automatically. Ordinary Node >=20, Chrome/Chromium and an OS credential
+store are still needed; npm, Rust and manual resource copying are not needed
+for a built wheel. This is a feature-branch trial, not an update to the already
+published PyPI v0.10.3 package.
+The project ID is the 24-character string immediately after `/project/` in an editor URL.
+For the fictional URL `https://www.overleaf.com/project/0123456789abcdef01234567`,
+the ID is `0123456789abcdef01234567`. Substitute your own authorized account and
+project ID before running:
+
+```sh
+fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567
+```
+
+Source installs still require the guide's explicit npm preparation and
+`--resources`; prepared companion bundles and that override remain supported.
+
+No model client or worker is needed to sign in. See the [portable bundle, scope and optional recipient setup](integrations/overleaf/README.md#standalone-owner-login).
+
 Slack automatically checks the standard environment variables first and then their keyring entries. You can delete the four standard Slack token assignments from an existing `[slack]` table. Keep any overrides that point to custom names.
 
 To use an environment variable in Bash or Zsh, export it before running `fridica init` and supply it to the daemon at startup. For example, this prompts for an ADS token without putting its value in shell history:
@@ -250,3 +271,8 @@ Build a wheel with `maturin build --release --locked --out dist`. The wheel smok
 ## License
 
 [MIT](LICENSE)
+
+The optional [scoped native Overleaf adapter](integrations/overleaf/README.md)
+uses a separate pinned AGPL MCP process alongside Interleaf, with upstream login
+and a narrow correction preventing ambiguous OT replay. See the integration
+notes for owner setup, native comments, pending Track Changes and readiness limits.

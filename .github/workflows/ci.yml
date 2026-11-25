@@ -133,6 +133,13 @@ jobs:
         with:
           python-version: '3.11'
       # Same manylinux build as release.yml; the full platform matrix runs only on release.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prepare pinned native Overleaf wheel resources
+        run: |
+          npm ci --prefix integrations/overleaf --no-audit --no-fund
+          python integrations/overleaf/package-portable.py --wheel-data
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@v1
         with:

@@ -69,8 +69,17 @@ pub fn starter_config() -> String {
 pub(crate) fn worker_tokens(
     environment: &mut std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
     servers: &[fridica_agent::McpServer],
+    native_allowed: bool,
     lookup: impl Fn(&str) -> Result<Option<Vec<u8>>>,
 ) -> Result<()> {
+    use crate::config::overleaf::{NATIVE_ENTRY, NATIVE_ENV};
+    let native_allowed = native_allowed
+        && servers
+            .iter()
+            .any(|s| s.name == "overleaf" && s.env_vars.iter().any(|n| n == NATIVE_ENV));
+    if !native_allowed {
+        environment.remove(OsStr::new(NATIVE_ENV));
+    }
     for (_, variable, entry) in crate::config::setup::MCP_TOKENS {
         if !servers
             .iter()
@@ -98,6 +107,26 @@ pub(crate) fn worker_tokens(
             environment.insert(variable.into(), token.into());
         }
     }
+    if native_allowed {
+        let raw = environment
+            .get(OsStr::new(NATIVE_ENV))
+            .and_then(|v| v.to_str())
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_owned);
+        let raw = match raw {
+            Some(value) => Some(value),
+            None => lookup(NATIVE_ENTRY)?
+                .map(String::from_utf8)
+                .transpose()
+                .map_err(|_| anyhow::anyhow!("invalid native session encoding"))?,
+        };
+        environment.remove(OsStr::new(NATIVE_ENV));
+        if let Some(raw) = raw {
+            crate::config::overleaf::validate_session(&raw)
+                .map_err(|_| anyhow::anyhow!("native session invalid or outside owner scope"))?;
+            environment.insert(NATIVE_ENV.into(), raw.into());
+        }
+    }
     Ok(())
 }
 
@@ -115,7 +144,10 @@ mod tests {
             ("ADS_TOKEN".into(), "env-ads".into()),
             ("OVERLEAF_GIT_TOKEN".into(), " ".into()),
         ]);
-        worker_tokens(&mut environment, &servers, |entry| {
+        worker_tokens(&mut environment, &servers, false, |entry| {
+            if entry == "fridica/overleaf/native-session" {
+                return Ok(None);
+            }
             assert_eq!(entry, "fridica/overleaf/git-token");
             Ok(Some(b"stored-overleaf".to_vec()))
         })
@@ -126,5 +158,44 @@ mod tests {
             "stored-overleaf"
         );
         assert!(!environment.contains_key(OsStr::new("GH_TOKEN")));
+    }
+
+    #[test]
+    fn native_default_deny_blocks_ambient_and_lookup() {
+        let servers = [fridica_agent::overleaf::overleaf("fridica")];
+        let mut environment = std::collections::BTreeMap::from([
+            ("OVERLEAF_NATIVE_SESSION".into(), "fixture-ambient".into()),
+            ("ADS_TOKEN".into(), "fixture-ads".into()),
+            ("OVERLEAF_GIT_TOKEN".into(), "fixture-git".into()),
+        ]);
+        worker_tokens(&mut environment, &servers, false, |_| {
+            panic!("unauthorized lookup")
+        })
+        .unwrap();
+        assert!(!environment.contains_key(OsStr::new("OVERLEAF_NATIVE_SESSION")));
+        assert_eq!(environment[OsStr::new("OVERLEAF_GIT_TOKEN")], "fixture-git");
+    }
+    #[test]
+    fn native_bound_lookup_uses_only_the_dedicated_entry_and_exact_scope() {
+        let mut environment = std::collections::BTreeMap::from([
+            ("OVERLEAF_GIT_TOKEN".into(), "fixture-git".into()),
+            ("ADS_TOKEN".into(), "fixture-ads".into()),
+        ]);
+        let mut server = fridica_agent::overleaf::overleaf("fridica");
+        server.env_vars.push("OVERLEAF_NATIVE_SESSION".into());
+        let raw = serde_json::json!({"schema":2,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":"owner@example.invalid", "projects":["333333333333333333333333"],"operations":crate::config::overleaf::OPERATIONS,"expires_at":crate::config::overleaf::now()+600}).to_string();
+        worker_tokens(&mut environment, &[server], true, |entry| {
+            assert_eq!(entry, crate::config::overleaf::NATIVE_ENTRY);
+            Ok(Some(raw.as_bytes().to_vec()))
+        })
+        .unwrap();
+        assert_eq!(
+            environment[OsStr::new("OVERLEAF_NATIVE_SESSION")],
+            raw.as_str()
+        );
+        assert!(crate::config::overleaf::validate_session(
+            &raw.replace("333333333333333333333333", "invalid-project")
+        )
+        .is_err());
     }
 }

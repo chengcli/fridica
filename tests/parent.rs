@@ -137,6 +137,7 @@ impl Harness {
                 ("LLM_LOG", dir.path().join("log").to_string_lossy().into()),
                 ("SLACK_USER_TOKEN", "xoxp-private-test".into()),
                 ("FRIDICA_GITHUB_TOKEN", "private-gh-test".into()),
+                ("OVERLEAF_NATIVE_SESSION", "fixture-native-parent".into()),
             ]
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
@@ -253,7 +254,7 @@ mode=os.environ.get('MODE','ok')
 log=pathlib.Path(os.environ['LLM_LOG'])
 backend='codex' if args[0]=='exec' else 'claude'
 schema=json.load(open(args[args.index('--output-schema')+1])) if backend=='codex' else json.loads(args[args.index('--json-schema')+1])
-with log.open('a') as out: out.write(json.dumps({'args':args,'prompt':prompt,'cwd':os.getcwd(),'mode':oct(pathlib.Path('.').stat().st_mode&0o777),'schema_mode':oct(pathlib.Path('schema.json').stat().st_mode&0o777),'pid':os.getpid(),'slack':os.environ.get('SLACK_USER_TOKEN'),'github':os.environ.get('FRIDICA_GITHUB_TOKEN')})+'\n')
+with log.open('a') as out: out.write(json.dumps({'args':args,'prompt':prompt,'cwd':os.getcwd(),'mode':oct(pathlib.Path('.').stat().st_mode&0o777),'schema_mode':oct(pathlib.Path('schema.json').stat().st_mode&0o777),'pid':os.getpid(),'slack':os.environ.get('SLACK_USER_TOKEN'),'github':os.environ.get('FRIDICA_GITHUB_TOKEN'),'native_present':'OVERLEAF_NATIVE_SESSION' in os.environ})+'\n')
 if mode=='hang': time.sleep(30)
 if mode.startswith('gate'):
  while not log.with_suffix('.release').exists(): time.sleep(0.01)
@@ -1589,4 +1590,17 @@ async fn retired_debrief_calls_are_rejected_before_backend_execution() {
         assert!(h.parent.decide(request("debrief")).await.is_err());
         assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_transport_call'").await,"0");
     }
+}
+
+#[tokio::test]
+async fn native_recipient_never_includes_parent_backend() {
+    let h = Harness::new("codex", FAKE, "ok", 5.).await;
+    h.parent.decide(request("triage")).await.unwrap();
+    let log: Value =
+        serde_json::from_slice(&std::fs::read(h.dir.path().join("log")).unwrap()).unwrap();
+    assert_eq!(
+        log["native_present"], false,
+        "parent is not the authorized worker recipient"
+    );
+    h.clean();
 }
