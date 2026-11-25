@@ -134,7 +134,7 @@ The generated configuration uses macOS Keychain or Linux Secret Service. On Linu
 
 ### Copy stored credentials to another machine
 
-macOS and Linux can each send or receive credentials. Install a version of Fridica with `secret copy` on both machines. The destination must accept SSH connections and have `fridica` on the SSH account's noninteractive PATH. Each Linux account involved needs a user D-Bus session with an unlocked Secret Service keyring. When sending to a Mac, enable Remote Login and make sure the SSH account can write to its unlocked Keychain.
+macOS and Linux can each send or receive credentials. Install a version of Fridica with `secret copy` on both machines. The destination must accept SSH connections. The sender checks the remote PATH, then common user, Python environment and system install locations, including `~/pyenv/bin/fridica`. For a custom location, pass an absolute path from the source machine, for example `fridica secret copy --remote-bin /opt/fridica/bin/fridica user@linux-host`. Each Linux account involved needs a user D-Bus session with an unlocked Secret Service keyring. When sending to a Mac, enable Remote Login and make sure the SSH account can write to its unlocked Keychain.
 
 #### Set up the Linux keyring
 
@@ -145,7 +145,7 @@ If the Linux machine needs a Secret Service provider, run the command for its di
 | Red Hat Enterprise Linux 9 or 10 | `sudo dnf install gnome-keyring` |
 | Ubuntu | `sudo apt update && sudo apt install gnome-keyring dbus-user-session` |
 
-For a Linux destination, run this check from the source machine using the same SSH account you will use for the transfer.
+If Fridica is on the remote PATH, you can run this optional check from the source machine using the same SSH account you will use for the transfer.
 
 ```sh
 ssh user@linux-host 'fridica secret copy --help && fridica secret list'
@@ -155,23 +155,23 @@ The first command verifies that SSH can find a compatible Fridica build. The sec
 
 #### Transfer credentials
 
-To copy from Linux to a Mac, run these commands on Linux. The second command lists the stored names on the Mac so you can verify the transfer.
+To copy from Linux to a Mac, run this command on Linux.
 
 ```sh
 fridica secret copy user@mac-host
-ssh user@mac-host fridica secret list
 ```
 
-To send to Linux, run the same commands from either macOS or Linux with the Linux destination.
+To send to Linux, run the same command from either macOS or Linux with the Linux destination.
 
 ```sh
 fridica secret copy user@linux-host
-ssh user@linux-host fridica secret list
 ```
 
-With just a destination, Fridica copies all entries shown by `fridica secret list` on the source machine. To select a subset, pass exact names or quoted patterns, for example `fridica secret copy user@linux-host 'slack/*' ads/token`. A star matches any sequence of characters in the name, including slashes. Every pattern must match at least one stored name.
+With just a destination, Fridica copies all credentials it discovers from standard token environment variables and the source keyring. For each name, a nonempty exported token takes precedence over its keyring value. For GitHub MCP, the order is `GH_TOKEN`, then `GITHUB_TOKEN`, then the keyring. Custom keyring entries are included. If the source keyring is unavailable and exported tokens are present, Fridica reports the keyring issue and continues with the available tokens.
 
-The command reads the selected entries directly from the source keyring and sends their values over SSH standard input. It replaces matching entries in the destination account's keyring. If a keyring write fails partway through, earlier writes may have succeeded. You can rerun the same command. When moving the daemon, run `fridica doctor` on the destination to check its credentials. If the destination only runs SSH workers, select just the worker credentials you need.
+To select a subset, pass exact names or quoted patterns, for example `fridica secret copy user@linux-host 'slack/*' ads/token`. A star matches any sequence of characters in the name, including slashes. Every pattern must match at least one available name. Use `--from-env` to restrict the copy to exported tokens.
+
+The command sends the selected values over SSH standard input. It replaces matching entries in the destination account's keyring and lists each copied credential name after the transfer succeeds. If a keyring write fails partway through, earlier writes may have succeeded. You can rerun the same command. When moving the daemon, run `fridica doctor` on the destination to check its credentials. If the destination only runs SSH workers, select just the worker credentials you need.
 
 ## Configure machines
 

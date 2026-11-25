@@ -23,11 +23,17 @@ pub enum Command {
     Delete { name: String },
     /// List stored Fridica references without reading their values.
     List,
-    /// Copy matching keyring entries to an SSH host, replacing existing values.
+    /// Copy credentials to an SSH host. Environment tokens take precedence over keyring entries.
     Copy {
         /// SSH destination, such as user@host or a configured host alias.
         destination: String,
-        /// Names or quoted * patterns. Omit to copy all stored Fridica entries.
+        /// Absolute path to the remote Fridica executable. Omit for automatic discovery.
+        #[arg(long)]
+        remote_bin: Option<String>,
+        /// Read standard token environment variables instead of the local keyring.
+        #[arg(long)]
+        from_env: bool,
+        /// Names or quoted * patterns. Omit to copy all available entries from the selected source.
         #[arg(value_name = "PATTERN")]
         names: Vec<String>,
     },
@@ -78,7 +84,18 @@ fn get_with_env(name: &str, env: Option<&str>) -> Result<()> {
 
 pub fn run(command: Command) -> Result<()> {
     match command {
-        Command::Copy { destination, names } => transfer::copy(&NativeStore, &destination, &names),
+        Command::Copy {
+            destination,
+            names,
+            from_env,
+            remote_bin,
+        } => transfer::copy(
+            &NativeStore,
+            &destination,
+            &names,
+            from_env,
+            remote_bin.as_deref(),
+        ),
         Command::Receive => transfer::receive(&NativeStore, io::stdin().lock()),
         Command::Set { name } => {
             let name = reference(&name)?;
