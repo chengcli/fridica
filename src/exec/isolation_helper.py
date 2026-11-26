@@ -89,12 +89,9 @@ def main():
                    "print('fridica-isolation:backend-missing' if missing else 'fridica-isolation:ready'); "
                    "sys.exit(97 if missing else 0)", json.dumps(private), backend]
     preflight_stage = "settings"
-    snapshots, aliases = settings_snapshots(home, workspace, selected, state, request, environment, command)
+    snapshots, disabled = settings_snapshots(home, workspace, selected, state, request, environment, command)
     if os.path.basename(command[0]) == "codex" and command[1:2] == ["app-server"]:
-        disabled = []
-        for alias in aliases:
-            disabled += ["-c", "mcp_servers." + json.dumps(alias, ensure_ascii=False) + ".enabled=false"]
-        command = command[:2] + disabled + command[2:]
+        command = command[:2] + ["-c", disabled] + command[2:]
 
     preflight_stage = "inventory"
     fds = []

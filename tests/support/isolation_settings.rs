@@ -165,10 +165,17 @@ env={KEY="factory-secret"}
     );
     let args: Vec<String> = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(args[0], "app-server");
+    let disabled = args
+        .iter()
+        .position(|s| s.starts_with("mcp_servers={"))
+        .unwrap();
+    let factory = args
+        .iter()
+        .position(|s| s == "mcp_servers.from_factory.enabled=false")
+        .unwrap();
+    assert!(disabled < factory);
+    let parsed: toml_edit::DocumentMut = args[disabled].parse().unwrap();
     for alias in ["wrapped.🚦", "http", "automatic", "from_factory"] {
-        let setting = format!("mcp_servers.{}.enabled=false", serde_json::json!(alias));
-        assert!(args.contains(&setting), "missing {alias}");
-        let parsed: toml_edit::DocumentMut = setting.parse().unwrap();
         assert_eq!(
             parsed["mcp_servers"][alias]["enabled"].as_bool(),
             Some(false)
