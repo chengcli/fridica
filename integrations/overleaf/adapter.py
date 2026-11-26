@@ -267,7 +267,11 @@ class Adapter:
             safe_env = {k: v for k, v in os.environ.items() if k in {
                 "PATH", "HOME", "LANG", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "OVERLEAF_GIT_TOKEN",
                 "ADS_TOKEN", "OVERLEAF_PROJECT_ID", "INTERLEAF_CONFIG", "INTERLEAF_WORKSPACE"}}
-            self.builtin = Peer([options.builtin, "overleaf-mcp", "--workspace-write", str(self.workspace)], safe_env, str(self.workspace))
+            builtin = [options.builtin, "overleaf-mcp", "--workspace-write", str(self.workspace)]
+            if options.thread_project:
+                require(not self.grant or self.grant["projects"] == [options.thread_project])
+                builtin.extend(["--thread-project", options.thread_project])
+            self.builtin = Peer(builtin, safe_env, str(self.workspace))
             self.native = native_peer(options.node, self.root, Path(self.state.name), self.grant["cookie"] if self.grant else "")
             tools = self.native.call("tools/list")["tools"]
             self.schemas = {t["name"]: t for t in tools if t["name"] in OPERATIONS}
@@ -327,6 +331,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--node", required=True)
     p.add_argument("--builtin", required=True)
+    p.add_argument("--thread-project")
     p.add_argument("--workspace", required=True)
     p.add_argument("--worker", required=True)
     p.add_argument("--channel", required=True)

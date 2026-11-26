@@ -1285,3 +1285,97 @@ async fn legacy_debrief_inbox_is_settled_without_a_parent_call() {
         "0"
     );
 }
+
+#[tokio::test]
+async fn overleaf_dispatch_uses_only_the_target_from_this_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("db")).await.unwrap();
+    let pyharp = "111111111111111111111111";
+    let moist = "222222222222222222222222";
+    let job = |id: &str| {
+        json!({
+            "context":{"repo":format!("overleaf:{id}")},
+            "delegations":[{"brief":format!("Reformat https://www.overleaf.com/project/{id} and push.")}],
+            "reply":{"text":"Starting the conversion.","status":"complete"}
+        })
+    };
+    let parent = Arc::new(Script::new(vec![
+        job(pyharp),
+        job(pyharp),
+        job(moist),
+        job(pyharp),
+    ]));
+    let mut actor = actor(&store, parent);
+    let corpus: Value = serde_json::from_str(include_str!("corpus/placement.json")).unwrap();
+    actor.config = Some(Arc::new(
+        fridica::config::loader::parse(
+            corpus["source"].as_str().unwrap(),
+            &dir.path().join("config.toml"),
+            &fridica::config::LoadContext {
+                home: dir.path().into(),
+                uid: 1,
+                runtime_dir: None,
+                protected: vec![],
+            },
+        )
+        .unwrap(),
+    ));
+    let receiver = fridica::slack::receiver::Receiver::new(
+        actor.store.clone(),
+        actor.config.clone().unwrap(),
+        actor.clock.clone(),
+        actor.ids.clone(),
+    );
+    for (ts, root, text, expected) in [
+        (
+            "100.1",
+            "100.1",
+            format!("!f Format <https://www.overleaf.com/project/{pyharp}|Pyharp> to ApJ"),
+            "1",
+        ),
+        ("101.1", "101.1", "!f Re-format that to PRF".into(), "1"),
+        (
+            "101.2",
+            "101.1",
+            format!("!f Use https://www.overleaf.com/project/{moist}"),
+            "2",
+        ),
+        (
+            "101.3",
+            "101.1",
+            "!f Update the title in that project".into(),
+            "2",
+        ),
+    ] {
+        let envelope = json!({"type":"events_api","envelope_id":ts,"payload":{"type":"event_callback",
+            "team_id":"TTEAM","event_id":ts,"event":{"type":"message","user":"UOWNER","channel":"CROOM",
+                "ts":ts,"thread_ts":root,"text":text}}});
+        receiver
+            .receive(&serde_json::to_vec(&envelope).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            actor.step(format!("TTEAM:CROOM:{root}")).await.unwrap(),
+            Step::Committed
+        );
+        assert_eq!(
+            scalar(&store, "SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+            expected
+        );
+        if ts == "101.1" {
+            assert!(
+                scalar(&store, "SELECT text FROM outbox ORDER BY id DESC LIMIT 1")
+                    .await
+                    .contains("project link")
+            );
+        }
+    }
+    assert!(scalar(
+        &store,
+        "SELECT brief FROM jobs WHERE session_id='TTEAM:CROOM:101.1'"
+    )
+    .await
+    .starts_with(&format!(
+        "Thread-confirmed Overleaf project: https://www.overleaf.com/project/{moist}\n"
+    )));
+}

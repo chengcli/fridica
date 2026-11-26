@@ -42,6 +42,9 @@ enum Command {
         /// Confine the server and its subprocesses to writes in this worker workspace.
         #[arg(long, value_name = "PATH")]
         workspace_write: Option<PathBuf>,
+        /// Project selected by the Slack thread for this worker job.
+        #[arg(long, hide = true)]
+        thread_project: Option<String>,
         /// Check bundled tools and verify project read access when OVERLEAF_PROJECT_ID is set.
         #[arg(long)]
         probe: bool,
@@ -205,9 +208,13 @@ async fn run(cli: Cli) -> Result<()> {
         Command::OverleafMcp {
             probe,
             workspace_write,
+            thread_project,
         } => {
             if let Some(root) = workspace_write {
-                return fridica::exec::overleaf::launch(&root, probe);
+                return fridica::exec::overleaf::launch(&root, probe, thread_project.as_deref());
+            }
+            if let Some(project) = thread_project {
+                return fridica::exec::overleaf::serve_project(&project);
             }
             if probe {
                 if fridica::research::probe_overleaf().await? {

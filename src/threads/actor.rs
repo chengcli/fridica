@@ -267,7 +267,7 @@ impl<P: Parent> Actor<P> {
     }
 
     async fn handle(&self, id: i64, kind: &str, session: String) -> Result<Step> {
-        let mut request = load(&self.store, id, session.clone()).await?;
+        let mut request = load(&self.store, id, session.clone(), self.owner.clone()).await?;
         if let Some(config) = &self.config {
             let busy = serde_json::from_value(request.session["work"]["busy"].clone())?;
             request.session["machines"] = json!(config.machines.payload(&busy));
@@ -594,7 +594,10 @@ impl<P: Parent> Actor<P> {
                 calls.push(call);
                 return Ok(Ok(super::failure::blocked(false)));
             };
-            match validate(&raw, request, now).and_then(|d| {
+            match validate(&raw, request, now).and_then(|mut d| {
+                if let Err(question) = super::overleaf::check(&mut d, request) {
+                    return Ok(super::overleaf::clarify(question));
+                }
                 super::delegation::prepare(
                     &d,
                     request,
@@ -734,7 +737,12 @@ fn temporary(calls: &[Call]) -> Option<(&'static str, f64)> {
     }
 }
 
-async fn load(store: &impl Backend, id: i64, session: String) -> Result<ParentRequest> {
+async fn load(
+    store: &impl Backend,
+    id: i64,
+    session: String,
+    owner: String,
+) -> Result<ParentRequest> {
     store.transact(move|u| {
         let TurnInput{thread:data,kind,reference,payload,message,from_peer,history,obligations,review_required:review}=u.turn_input(&session,id)?;
         let mut trigger=json!({"kind":kind,"ref":reference,"payload":serde_json::from_str::<Value>(&payload)?});
@@ -778,9 +786,10 @@ async fn load(store: &impl Backend, id: i64, session: String) -> Result<ParentRe
             let snapshot=super::results::load(u,&session,&reference)?;
             for (key,value) in snapshot.as_object().context("invalid result snapshot")? {trigger[key]=value.clone();}
         }
-        let result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
+        let mut result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
+        super::overleaf::attach(u, &mut result, &owner)?;
         Ok(result)
     }).await
 }
@@ -1125,7 +1134,9 @@ mod lifecycle_tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let paused = load(&store, id, session.clone()).await.unwrap();
+            let paused = load(&store, id, session.clone(), String::new())
+                .await
+                .unwrap();
             controls::apply(
                 &store,
                 session.clone(),
@@ -1160,7 +1171,9 @@ mod lifecycle_tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(claimed.0, id);
-            let before_clean = load(&store, id, session.clone()).await.unwrap();
+            let before_clean = load(&store, id, session.clone(), String::new())
+                .await
+                .unwrap();
             controls::apply(
                 &store,
                 session.clone(),

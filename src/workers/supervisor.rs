@@ -266,7 +266,13 @@ impl Supervisor {
             };
             let mut view = w.clone();
             view.slot = slot;
-            let spec = make_spec(&config, &view, &j.session_id).and_then(|mut spec| {
+            let spec = make_spec(
+                &config,
+                &view,
+                &j.session_id,
+                crate::threads::overleaf::job_project(&j.brief),
+            )
+            .and_then(|mut spec| {
                 spec.instructions = self.factory.instructions(&config, &view)?;
                 if spec.instructions.trim().is_empty() {
                     bail!("worker instructions are empty");
@@ -588,7 +594,12 @@ impl Supervisor {
         Ok(())
     }
 }
-fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<WorkerSpec> {
+fn make_spec(
+    config: &Config,
+    w: &WorkerRecord,
+    session_id: &str,
+    project: Option<&str>,
+) -> Result<WorkerSpec> {
     let m = config.machines.get(&w.machine).context("machine removed")?;
     if m.transport == "slurm" {
         bail!("Slurm execution is unsupported");
@@ -633,6 +644,7 @@ fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<Work
         .overleaf
         .native_scope
         .as_ref()
+        .filter(|s| Some(s.project.as_str()) == project)
         .and_then(|s| s.channel.as_deref())
         .is_some_and(|channel| session_id.split(':').nth(1) == Some(channel))
         && config
@@ -664,6 +676,12 @@ fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<Work
                 .env_vars
                 .push(crate::config::overleaf::NATIVE_ENV.into());
         }
+    }
+    if let Some(server) = spec.mcp_servers.iter_mut().find(|s| s.name == "overleaf") {
+        server.args.extend([
+            "--thread-project".into(),
+            project.unwrap_or("unbound").into(),
+        ]);
     }
     Ok(spec)
 }

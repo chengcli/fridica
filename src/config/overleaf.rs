@@ -71,7 +71,7 @@ impl Scope {
         Ok(())
     }
 }
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 24
         && id
             .bytes()
