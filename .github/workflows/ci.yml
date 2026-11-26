@@ -33,20 +33,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Linux confinement and credential-store test prerequisites
+      - name: Set up Linux confinement and credential-store prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap gnome-keyring dbus-daemon
-      - name: Allow bubblewrap user namespaces (Ubuntu 24.04 AppArmor)
-        if: runner.os == 'Linux'
-        # Same profile as the README's Linux sandbox setup; it applies to bwrap only.
-        run: |
-          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
-            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' '' \
-              'profile bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' \
-              '  include if exists <local/bwrap>' '}' | sudo tee /etc/apparmor.d/bwrap > /dev/null
-            sudo apparmor_parser -r /etc/apparmor.d/bwrap
-          fi
-          bwrap --unshare-user --ro-bind / / -- /bin/true
+        run: scripts/setup_ci_bubblewrap.sh gnome-keyring dbus-daemon
       - uses: taiki-e/install-action@nextest
       - name: Formatting, lints and tests
         run: |
@@ -121,8 +110,18 @@ jobs:
 
   package:
     needs: test
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            artifact: ci-distributions
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            artifact: ci-distributions-aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -132,7 +131,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # Same manylinux build as release.yml; the full platform matrix runs only on release.
+      - name: Set up Linux confinement for the installed wheel
+        run: scripts/setup_ci_bubblewrap.sh
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -143,7 +143,7 @@ jobs:
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@v1
         with:
-          target: x86_64
+          target: ${{ matrix.arch }}
           manylinux: '2_28'
           args: --release --locked --out dist
       - name: Build sdist and check distributions
@@ -155,6 +155,6 @@ jobs:
         run: scripts/smoke_wheel.sh dist/*.whl
       - uses: actions/upload-artifact@v4
         with:
-          name: ci-distributions
+          name: ${{ matrix.artifact }}
           path: dist/*
           if-no-files-found: error
