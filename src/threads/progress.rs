@@ -39,6 +39,16 @@ pub(super) async fn handle<P: Parent>(actor: &Actor<P>, request: ParentRequest) 
         } else {
             None
         };
+        let note = if note.is_some() {
+            let record = u.job_record(&job)?;
+            if crate::workers::progress::may_post(u, &record)? {
+                note
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let step = if let Some(ProgressNote { text, worker }) = note {
             let post = Post {
                 text,

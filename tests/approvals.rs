@@ -94,6 +94,10 @@ impl Harness {
         let request = request(command);
         tokio::spawn(async move { broker.request(worker, job, request).await })
     }
+    fn tool(&self, request: ApprovalRequest) -> JoinHandle<ApprovalDecision> {
+        let (broker, worker, job) = (self.broker.clone(), self.worker.clone(), self.job.clone());
+        tokio::spawn(async move { broker.request(worker, job, request).await })
+    }
     async fn pending(&mut self) -> String {
         tokio::time::timeout(Duration::from_secs(2), self.notifications.recv())
             .await
@@ -443,4 +447,175 @@ async fn cancellation_during_sqlite_admission_still_settles_the_insert() {
     .await
     .unwrap();
     assert_eq!(h.worker_status().await, "running");
+}
+
+const PROJECT: &str = "111111111111111111111111";
+fn mcp_request(tool: &str, params: Value) -> ApprovalRequest {
+    serde_json::from_value(json!({
+        "kind":"tool","summary":"private tool arguments",
+        "detail":{
+            "serverName":"overleaf","mode":"form",
+            "message":format!("Allow the overleaf MCP server to run tool \"{tool}\"?"),
+            "requestedSchema":{"type":"object","properties":{}},
+            "_meta":{"codex_approval_kind":"mcp_tool_call","tool_params":params}
+        }
+    }))
+    .unwrap()
+}
+fn edit_params() -> Value {
+    json!({"project_id":PROJECT,"path":"main.tex","old_string":"old","new_string":"new",
+        "expected_version":95,"strict_version":true,"track":"on",
+        "operation_id":"00000000-0000-4000-8000-000000000001"})
+}
+async fn mcp_policy(h: &mut Harness) {
+    h.job.brief = format!("Thread-confirmed Overleaf project: https://www.overleaf.com/project/{PROJECT}\nEdit the manuscript.");
+    let mut config = (*h.config).clone();
+    for machine in &mut config.machines.machines {
+        for workspace in &mut machine.workspaces {
+            workspace.policy.auto_approve = vec![
+                format!("mcp:overleaf/native_suggest_edit@{PROJECT}"),
+                "mcp:catalog/search".into(),
+            ];
+        }
+    }
+    h.config = Arc::new(config);
+    h.broker.reconfigure(h.config.clone()).await.unwrap();
+}
+#[tokio::test]
+async fn saved_mcp_rules_approve_each_scoped_call_once_and_audit_it() {
+    let mut h = Harness::new(30.).await;
+    mcp_policy(&mut h).await;
+    for claude in [false, true, false] {
+        let mut call = mcp_request("native_suggest_edit", edit_params());
+        if claude {
+            call.detail =
+                json!({"tool":"mcp__overleaf__native_suggest_edit","input":edit_params()});
+        }
+        assert_eq!(finish(h.tool(call)).await, ApprovalDecision::Once);
+    }
+    assert!(approvals::pending(&h.store, 100).await.unwrap().is_empty());
+    let actions: Vec<String> = h
+        .store
+        .call(|c| {
+            Ok(c.prepare("SELECT action FROM audit ORDER BY id")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(actions, vec!["approval.allow"; 3]);
+}
+#[tokio::test]
+async fn mcp_rules_keep_unknown_cross_project_and_unsafe_edits_pending() {
+    let mut h = Harness::new(30.).await;
+    mcp_policy(&mut h).await;
+    let valid = mcp_request("native_suggest_edit", edit_params());
+    let mut cases = vec![];
+    let mut c = valid.clone();
+    c.detail["_meta"]["tool_params"]["project_id"] = json!("222222222222222222222222");
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["_meta"]["tool_params"]["track"] = json!("off");
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["_meta"]["tool_params"]["strict_version"] = json!(false);
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["_meta"]["tool_params"]["expected_version"] = Value::Null;
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["_meta"]["tool_params"]["operation_id"] = json!("");
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["requestedSchema"]["properties"] = json!({"password":{"type":"string"}});
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["_meta"]["codex_approval_kind"] = Value::Null;
+    cases.push(c);
+    let mut c = valid.clone();
+    c.detail["serverName"] = json!("another_server");
+    cases.push(c);
+    cases.push(mcp_request("native_suggest_edit_extra", edit_params()));
+    cases.push(request("mcp:catalog/search"));
+    let mut c = valid.clone();
+    c.detail["_meta"]["tool_params"] = json!([]);
+    cases.push(c);
+
+    for call in cases {
+        let task = h.tool(call);
+        let id = h.pending().await;
+        assert_eq!(h.worker_status().await, "awaiting_approval");
+        h.broker
+            .decide(id, ApprovalDecision::Deny, Authority::Owner)
+            .await
+            .unwrap();
+        assert_eq!(finish(task).await, ApprovalDecision::Deny);
+    }
+    // An exact deny wins over an exact project grant.
+    let mut config = (*h.config).clone();
+    for machine in &mut config.machines.machines {
+        for workspace in &mut machine.workspaces {
+            workspace
+                .policy
+                .auto_deny
+                .push("mcp:overleaf/native_suggest_edit".into());
+        }
+    }
+    h.broker.reconfigure(Arc::new(config)).await.unwrap();
+    assert_eq!(finish(h.tool(valid)).await, ApprovalDecision::Deny);
+}
+#[tokio::test]
+async fn approval_blocker_is_deduplicated_and_quiet_jobs_do_not_publish() {
+    use fridica::core::delivery::Post;
+    use fridica_core::store::Store as _;
+    for public in [true, false] {
+        let mut h = Harness::new(30.).await;
+        h.job.inbox_id = Some(17);
+        if public {
+            h.store
+                .transact(|u| {
+                    u.queue_post(
+                        &Post {
+                            idem_key: "17:reply".into(),
+                            session_id: SESSION.into(),
+                            kind: "reply".into(),
+                            channel: "CROOM".into(),
+                            thread_ts: Some("100.1".into()),
+                            text: "Starting.".into(),
+                            meta: None,
+                            filename: String::new(),
+                            blob: None,
+                            after: String::new(),
+                        },
+                        20.,
+                    )
+                })
+                .await
+                .unwrap();
+        }
+        for _ in 0..2 {
+            let task = h.tool(mcp_request(
+                "not_preapproved",
+                json!({"secret":"private value"}),
+            ));
+            let id = h.pending().await;
+            h.broker
+                .decide(id, ApprovalDecision::Deny, Authority::Owner)
+                .await
+                .unwrap();
+            assert_eq!(finish(task).await, ApprovalDecision::Deny);
+        }
+        let posts = h.store.transact(|u| u.thread_posts(SESSION)).await.unwrap();
+        let notices: Vec<_> = posts
+            .iter()
+            .filter(|p| p.kind == "approval_notice")
+            .collect();
+        assert_eq!(notices.len(), usize::from(public));
+        if let Some(notice) = notices.first() {
+            assert_eq!(notice.channel, "CROOM");
+            assert_eq!(notice.thread_ts.as_deref(), Some("100.1"));
+            assert!(notice.text.contains("approval"));
+            assert!(!notice.text.contains("private") && !notice.text.contains("secret"));
+        }
+    }
 }

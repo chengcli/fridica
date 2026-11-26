@@ -72,6 +72,41 @@ of retrying with a new UUID. Receipt digests include the project and payload.
 These are application restrictions around an account-wide cookie, not
 server-issued cryptographic project scopes.
 
+## Authorize tools once
+
+Save the already-authorized tools in the workspace's `policy.auto_approve`.
+For example, this fictional project permits review reads, comments and pending
+suggestions without a separate confirmation for every call:
+
+```toml
+[policy]
+auto_approve = [
+  "mcp:overleaf/native_read_file@0123456789abcdef01234567",
+  "mcp:overleaf/native_list_comments@0123456789abcdef01234567",
+  "mcp:overleaf/native_read_comment_thread@0123456789abcdef01234567",
+  "mcp:overleaf/native_list_tracked_changes@0123456789abcdef01234567",
+  "mcp:overleaf/native_add_comment@0123456789abcdef01234567",
+  "mcp:overleaf/native_reply_comment@0123456789abcdef01234567",
+  "mcp:overleaf/native_suggest_edit@0123456789abcdef01234567",
+]
+
+[limits]
+progress_interval = 120
+```
+
+Replace the example ID with the actual authorized project; retain existing
+command rules and omit any write tools outside the owner's grant. Repeat only
+the required selectors for a second project. The task must still select that
+project in its own Slack thread. Rules never accept/reject suggestions, disable
+version checks, authorize another project or replay uncertain writes.
+`auto_deny` takes precedence; an unscoped exact deny such as
+`mcp:overleaf/native_suggest_edit` covers that tool on every project.
+
+Public tasks report milestones and approval blockers in their originating
+thread. A delegation with `reply=null` or `send=false` produces no automatic
+updates; external drivers manage their own reporting. No raw tool arguments,
+manuscript text or credential data are included in approval notices.
+
 ## Optional restrictions and source deployments
 
 Existing `native_scope.project`, `native_scope.channel`, `native_recipient`,

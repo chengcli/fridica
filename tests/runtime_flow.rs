@@ -4798,14 +4798,18 @@ impl JobIo for ProgressFile {
 /// polling off the brief names no file and nothing is posted.
 #[tokio::test]
 async fn a_running_jobs_progress_notes_reach_the_thread_before_its_report() {
-    for interval in ["0.02", "0"] {
+    for (interval, quiet) in [("0.02", false), ("0", false), ("0.02", true)] {
         let file = Arc::new(ProgressFile::default());
         file.0.lock().unwrap().insert(
             "progress-earlier-1.md".into(),
             b"Note from an earlier job.\n".to_vec(),
         );
+        let mut decision = delegate();
+        if quiet {
+            decision["reply"] = Value::Null;
+        }
         let h = Harness::with_machines(
-            vec![delegate()],
+            vec![decision],
             false,
             file.clone(),
             &format!("[limits]\nprogress_interval={interval}\nprogress_chars=200"),
@@ -4831,7 +4835,7 @@ async fn a_running_jobs_progress_notes_reach_the_thread_before_its_report() {
             .and_then(|rest| rest.split(' ').next())
             .map(str::to_owned);
         let job = h.scalar("SELECT id FROM jobs").await;
-        if interval == "0" {
+        if interval == "0" || quiet {
             assert_eq!(named, None);
         } else {
             assert_eq!(named.as_deref(), Some(&*format!("progress-{job}-1.md")));
@@ -4851,7 +4855,7 @@ async fn a_running_jobs_progress_notes_reach_the_thread_before_its_report() {
             }
         })
         .await;
-        if interval == "0" {
+        if interval == "0" || quiet {
             tokio::time::sleep(Duration::from_millis(100)).await;
             assert_eq!(
                 h.scalar("SELECT CAST(count(*) AS TEXT) FROM job_progress")

@@ -871,11 +871,16 @@ async fn run_task(t: Task, mut control: watch::Receiver<Signal>) -> Result<TaskE
         }
         brief.push_str(&prepared);
         // Progress notes (#105): each attempt writes its own file.
-        let watching = t.config.limits.progress_interval > 0.;
+        let job = t.job.clone();
+        let watching = t.config.limits.progress_interval > 0.
+            && t.store
+                .transact(move |u| super::progress::may_post(u, &job))
+                .await
+                .unwrap_or(false);
         let progress_file = super::artifacts::progress_file(&t.job);
         if watching {
             brief.push_str(&format!(
-                "\n\nProgress notes for this job go in {progress_file} in your working folder."
+                "\n\nProgress notes for this job go in {progress_file} in your working folder. Append a short, complete line at meaningful milestones and when blocked, stating confirmed progress or the specific blocker and next step. Include only facts approved for this thread; omit private context and raw tool arguments. Do not write repeated heartbeats."
             ));
         }
         let request = RunRequest {
