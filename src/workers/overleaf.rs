@@ -10,6 +10,17 @@ use crate::{
 };
 use fridica_agent::McpServer;
 
+const JOB_PROJECT: &str = "Thread-confirmed Overleaf project: https://www.overleaf.com/project/";
+
+pub(crate) fn job_project(brief: &str) -> Option<&str> {
+    let id = brief.lines().next()?.strip_prefix(JOB_PROJECT)?;
+    crate::config::overleaf::valid_id(id).then_some(id)
+}
+
+pub(crate) fn project_brief(project: &str, brief: &str) -> String {
+    format!("{JOB_PROJECT}{project}\n{brief}")
+}
+
 pub(crate) fn recipient(config: &Config, spec: &WorkerSpec) -> Option<Recipient> {
     let channel = spec.native_channel.as_deref()?;
     let scope = config.overleaf.native_scope.as_ref()?;

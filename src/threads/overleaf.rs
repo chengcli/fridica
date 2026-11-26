@@ -6,13 +6,6 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, sync::LazyLock};
 
-const JOB_PROJECT: &str = "Thread-confirmed Overleaf project: https://www.overleaf.com/project/";
-
-pub(crate) fn job_project(brief: &str) -> Option<&str> {
-    let id = brief.lines().next()?.strip_prefix(JOB_PROJECT)?;
-    crate::config::overleaf::valid_id(id).then_some(id)
-}
-
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?i)(?:https://(?:www\.)?overleaf\.com/project/|",
@@ -147,7 +140,7 @@ pub(super) fn check(decision: &mut Decision, request: &ParentRequest) -> Result<
         {
             return Err("The proposed job refers to a different Overleaf project. Please confirm the target with its project link in this thread.");
         }
-        job.brief = format!("{JOB_PROJECT}{id}\n{}", job.brief);
+        job.brief = crate::workers::overleaf::project_brief(id, &job.brief);
     }
     Ok(())
 }

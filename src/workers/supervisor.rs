@@ -270,7 +270,7 @@ impl Supervisor {
                 &config,
                 &view,
                 &j.session_id,
-                crate::threads::overleaf::job_project(&j.brief),
+                super::overleaf::job_project(&j.brief),
             )
             .and_then(|mut spec| {
                 spec.instructions = self.factory.instructions(&config, &view)?;
