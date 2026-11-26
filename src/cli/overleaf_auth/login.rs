@@ -2,9 +2,10 @@
 //! no listener, worker inventory, model client or credential read during preparation.
 use crate::config::{
     editor, loader,
-    overleaf::{Login, Scope, Settings},
+    overleaf::{Scope, Settings},
     setup, LoadContext,
 };
+use crate::research::overleaf::{node, resources};
 use anyhow::{ensure, Context, Result};
 use clap::Args;
 use sha2::{Digest, Sha256};
@@ -25,10 +26,10 @@ pub struct Options {
     /// Expected existing Overleaf account; saved in owner configuration.
     #[arg(long)]
     expected_email: Option<String>,
-    /// Single explicitly authorized Overleaf project ID.
+    /// Optional legacy restriction to one Overleaf project ID.
     #[arg(long)]
     project: Option<String>,
-    /// Optional exact job channel; forwarding still requires bind-recipient.
+    /// Optional restriction to one allowed job channel.
     #[arg(long)]
     channel: Option<String>,
     /// Extracted portable bundle directory containing pinned node_modules. No npm needed.
@@ -67,8 +68,7 @@ pub fn run(o: Options) -> Result<()> {
             .to_ascii_lowercase(),
         project: o
             .project
-            .or_else(|| old_scope.map(|s| s.project.clone()))
-            .context("--project is required on first login")?,
+            .or_else(|| old_scope.and_then(|s| s.project.clone())),
         channel: o
             .channel
             .or_else(|| old_scope.and_then(|s| s.channel.clone())),
@@ -89,7 +89,7 @@ pub fn run(o: Options) -> Result<()> {
     if let Some(p) = o.browser {
         login.browser = Some(absolute(p)?);
     }
-    let resources = resources(&login, &path, &context.home)?;
+    let resources = resources(&login, Some(&path), &context.home)?;
     let node = node(&login)?;
     let helper = prepare(
         &resources,
@@ -115,9 +115,10 @@ pub fn run(o: Options) -> Result<()> {
         .arg("--config")
         .arg(&path)
         .arg("--expected-email")
-        .arg(&scope.expected_email)
-        .arg("--project")
-        .arg(&scope.project);
+        .arg(&scope.expected_email);
+    if let Some(project) = &scope.project {
+        command.arg("--project").arg(project);
+    }
     if let Some(browser) = &login.browser {
         command.arg("--browser").arg(browser);
     }
@@ -138,11 +139,14 @@ pub fn run(o: Options) -> Result<()> {
     }
     let mut scope_table = Table::new();
     scope_table["expected_email"] = value(&scope.expected_email);
-    scope_table["project"] = value(&scope.project);
+    if let Some(project) = &scope.project {
+        scope_table["project"] = value(project);
+    }
     if let Some(channel) = &scope.channel {
         scope_table["channel"] = value(channel);
     }
     document["overleaf"]["native_scope"] = Item::Table(scope_table);
+    document["overleaf"]["enabled"] = value(true);
     login.resources = Some(resources);
     let mut login_table = Table::new();
     for (key, path) in [
@@ -160,7 +164,7 @@ pub fn run(o: Options) -> Result<()> {
         editor::replace(&path, &editor::fingerprint(&source), &updated)?;
     }
     if o.prepare_only {
-        println!("Overleaf login prepared. Recipient binding unchanged; absent binding denies forwarding.");
+        println!("Overleaf account login prepared. Eligible workers attach native tools automatically; existing restrictions are retained.");
         return Ok(());
     }
     // std::process::Command has no remove_arg; use the same sanitized child configuration.
@@ -187,53 +191,6 @@ pub fn run(o: Options) -> Result<()> {
     Ok(())
 }
 
-fn node(login: &Login) -> Result<PathBuf> {
-    if let Some(p) = &login.node {
-        ensure!(executable(p), "configured Node is not executable");
-        return Ok(p.clone());
-    }
-    let mut paths: Vec<_> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|p| p.join("node"))
-        .collect();
-    paths.extend(
-        [
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            "/usr/bin/node",
-        ]
-        .map(PathBuf::from),
-    );
-    paths
-        .into_iter()
-        .find(|p| executable(p))
-        .context("Node >=20 not found; install ordinary Node or pass --node /absolute/node")
-}
-fn executable(p: &Path) -> bool {
-    fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-fn resources(login: &Login, config: &Path, home: &Path) -> Result<PathBuf> {
-    let mut candidates = vec![];
-    if let Some(p) = &login.resources {
-        candidates.push(p.clone());
-    } else {
-        candidates.push(
-            config
-                .parent()
-                .context("config directory missing")?
-                .join("overleaf-native"),
-        );
-        if let Some(prefix) = std::env::current_exe()?.parent().and_then(Path::parent) {
-            candidates.push(prefix.join("share/fridica/overleaf-native"));
-        }
-        candidates.push(home.join("Library/Application Support/Fridica/overleaf-native"));
-        let data = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".local/share"));
-        candidates.push(data.join("fridica/overleaf-native"));
-    }
-    candidates.into_iter().find(|p| p.join("node_modules/@netique/overleaf-mcp/dist/auth/browserLogin.js").is_file())
-        .context("extract the supplied portable bundle, then pass --resources /absolute/overleaf-native (no npm needed)")?.canonicalize().context("cannot resolve Overleaf resources")
-}
 fn prepare(resources: &Path, parent: &Path) -> Result<PathBuf> {
     let id = format!(
         "{:x}",

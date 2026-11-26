@@ -5,7 +5,9 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-git = os.environ["FRIDICA_REAL_GIT"]
+git = os.environ.get("FRIDICA_REAL_GIT")
+if not git:
+    sys.exit("Git is unavailable on this worker")
 project = os.environ["FRIDICA_THREAD_PROJECT"]
 args = sys.argv[1:]
 i = 0

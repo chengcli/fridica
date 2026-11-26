@@ -41,8 +41,7 @@ pub struct SystemLauncher {
     // Independent bounded probe capacity survives dropped admission futures.
     probes: Arc<Semaphore>,
     keyring_names: std::sync::OnceLock<Vec<String>>,
-    native_recipient: Option<crate::config::overleaf::Recipient>,
-    native_scope: Option<crate::config::overleaf::Scope>,
+    native_config: Config,
 }
 impl SystemLauncher {
     /// Best-effort retention after admission, before inputs or backend work
@@ -77,8 +76,7 @@ impl SystemLauncher {
             isolation: crate::exec::isolation::Isolation::new(config, &[])?,
             probes: Arc::new(Semaphore::new(1)),
             keyring_names: Default::default(),
-            native_recipient: config.overleaf.native_recipient.clone(),
-            native_scope: config.overleaf.native_scope.clone(),
+            native_config: config.clone(),
         })
     }
 }
@@ -89,8 +87,10 @@ impl Launcher for SystemLauncher {
     fn validate_config(&self, config: &Config) -> anyhow::Result<()> {
         let current = crate::exec::isolation::Isolation::new(config, &[])?;
         if current != self.isolation
-            || config.overleaf.native_recipient != self.native_recipient
-            || config.overleaf.native_scope != self.native_scope
+            || config.overleaf != self.native_config.overleaf
+            || config.slack.channels != self.native_config.slack.channels
+            || config.slack.workspace != self.native_config.slack.workspace
+            || config.machines != self.native_config.machines
         {
             anyhow::bail!("worker isolation configuration changed; rebuild runtime adapters");
         }
@@ -202,24 +202,8 @@ impl Launcher for SystemLauncher {
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
         use crate::config::overleaf::NATIVE_ENV;
         use crate::core::secret::SecretStore;
-        let native_allowed =
-            self.native_recipient.as_ref().is_some_and(|r| {
-                r.permits(&spec.worker_id, &spec.machine.name, &spec.workspace.name)
-            }) && spec.mcp_servers.iter().any(|s| {
-                s.name == "overleaf"
-                    && s.env_vars.iter().any(|n| n == NATIVE_ENV)
-                    && s.args.windows(2).any(|a| {
-                        a[0] == "--channel"
-                            && self
-                                .native_scope
-                                .as_ref()
-                                .and_then(|s| s.channel.as_deref())
-                                == Some(a[1].as_str())
-                    })
-                    && s.args
-                        .windows(2)
-                        .any(|a| a[0] == "--worker" && a[1] == spec.worker_id)
-            }) && !spec.excluded_env.iter().any(|n| n == NATIVE_ENV);
+        let native_allowed = super::overleaf::server(&self.native_config, spec)
+            .is_some_and(|expected| spec.mcp_servers.iter().any(|s| s == &expected));
         let mut spec = spec.clone();
         if !native_allowed {
             spec.excluded_env.push(NATIVE_ENV.into());
@@ -254,12 +238,20 @@ impl Launcher for SystemLauncher {
                 .get(std::ffi::OsStr::new(NATIVE_ENV))
                 .and_then(|value| value.to_str())
             {
+                let mut scope = self
+                    .native_config
+                    .overleaf
+                    .native_scope
+                    .clone()
+                    .expect("authorized scope");
+                scope.project.clone_from(&spec.thread_project);
                 let raw = crate::config::overleaf::bound_session(
                     raw,
-                    self.native_recipient
-                        .as_ref()
+                    &super::overleaf::recipient(&self.native_config, &spec)
                         .expect("authorized recipient"),
-                    self.native_scope.as_ref().expect("authorized scope"),
+                    self.native_config.overleaf.native_recipient.as_ref(),
+                    &scope,
+                    spec.native_channel.as_deref().expect("admitted channel"),
                 )
                 .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
                 environment.insert(NATIVE_ENV.into(), raw.into());

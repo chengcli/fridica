@@ -629,3 +629,27 @@ async fn research_checks_use_worker_probes_and_report_policy_skips() {
     assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Warn);
     assert!(report.text().contains("OVERLEAF_PROJECT_ID"));
 }
+
+#[tokio::test]
+async fn native_account_doctor_checks_resources_without_git_or_session_forwarding() {
+    let mut fixture = Fixture::new();
+    fixture.append("\n[overleaf]\nenabled=true\n[overleaf.native_scope]\nexpected_email='owner@example.invalid'\n");
+    let source = std::fs::read_to_string(&fixture.path).unwrap();
+    std::fs::write(
+        &fixture.path,
+        source.replace("gpu_confine=false", "gpu_confine=false\nnetwork=['*']"),
+    )
+    .unwrap();
+    fixture
+        .env
+        .remove(std::ffi::OsStr::new("OVERLEAF_GIT_TOKEN"));
+    fixture
+        .env
+        .insert("OVERLEAF_NATIVE_SESSION".into(), "must-not-forward".into());
+    fixture.executable("fridica", "#!/bin/sh\n[ -z \"$OVERLEAF_NATIVE_SESSION\" ] && [ \"$1\" = overleaf-mcp ] && [ \"$4\" = --native-probe ] && [ \"$5\" = --probe ] && echo fridica-overleaf-mcp:native-ready\n");
+    let report = fixture.run().await;
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Warn);
+    fixture.executable("fridica", "#!/bin/sh\nexit 1\n");
+    let report = fixture.run().await;
+    assert_eq!(status(&report, "Overleaf MCP local:project"), Status::Fail);
+}

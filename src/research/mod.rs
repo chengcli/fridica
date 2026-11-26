@@ -1,4 +1,6 @@
 //! Bundled research tools and the worker placements that can run them.
+pub(crate) mod overleaf;
+
 use crate::config::{registry::Policy, Config};
 use fridica_agent::McpServer;
 use std::path::Path;
