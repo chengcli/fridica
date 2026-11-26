@@ -18,8 +18,12 @@ fn envelope() -> String {
 
 #[tokio::test]
 async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_ambient() {
+    let mut legacy_refusals_missing = vec![];
     for case in [
+        "automatic",
+        "automatic_project",
         "missing",
+        "missing_channel",
         "scope",
         "project",
         "worker",
@@ -35,7 +39,7 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("work")).unwrap();
         std::fs::create_dir(root.join("bin")).unwrap();
-        let source = "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CEXAMPLE']\n[overleaf]\nenabled=true\nnative_adapter=['python3','/fixture/adapter.py']\n[machines.dungeon3]\ntransport='ssh'\nhost='fixture'\n[machines.dungeon3.policy]\nmode='full'\ngpu_confine=false\n[machines.dungeon3.workspaces]\nsnapy='work'\n";
+        let source = "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CEXAMPLE']\n[overleaf]\nenabled=true\nnative_adapter=['python3','/fixture/adapter.py']\n[machines.dungeon3]\ntransport='ssh'\nhost='fixture'\n[machines.dungeon3.policy]\nmode='full'\nnetwork=['*']\ngpu_confine=false\n[machines.dungeon3.workspaces]\nsnapy='work'\n";
         let context = LoadContext {
             home: root.clone(),
             runtime_dir: None,
@@ -53,14 +57,17 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         .unwrap();
         config.overleaf.native_scope = Some(fridica::config::overleaf::Scope {
             expected_email: "owner@example.invalid".into(),
-            project: PROJECT.into(),
+            project: Some(PROJECT.into()),
             channel: Some(CHANNEL.into()),
         });
         if case == "scope" {
             config.overleaf.native_scope = None;
         }
         if case == "project" {
-            config.overleaf.native_scope.as_mut().unwrap().project = "4".repeat(24);
+            config.overleaf.native_scope.as_mut().unwrap().project = Some("4".repeat(24));
+        }
+        if case == "missing_channel" {
+            config.overleaf.native_scope.as_mut().unwrap().channel = None;
         }
         let recipient = Recipient {
             worker_id: WORKER.into(),
@@ -68,7 +75,7 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             workspace: "snapy".into(),
             expires_at: None,
         };
-        if case != "missing" {
+        if !matches!(case, "missing" | "automatic" | "automatic_project") {
             config.overleaf.native_recipient = Some(recipient);
         }
         if case == "expired" {
@@ -82,20 +89,40 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let mut server = fridica_agent::overleaf::overleaf("fridica");
         // Simulate even a stale/requested native profile: the launch gate is authoritative.
         server.env_vars.push("OVERLEAF_NATIVE_SESSION".into());
+        server.command = "python3".into();
         server.args = vec![
+            "/fixture/adapter.py".into(),
+            "--builtin".into(),
+            "fridica".into(),
+            "--workspace".into(),
+            root.join("work").to_string_lossy().into_owned(),
             "--channel".into(),
-            if case == "channel" {
-                "OTHER".into()
-            } else {
-                CHANNEL.into()
-            },
+            CHANNEL.into(),
             "--worker".into(),
             WORKER.into(),
         ];
+        if matches!(case, "automatic" | "automatic_project") {
+            config.overleaf.native_adapter.clear();
+            let scope = config.overleaf.native_scope.as_mut().unwrap();
+            if case == "automatic" {
+                scope.project = None;
+            }
+            scope.channel = None;
+            server.command = "fridica".into();
+            server.args = vec![
+                "overleaf-mcp".into(),
+                "--workspace-write".into(),
+                root.join("work").to_string_lossy().into_owned(),
+                "--native-channel".into(),
+                CHANNEL.into(),
+                "--native-worker".into(),
+                WORKER.into(),
+            ];
+        }
         let machine = &config.machines.machines[0];
         let mut spec: WorkerSpec = serde_json::from_value(json!({"worker_id":WORKER,"machine":machine,
             "workspace":machine.workspaces[0],"mcp_servers":[server],"backend":"claude","instructions":"","model":"","reasoning_effort":"",
-            "job_timeout":10,"idle_timeout":10,"excluded_env":[],"slot":0})).unwrap();
+            "job_timeout":10,"idle_timeout":10,"excluded_env":[],"slot":0,"native_channel": if case == "channel" { "COTHER" } else { CHANNEL }})).unwrap();
         match case {
             "worker" => spec.worker_id = "worker-22222222-2222-4222-8222-222222222222".into(),
             "machine" => spec.machine.name = "different".into(),
@@ -105,6 +132,13 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let fake = root.join("bin/ssh");
         std::fs::write(&fake,"#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nshift\nexec /usr/bin/env -i PATH=/usr/bin:/bin OVERLEAF_NATIVE_SESSION=fixture-target-ambient /bin/sh -c \"$1\"\n").unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut saved: serde_json::Value = serde_json::from_str(&envelope()).unwrap();
+        if matches!(case, "automatic" | "automatic_project") {
+            saved["schema"] = 3.into();
+            if case == "automatic" {
+                saved.as_object_mut().unwrap().remove("projects");
+            }
+        }
         let environment = BTreeMap::from([
             (
                 "PATH".into(),
@@ -112,7 +146,7 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             ),
             ("OVERLEAF_GIT_TOKEN".into(), "fixture-git".into()),
             ("ADS_TOKEN".into(), "fixture-ads".into()),
-            ("OVERLEAF_NATIVE_SESSION".into(), envelope().into()),
+            ("OVERLEAF_NATIVE_SESSION".into(), saved.to_string().into()),
         ]);
         let launcher =
             SystemLauncher::from_config(&config, root.clone(), environment, root.clone()).unwrap();
@@ -122,14 +156,33 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             assert!(launch_result.is_err());
             continue;
         }
+        if matches!(case, "missing" | "missing_channel") {
+            if launch_result.is_ok() {
+                legacy_refusals_missing.push(case);
+            }
+            continue;
+        }
         let mut launch = launch_result.unwrap();
         assert_eq!(
             launch
                 .env
                 .contains_key(OsStr::new("OVERLEAF_NATIVE_SESSION")),
-            case == "allowed"
+            matches!(case, "allowed" | "automatic" | "automatic_project")
         );
         assert!(!launch.argv.iter().any(|a| a.contains("fixture-native")));
+        if let Some(raw) = launch.env.get(OsStr::new("OVERLEAF_NATIVE_SESSION")) {
+            let grant: serde_json::Value = serde_json::from_str(raw.to_str().unwrap()).unwrap();
+            assert_eq!(grant["recipient"]["worker_id"], WORKER);
+            assert_eq!(grant["channel"], CHANNEL);
+            assert_eq!(
+                grant["projects"],
+                if case == "automatic" {
+                    json!(null)
+                } else {
+                    json!([PROJECT])
+                }
+            );
+        }
         isolation::read_only_ssh_probe(&mut launch);
         let output = process::run_once(launch, vec![], Duration::from_secs(10), 4096)
             .await
@@ -141,9 +194,17 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             String::from_utf8_lossy(&output.stderr)
         );
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(result["native"], case == "allowed", "{case}");
+        assert_eq!(
+            result["native"],
+            matches!(case, "allowed" | "automatic" | "automatic_project"),
+            "{case}"
+        );
         assert_eq!(result["git"], "fixture-git");
     }
+    assert!(
+        legacy_refusals_missing.is_empty(),
+        "legacy sessions forwarded without grants: {legacy_refusals_missing:?}"
+    );
 }
 
 #[test]
@@ -174,13 +235,7 @@ fn standalone_login_prepares_scope_and_resources_without_backend_or_worker() {
         cmd.env("PATH", root.path())
             .args(["overleaf-auth", "login", "--prepare-only", "--config"])
             .arg(&config)
-            .args([
-                "--expected-email",
-                "Owner@example.invalid",
-                "--project",
-                PROJECT,
-                "--resources",
-            ])
+            .args(["--expected-email", "Owner@example.invalid", "--resources"])
             .arg(&resources)
             .arg("--node")
             .arg(&node);
@@ -191,6 +246,8 @@ fn standalone_login_prepares_scope_and_resources_without_backend_or_worker() {
     assert!(source.starts_with("# keep owner comments"));
     assert!(source.contains("owner@example.invalid"));
     assert!(!source.contains("native_recipient"));
+    assert!(!source.contains("project ="));
+    assert!(!source.contains("channel ="));
     assert_eq!(
         std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
         0o600

@@ -36,6 +36,7 @@ pub(crate) fn launch(
             .cloned()
             .unwrap_or_default(),
         mcp_servers: vec![server],
+        native_channel: None,
         worker_id: String::new(),
         machine: machine.clone(),
         workspace: workspace.clone(),

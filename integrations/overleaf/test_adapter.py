@@ -1,4 +1,4 @@
-"""Four focused checks: actual pinned process, boundaries, identity, no replay."""
+"""Focused offline checks: pinned process, targeting, identity and no replay."""
 import json
 import os
 from pathlib import Path
@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import uuid
+from types import SimpleNamespace
 import adapter as a
 
 ROOT = Path(__file__).resolve().parent
@@ -63,12 +64,17 @@ class AdapterChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             a.session(json.dumps(grant), "worker-22222222-2222-4222-8222-222222222222", CHANNEL)
         schema = {"properties": {k: {} for k in ["project_id", "path", "old_string", "new_string", "expected_version", "track", "strict_version", "thread_id", "content"]}}
-        for name, args in (("native_accept_changes", {}), ("native_reply_comment", {"project_id": "2" * 24}),
-                           ("native_suggest_edit", {"track": "off"}), ("native_add_comment", {})):
+        valid = dict(project_id=PROJECT, expected_version=3, operation_id=str(uuid.uuid4()))
+        for name, args in (("native_accept_changes", valid),
+                           ("native_reply_comment", {**valid, "project_id": "2" * 24}),
+                           ("native_suggest_edit", {**valid, "track": "off"}),
+                           ("native_suggest_edit", {**valid, "strict_version": False}),
+                           ("native_suggest_edit", {**valid, "expected_version": None}),
+                           ("native_add_comment", {"project_id": PROJECT})):
             with self.assertRaises(ValueError):
-                a.arguments(name, args, schema, PROJECT)
-        op, args, _ = a.arguments("native_suggest_edit", dict(old_string="a", new_string="b", expected_version=3,
-                                 operation_id=str(uuid.uuid4())), schema, PROJECT)
+                a.arguments(name, args, schema, [PROJECT])
+        op, args, _ = a.arguments("native_suggest_edit", dict(project_id=PROJECT, old_string="a", new_string="b", expected_version=3,
+                                 operation_id=str(uuid.uuid4())), schema, [PROJECT])
         self.assertEqual(op, "find_and_replace")
         self.assertTrue(args["strict_version"])
         self.assertEqual(args["track"], "on")
@@ -76,10 +82,43 @@ class AdapterChecks(unittest.TestCase):
     def test_expected_account_and_project(self):
         grant = {"projects": [PROJECT], "account_id": "1" * 24, "expected_email": "owner@example.invalid"}
         body = '<meta name="ol-project_id" content="' + PROJECT + '\"><meta name="ol-user" content=\'' + json.dumps({"_id": "1" * 24, "email": "owner@example.invalid"}) + "'>"
-        a.identity(body, grant)
+        a.identity(body, grant, PROJECT)
         for changed in (body.replace("owner@", "other@"), body.replace(PROJECT, "2" * 24)):
             with self.assertRaises(ValueError):
-                a.identity(changed, grant)
+                a.identity(changed, grant, PROJECT)
+
+    def test_explicit_two_project_dispatch_and_legacy_restrictions(self):
+        grant = dict(schema=3, cookie="overleaf_session2=fixture", account_id="1" * 24,
+                     expected_email="owner@example.invalid", operations=a.OPERATIONS,
+                     channel=CHANNEL, recipient=dict(worker_id=WORKER, machine="dungeon3", workspace="snapy"))
+        adapter = a.Adapter.__new__(a.Adapter)
+        adapter.raw = json.dumps(grant)
+        adapter.grant = a.session(adapter.raw, WORKER, CHANNEL)
+        adapter.options = SimpleNamespace(worker=WORKER, channel=CHANNEL)
+        schema = {"properties": {"project_id": {"type": "string"}}}
+        adapter.schemas = {op: {"name": op, "inputSchema": schema} for op in a.OPERATIONS}
+        adapter.builtin = Mock()
+        adapter.builtin.call.side_effect = lambda *_: {"tools": []}
+        adapter.native = Mock()
+        adapter.native.call.return_value = {"content": []}
+        tools = adapter.dispatch("tools/list", {})["tools"]
+        for tool in tools:
+            self.assertIn("project_id", tool["inputSchema"]["required"])
+            self.assertNotIn("default", tool["inputSchema"]["properties"]["project_id"])
+        with patch.object(a, "verify_identity") as verify:
+            for project in (PROJECT, "2" * 24, PROJECT):
+                adapter.dispatch("tools/call", {"name": "native_list_comments", "arguments": {"project_id": project}})
+                self.assertEqual(adapter.native.call.call_args.args[1]["arguments"]["project_id"], project)
+                self.assertEqual(verify.call_args.args[1], project)
+            with self.assertRaisesRegex(ValueError, "explicit project_id"):
+                adapter.dispatch("tools/call", {"name": "native_list_comments", "arguments": {}})
+            self.assertEqual(adapter.native.call.call_count, 3)
+            grant.update(schema=2, projects=[PROJECT])
+            adapter.raw = json.dumps(grant)
+            adapter.grant = a.session(adapter.raw, WORKER, CHANNEL)
+            with self.assertRaises(ValueError):
+                adapter.dispatch("tools/call", {"name": "native_list_comments", "arguments": {"project_id": "2" * 24}})
+            self.assertEqual(adapter.native.call.call_count, 3)
 
     def test_receipt_prevents_replay_after_success_and_unknown_outcome(self):
         with tempfile.TemporaryDirectory(dir=os.environ["TASK_TMP"]) as directory:
@@ -88,6 +127,9 @@ class AdapterChecks(unittest.TestCase):
             opid = str(uuid.uuid4())
             for _ in range(2):
                 a.write_once(root, "reply_comment", {"content": "private text"}, opid, call)
+            self.assertEqual(call.call_count, 1)
+            with self.assertRaisesRegex(ValueError, "another payload"):
+                a.write_once(root, "reply_comment", {"content": "private text", "project_id": "2" * 24}, opid, call)
             self.assertEqual(call.call_count, 1)
             opid = str(uuid.uuid4())
             call = Mock(side_effect=TimeoutError)

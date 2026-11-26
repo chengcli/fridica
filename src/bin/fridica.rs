@@ -42,6 +42,14 @@ enum Command {
         /// Confine the server and its subprocesses to writes in this worker workspace.
         #[arg(long, value_name = "PATH")]
         workspace_write: Option<PathBuf>,
+        /// Trusted launcher context for native tools (no owner login on workers).
+        #[arg(long, hide = true, requires_all = ["native_channel", "workspace_write"], conflicts_with = "probe")]
+        native_worker: Option<String>,
+        #[arg(long, hide = true, requires = "native_worker")]
+        native_channel: Option<String>,
+        /// Discover native and built-in tools without reading or forwarding a session.
+        #[arg(long, hide = true, requires_all = ["probe", "workspace_write"], conflicts_with = "native_worker")]
+        native_probe: bool,
         /// Check bundled tools and verify project read access when OVERLEAF_PROJECT_ID is set.
         #[arg(long)]
         probe: bool,
@@ -205,7 +213,20 @@ async fn run(cli: Cli) -> Result<()> {
         Command::OverleafMcp {
             probe,
             workspace_write,
+            native_worker,
+            native_channel,
+            native_probe,
         } => {
+            if native_probe {
+                return fridica::exec::overleaf::probe_native(
+                    workspace_write.as_deref().expect("probe workspace"),
+                );
+            }
+            if let (Some(worker), Some(channel), Some(root)) =
+                (&native_worker, &native_channel, &workspace_write)
+            {
+                return fridica::exec::overleaf::launch_native(root, worker, channel);
+            }
             if let Some(root) = workspace_write {
                 return fridica::exec::overleaf::launch(&root, probe);
             }

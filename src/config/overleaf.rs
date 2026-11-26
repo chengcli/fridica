@@ -30,7 +30,7 @@ pub struct Settings {
     pub native_adapter: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_recipient: Option<Recipient>,
-    /// Explicit owner scope; absent scope denies forwarding even with a saved session.
+    /// Verified account and optional legacy limits; absent scope denies native forwarding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_scope: Option<Scope>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,15 +52,16 @@ pub struct Login {
 #[serde(deny_unknown_fields)]
 pub struct Scope {
     pub expected_email: String,
-    pub project: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
 }
 impl Scope {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            valid_id(&self.project) && valid_email(&self.expected_email),
-            "native login requires an explicit account email and 24-character project ID"
+            self.project.as_deref().is_none_or(valid_id) && valid_email(&self.expected_email),
+            "native login requires an account email and, if restricted, a 24-character project ID"
         );
         ensure!(
             self.channel
@@ -147,13 +148,12 @@ pub fn validate(config: &super::Config) -> Result<()> {
         r.validate()?;
         ensure!(
             config.overleaf.enabled
-                && !config.overleaf.native_adapter.is_empty()
                 && config
                     .machines
                     .get(&r.machine)
                     .and_then(|m| m.workspace(&r.workspace))
                     .is_some(),
-            "native recipient requires an enabled registered placement and installed adapter argv"
+            "native recipient requires an enabled registered placement"
         );
     }
     Ok(())
@@ -167,7 +167,7 @@ struct Session {
     cookie: String,
     account_id: String,
     expected_email: String,
-    projects: Vec<String>,
+    projects: Option<Vec<String>>,
     operations: Vec<String>,
     expires_at: Option<u64>,
     recipient: Option<Recipient>,
@@ -178,9 +178,11 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
     let s: Session =
         serde_json::from_str(raw).map_err(|_| anyhow::anyhow!("invalid native session"))?;
     ensure!(
-        s.schema == 2
-            && s.projects.len() == 1
-            && valid_id(&s.projects[0])
+        matches!(s.schema, 2 | 3)
+            && (s.schema != 2 || s.projects.as_ref().is_some_and(|p| p.len() == 1))
+            && s.projects
+                .as_ref()
+                .is_none_or(|p| !p.is_empty() && p.iter().all(|id| valid_id(id)))
             && s.operations == OPERATIONS
             && valid_id(&s.account_id)
             && valid_email(&s.expected_email)
@@ -223,29 +225,119 @@ pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<()> {
     scope.validate()?;
     let s: Session = serde_json::from_str(raw)?;
     ensure!(
-        s.projects == [scope.project.clone()]
-            && s.expected_email == scope.expected_email
+        s.expected_email == scope.expected_email
+            && scope
+                .project
+                .as_ref()
+                .is_none_or(|p| s.projects.as_ref().is_none_or(|ids| ids.contains(p)))
             && s.channel
                 .as_ref()
-                .is_none_or(|c| Some(c) == scope.channel.as_ref()),
+                .is_none_or(|c| scope.channel.as_ref().is_none_or(|limit| c == limit)),
         "saved native session does not match configured account/project/channel"
     );
     Ok(())
 }
-pub(crate) fn bound_session(raw: &str, recipient: &Recipient, scope: &Scope) -> Result<String> {
+/// A new account-wide login cannot erase a legacy grant stored with the session.
+pub(crate) fn renew_session(previous: &[u8], raw: &str) -> Result<String> {
+    validate_session(raw)?;
+    let old: Session = serde_json::from_slice(previous)
+        .map_err(|_| anyhow::anyhow!("invalid saved session; explicit revocation required"))?;
+    let mut new: serde_json::Value = serde_json::from_str(raw)?;
+    ensure!(
+        old.account_id == new["account_id"] && old.expected_email == new["expected_email"],
+        "native account changed; explicit revocation required"
+    );
+    if let Some(projects) = old.projects {
+        let permitted: Vec<_> = projects
+            .into_iter()
+            .filter(|p| {
+                new["projects"]
+                    .as_array()
+                    .is_none_or(|ids| ids.iter().any(|id| id == p))
+            })
+            .collect();
+        new["projects"] = serde_json::json!(permitted);
+    } else {
+        ensure!(
+            old.schema == 3,
+            "invalid legacy grant; explicit revocation required"
+        );
+    }
+    if let Some(channel) = old.channel {
+        ensure!(
+            new["channel"].is_null() || new["channel"] == channel,
+            "native channel changed; explicit revocation required"
+        );
+        new["channel"] = channel.into();
+    }
+    if let Some(recipient) = old.recipient {
+        let saved = serde_json::to_value(recipient)?;
+        ensure!(
+            new["recipient"].is_null() || new["recipient"] == saved,
+            "native recipient changed; explicit revocation required"
+        );
+        new["recipient"] = saved;
+    }
+    if let Some(deadline) = old.expires_at {
+        new["expires_at"] = serde_json::json!(new["expires_at"]
+            .as_u64()
+            .map_or(deadline, |t| t.min(deadline)));
+    }
+    let renewed = new.to_string();
+    validate_session(&renewed)?;
+    Ok(renewed)
+}
+
+pub(crate) fn bound_session(
+    raw: &str,
+    recipient: &Recipient,
+    configured_recipient: Option<&Recipient>,
+    scope: &Scope,
+    channel: &str,
+) -> Result<String> {
     validate_session_scope(raw, scope)?;
-    let channel = scope
-        .channel
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("explicit native channel required"))?;
+    recipient.validate()?;
+    let saved: Session = serde_json::from_str(raw)?;
+    // Schema2 predates automatic admission. An absent legacy grant was a denial,
+    // not permission to bind the saved login to any newly admitted worker.
+    ensure!(
+        saved.schema == 3
+            || (scope.channel.is_some()
+                && configured_recipient.is_some_and(|r| r.permits(
+                    &recipient.worker_id,
+                    &recipient.machine,
+                    &recipient.workspace
+                ))),
+        "legacy native session requires configured recipient and channel grants"
+    );
+    ensure!(
+        super::loader::slack_id(channel, "CG")
+            && scope.channel.as_deref().is_none_or(|c| c == channel)
+            && saved.channel.as_deref().is_none_or(|c| c == channel)
+            && saved.recipient.as_ref().is_none_or(|r| r.permits(
+                &recipient.worker_id,
+                &recipient.machine,
+                &recipient.workspace
+            )),
+        "saved native session does not permit this recipient/channel"
+    );
     let mut value: serde_json::Value = serde_json::from_str(raw)?;
-    if let Some(deadline) = recipient.expires_at {
+    if let Some(project) = &scope.project {
+        value["projects"] = serde_json::json!([project]);
+    }
+    for deadline in [
+        recipient.expires_at,
+        saved.recipient.and_then(|r| r.expires_at),
+    ]
+    .into_iter()
+    .flatten()
+    {
         value["expires_at"] = serde_json::json!(value["expires_at"]
             .as_u64()
             .map_or(deadline, |t| t.min(deadline)));
     }
     value["recipient"] = serde_json::to_value(recipient)?;
-    value["channel"] = channel.as_str().into();
+    value["channel"] = channel.into();
     let raw = value.to_string();
     validate_session(&raw)?;
     Ok(raw)
@@ -260,7 +352,7 @@ mod tests {
     fn grant_is_exact_and_lifetime_is_not_artificially_shortened() {
         let scope = Scope {
             expected_email: "owner@example.invalid".into(),
-            project: PROJECT.into(),
+            project: Some(PROJECT.into()),
             channel: Some(CHANNEL.into()),
         };
         let r = Recipient {
@@ -270,8 +362,10 @@ mod tests {
             expires_at: None,
         };
         let s = serde_json::json!({"schema":2,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":"owner@example.invalid", "projects":[PROJECT], "operations":OPERATIONS});
-        let b: serde_json::Value =
-            serde_json::from_str(&bound_session(&s.to_string(), &r, &scope).unwrap()).unwrap();
+        let b: serde_json::Value = serde_json::from_str(
+            &bound_session(&s.to_string(), &r, Some(&r), &scope, CHANNEL).unwrap(),
+        )
+        .unwrap();
         assert!(b["expires_at"].is_null());
         assert_eq!(b["channel"], CHANNEL);
         assert!(!r.permits(
@@ -286,8 +380,67 @@ mod tests {
         .is_err());
         let mut timed = r;
         timed.expires_at = Some(now() + 60);
-        let b: serde_json::Value =
-            serde_json::from_str(&bound_session(&s.to_string(), &timed, &scope).unwrap()).unwrap();
+        let b: serde_json::Value = serde_json::from_str(
+            &bound_session(&s.to_string(), &timed, Some(&timed), &scope, CHANNEL).unwrap(),
+        )
+        .unwrap();
         assert_eq!(b["expires_at"], timed.expires_at.unwrap());
+    }
+    #[test]
+    fn account_session_retains_saved_and_configured_legacy_limits() {
+        let scope = Scope {
+            expected_email: "owner@example.invalid".into(),
+            project: None,
+            channel: None,
+        };
+        let recipient = Recipient {
+            worker_id: "worker-11111111-1111-4111-8111-111111111111".into(),
+            machine: "test".into(),
+            workspace: "paper".into(),
+            expires_at: None,
+        };
+        let raw = serde_json::json!({"schema":3,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":scope.expected_email,"operations":OPERATIONS});
+        let bound: serde_json::Value = serde_json::from_str(
+            &bound_session(&raw.to_string(), &recipient, None, &scope, CHANNEL).unwrap(),
+        )
+        .unwrap();
+        assert!(bound.get("projects").is_none());
+        assert_eq!(bound["recipient"]["worker_id"], recipient.worker_id);
+        let restricted = Scope {
+            project: Some(PROJECT.into()),
+            channel: Some(CHANNEL.into()),
+            ..scope.clone()
+        };
+        let mut legacy: serde_json::Value = serde_json::from_str(
+            &bound_session(&raw.to_string(), &recipient, None, &restricted, CHANNEL).unwrap(),
+        )
+        .unwrap();
+        let deadline = now() + 3600;
+        legacy["schema"] = 2.into();
+        legacy["expires_at"] = deadline.into();
+        legacy["recipient"]["expires_at"] = deadline.into();
+        let legacy = legacy.to_string();
+        let renewed = renew_session(legacy.as_bytes(), &raw.to_string()).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&renewed).unwrap();
+        assert_eq!(saved["schema"], 3);
+        assert_eq!(saved["projects"], serde_json::json!([PROJECT]));
+        assert_eq!(saved["channel"], CHANNEL);
+        assert_eq!(saved["recipient"]["worker_id"], recipient.worker_id);
+        assert_eq!(saved["recipient"]["expires_at"], deadline);
+        assert_eq!(saved["expires_at"], deadline);
+        assert!(bound_session(&renewed, &recipient, None, &scope, "COTHER").is_err());
+        let other = Recipient {
+            worker_id: "worker-22222222-2222-4222-8222-222222222222".into(),
+            ..recipient.clone()
+        };
+        assert!(bound_session(&renewed, &other, None, &scope, CHANNEL).is_err());
+        assert!(renew_session(
+            legacy.as_bytes(),
+            &raw.to_string().replace("owner@", "other@")
+        )
+        .is_err());
+        assert!(
+            validate_session(&raw.to_string().replace("\"schema\":3", "\"schema\":2")).is_err()
+        );
     }
 }

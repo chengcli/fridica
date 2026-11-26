@@ -1519,3 +1519,90 @@ async fn changing_python_environment_restarts_worker_without_resuming() {
     assert!(second.calls.lock().unwrap()[0].resume.is_empty());
     h.supervisor.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn native_account_capability_follows_admitted_worker_and_legacy_limits() {
+    const ID: &str = "worker-11111111-1111-4111-8111-111111111111";
+    for case in ["automatic", "channel", "recipient", "disabled", "policy"] {
+        let h = Harness::with(Arc::new(NoJobIo), |config| {
+            config.overleaf.enabled = case != "disabled";
+            // No project, adapter path, Git token or manually entered worker binding.
+            config.overleaf.native_scope = Some(
+                serde_json::from_value(json!({
+                    "expected_email":"owner@example.invalid",
+                    "channel": if case == "channel" { Some("COTHER") } else { None }
+                }))
+                .unwrap(),
+            );
+            if case == "recipient" {
+                config.overleaf.native_recipient = Some(
+                    serde_json::from_value(json!({
+                        "worker_id":"worker-22222222-2222-4222-8222-222222222222",
+                        "machine":"gpu", "workspace":"unique"
+                    }))
+                    .unwrap(),
+                );
+            }
+            config
+                .machines
+                .machines
+                .iter_mut()
+                .find(|m| m.name == "gpu")
+                .unwrap()
+                .workspaces
+                .iter_mut()
+                .find(|w| w.name == "unique")
+                .unwrap()
+                .policy
+                .network = if case == "policy" {
+                vec![]
+            } else {
+                vec!["*".into()]
+            };
+        })
+        .await;
+        h.add(ID, "gpu", 0, false, 1).await;
+        assert_eq!(
+            h.supervisor.schedule().await.unwrap(),
+            vec![format!("{ID}-0")]
+        );
+        let f = h.factory.latest(ID);
+        let native = f
+            .spec
+            .mcp_servers
+            .iter()
+            .find(|s| s.env_vars.iter().any(|v| v == "OVERLEAF_NATIVE_SESSION"));
+        assert_eq!(native.is_some(), case == "automatic", "{case}");
+        if let Some(server) = native {
+            assert_eq!(server.name, "overleaf");
+            assert!(!server.auto_approve);
+            assert!(server
+                .args
+                .windows(2)
+                .any(|a| a[0] == "--native-worker" && a[1] == ID));
+            assert!(server
+                .args
+                .windows(2)
+                .any(|a| a[0] == "--native-channel" && a[1] == "CROOM"));
+            assert!(server
+                .args
+                .windows(2)
+                .any(|a| a[0] == "--workspace-write"
+                    && a[1] == f.spec.workspace.path.to_string_lossy()));
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while h.factory.admissions.lock().unwrap().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                f.spec.mcp_servers,
+                h.factory.admissions.lock().unwrap()[0].mcp_servers
+            );
+        }
+        f.release.add_permits(1);
+        h.wait_status(&format!("{ID}-0"), "done").await;
+        h.supervisor.close().await.unwrap();
+    }
+}

@@ -1,323 +1,132 @@
-# Native Overleaf: install the integration from public source
+# Overleaf account login and worker setup
 
-> Linux source installation and credential-free login preparation passed for this
-> change. The npm HTTPS/SSH source-metadata mismatch in [issue #162](https://github.com/chengcli/fridica/issues/162)
-> is corrected; the exact repository, immutable SHA, version and module checks remain.
-> The owner-side receipt below confirms credential-free macOS FD/MCP and receipt
-> checks. Real login, sandboxed local/SSH launch, authenticated native operations,
-> the latest Mac Rust build and listener activation remain unverified/deferred.
+## Installed wheel
 
-This is a trial of `integrate/overleaf-upstream-20261124`, **not** official main
-or PyPI v0.10.3. It builds the branch's own development version. Use a separate
-virtual environment and configuration; retain your old executable, config and
-state backup. Do not assume another release's database is compatible. No private
-archive or model-client application is needed. A prepared public checkout can
-serve directly as `--resources`.
-
-## Built wheel alternative
-
-Wheels built by this branch's packaging workflows include the pinned JS MCP,
-adapter/helper, license notices and exact corresponding AGPL source under
-`<venv>/share/fridica/overleaf-native`. Install a compatible built wheel in a fresh
-venv with `python -m pip install /path/to/fridica.whl`; with ordinary Node >=20 on
-PATH, run `fridica overleaf-auth login --expected-email alice@example.com
---project 0123456789abcdef01234567` using your authorized account/project instead
-of these fictional values. No `--resources`, npm, Rust, private bundle or model
-client is needed. Add `--prepare-only` for a credential-free preparation check.
-Actual login still requires Chromium and an unlocked OS store; recipient binding
-and idle activation remain separate. This describes a built integration wheel,
-not the already published PyPI v0.10.3 release.
-
-Source builds below remain explicit: `pip install .` alone builds the CLI;
-prepare the locked npm resources and pass `--resources`. To build a self-contained
-wheel from source, use the [wheel staging commands](../integrations/overleaf/README.md#building-release-wheel-resources)
-before Maturin. On a wheel-installed worker, point `native_adapter` at its own
-`<venv>/share/fridica/overleaf-native/adapter.py` with that worker's Python/Node;
-the same scope, channel, recipient and sandbox requirements below still apply.
-
-The packaging follow-up verified a Linux x86_64 `manylinux_2_34` wheel with
-Maturin 1.16.0 and Python 3.11. It installed into a fresh isolated venv and passed
-`scripts/smoke_wheel.sh`: synthetic `login --prepare-only` discovered the installed
-resources without `--resources`, with only Node on the preparation PATH.
-The surrounding Linux namespace disabled networking and hid the original source
-checkout, previous install and private bundles. Pin, adapter, license notices
-and corresponding-source hash checks passed. The sdist retained source-install
-inputs and excluded generated dependencies/data. This does not validate the
-release workflow's manylinux_2_28/macOS wheels, real login, authenticated worker
-confinement or activation; those checks were not run in this packaging follow-up.
-
-## 1. Build and prepare on the owner's desktop
-
-Use macOS or desktop Linux with Python **>=3.11**, its venv/pip support,
-Rust **>=1.91** and Cargo, Git, Node **>=20** and npm on PATH. Install the ordinary
-platform C/C++ compiler, linker and development headers/SDK (for example, Xcode
-Command Line Tools on macOS). Actual login also needs Chrome/Chromium and an
-unlocked OS credential store: Keychain on macOS, or Secret Service in a user
-D-Bus session on Linux. A headless SSH host is the worker, not the login desktop.
-
-Run this in a POSIX shell. `FRIDICA_ROOT` is a **new, unused**, owner-controlled
-directory; change its example location if necessary. The other paths are derived
-from it. The commands fetch the named public branch, record its full remote SHA
-once, and build that detached revision. For a repeat install, assign
-`FRIDICA_REV` your previously recorded full SHA instead of resolving a new head;
-fetch the named branch first and require that revision to be in its history.
+Install a compatible Fridica wheel in the desktop owner's Python 3.11+ environment
+and on each registered worker. The wheel includes pinned native MCP resources,
+licenses and corresponding source. Ordinary Node >=20 is required on both ends;
+the desktop also needs Chrome/Chromium and an unlocked OS credential store
+(Keychain on macOS, Secret Service in a Linux user D-Bus session). Workers use
+Python and the existing Fridica workspace sandbox, with no worker browser.
+No npm, Rust, model client or manual resource copying is needed for built wheels.
 
 ```sh
-FRIDICA_ROOT="$HOME/fridica-native-trial"
-FRIDICA_BRANCH=integrate/overleaf-upstream-20261124
-test ! -e "$FRIDICA_ROOT"
-mkdir -m 700 "$FRIDICA_ROOT"
-git clone --no-checkout --branch "$FRIDICA_BRANCH" https://github.com/chengcli/fridica.git "$FRIDICA_ROOT/source"
-FRIDICA_REV="$(git -C "$FRIDICA_ROOT/source" rev-parse "refs/remotes/origin/$FRIDICA_BRANCH")"
-git -C "$FRIDICA_ROOT/source" merge-base --is-ancestor "$FRIDICA_REV" "refs/remotes/origin/$FRIDICA_BRANCH"
-git -C "$FRIDICA_ROOT/source" checkout --detach "$FRIDICA_REV"
-printf '%s\n' "$FRIDICA_REV"
-python3 -m venv "$FRIDICA_ROOT/venv"
-. "$FRIDICA_ROOT/venv/bin/activate"
-cd "$FRIDICA_ROOT/source"
-FRIDICA_BUILD_ID="$FRIDICA_REV" python -m pip install .
-cd integrations/overleaf
-npm ci --no-audit --no-fund
-FRIDICA_RESOURCES="$(pwd -P)"
-FRIDICA_BIN="$FRIDICA_ROOT/venv/bin/fridica"
-FRIDICA_CONFIG="$FRIDICA_ROOT/config/config.toml"
-NODE_BIN="$(command -v node)"
-"$FRIDICA_BIN" build-info
+fridica overleaf-auth login --expected-email alice@example.com
 ```
 
-Stop on any failed command. `pip install .` downloads build dependencies and
-compiles/installs binaries into this venv. `npm ci` replaces this checkout's
-`node_modules`, downloads locked dependencies and runs the pinned Git
-dependency's normal `prepare` hook to build its JS. Do **not** use
-`--ignore-scripts`. No global package installation, listener start or login is
-part of these commands. Keep the checkout/resources in place after installation.
-Node must resolve to an absolute executable; if `command -v node` reports a shell
-function, set `NODE_BIN` to the real executable instead.
+Substitute your existing account. Enter passwords/MFA yourself in the dedicated
+browser window. Account identity is validated upstream before Fridica saves the
+session. Login needs no project/channel/worker identifiers. Subsequent
+`fridica overleaf-auth login` calls reuse saved configuration and a valid session.
+Use `--config /absolute/config.toml` consistently for a nondefault configuration.
+`--prepare-only` saves and checks setup without network, browser or OS-store access.
 
-The lock retains `@netique/overleaf-mcp@0.4.0` at
-[`42135403af5e76b80348303d742a5e1fe4da6d30`](https://github.com/happysky19/overleaf-mcp-native/commit/42135403af5e76b80348303d742a5e1fe4da6d30),
-including the no-replay correction and inherited-FD session transport. Preserve its AGPL license/notices and
-corresponding source when redistributing; see the [integration notes](../integrations/overleaf/README.md#dependency-and-narrow-correction).
+Login enables Overleaf in the selected config; it does not start/restart a
+listener or alter registered workspace/channel permissions. Use ordinary owner
+setup for allowed channels and registered local/SSH placements. Eligible workers
+receive the existing `overleaf` MCP and session automatically at admitted launch.
+Remote resource discovery uses the worker's installed prefix, not desktop paths.
+A matching `fridica` and Node must be visible on its noninteractive PATH, including
+any configured Python environment. Native comments need no Overleaf Git token;
+Git/compile retains its separate credentials and tools. Doctor checks native
+resources without forwarding an account session; its warning records that
+authenticated operation is checked only on an admitted task.
 
-## 2. Prepare, then let the human log in
+## Two projects in one channel
 
-Fictional example: account `alice@example.com`, authorized editor URL
-`https://www.overleaf.com/project/0123456789abcdef01234567`. Its project ID is
-the 24-character string immediately after `/project/`: `0123456789abcdef01234567`.
-Substitute your authorized values below. **Agents: extract the ID from the
-authorized editor URL, never guess; leave password/MFA entry to the human.**
-`FRIDICA_RESOURCES` above is the absolute prepared `integrations/overleaf` path.
+Give each task its authorized editor URL. The ID is the 24-character string
+following `/project/`; extract it, never guess. One worker in one allowed channel
+can use both of these fictional examples:
 
-```sh
-OVERLEAF_EMAIL=alice@example.com
-OVERLEAF_PROJECT=0123456789abcdef01234567
-"$FRIDICA_BIN" overleaf-auth login --prepare-only --config "$FRIDICA_CONFIG" --expected-email "$OVERLEAF_EMAIL" --project "$OVERLEAF_PROJECT" --resources "$FRIDICA_RESOURCES" --node "$NODE_BIN"
-"$FRIDICA_BIN" overleaf-auth login --config "$FRIDICA_CONFIG"
+```json
+{"name":"native_list_comments","arguments":{"project_id":"0123456789abcdef01234567"}}
+{"name":"native_list_tracked_changes","arguments":{"project_id":"abcdef0123456789abcdef01"}}
 ```
 
-The first command creates private setup files beside the config, saves the
-explicit scope/resource paths and prepares a cached helper linked to these
-dependencies. It opens no browser, credential store, network or model backend.
-The second command verifies the expected account/project over HTTPS and saves
-the verified session in the OS store. If needed, a dedicated browser profile
-opens for human login/SSO/MFA; everyday browser profiles are not read. Login
-works from an ordinary terminal without Codex, Claude Desktop or a worker UUID.
+Each native call must specify its own project, including thread reads and replies.
+Missing targets fail. Upstream selects and serializes projects; Fridica checks
+identity and optional restrictions. Only task-authorized operations are allowed.
+Suggestions remain pending and need the native document version. Every write
+needs a stable operation UUID; read/reconcile uncertain outcomes without replay.
 
-Later, run `"$FRIDICA_BIN" overleaf-auth login --config "$FRIDICA_CONFIG"`.
-A valid saved session is reused until actual expiry/revocation, with no forced
-renewal interval. For a previously verified session, use only `--prepare-only`
-when changing builds/resources; keep its account/project/channel, dedicated
-profile, OS entry and existing binding. Do not log in again just to upgrade.
+## Optional restrictive configuration
 
-`--config` is optional for the default owner config, but use it consistently for
-this isolated trial. `--browser /absolute/chromium` overrides system discovery.
-Resources can also be a prepared companion bundle; automatic discovery checks
-`overleaf-native` beside the config, `<prefix>/share/fridica/overleaf-native`,
-`~/Library/Application Support/Fridica/overleaf-native`, and
-`$XDG_DATA_HOME/fridica/overleaf-native` (default `~/.local/share/fridica/overleaf-native`).
-The already published PyPI v0.10.3 package does not supply these integration resources;
-wheels built from this branch do.
+Existing project/channel/recipient restrictions remain enforced, including
+restrictions in saved schema-2 sessions. Login does not remove them, and renewal
+cannot silently widen them. Keep the owner's current narrow grants during an
+upgrade. A new account-only login permits project selection per authorized task;
+this is not permission to access another user's accounts or projects.
 
-## 3. Prepare an eligible registered macOS or Linux worker
-
-Login and forwarding are separate. Without an explicit channel and recipient,
-forwarding is denied. Use an owner-authorized registered **macOS or Linux, local or SSH** machine
-and workspace with effective policy `mode = "write"` or `"full"`,
-`network = ["*"]`, and no `fetch_repos` restriction. Do not broaden an existing
-policy merely to make the adapter available. The adapter uses POSIX `socketpair`/`pass_fds`; Windows workers are not supported.
-
-On that worker, install Git, Node >=20/npm and Python >=3.10. No Linux memfd,
-procfs, worker cookie file or worker browser is needed. Installing this
-Fridica wheel from source requires Python >=3.11 and the build prerequisites
-above. The builtin workspace sandbox needs Linux bubblewrap/user namespaces or the
-existing macOS sandbox support, according to the selected machine. Worker backend authentication is needed for normal Fridica jobs;
-it is independent of owner login. Native reads need no worker browser or
-manual cookie transfer. Keep existing Git/compile credentials and tools for
-the ordinary Overleaf workflow.
-
-Use the same clone/venv/pip/npm commands from section 1 **on the selected
-worker**, with a new worker-owned `FRIDICA_ROOT`, and set `FRIDICA_REV` to the
-owner's recorded full revision. Do not substitute a newer branch head. Record
-the absolute outputs of `pwd -P` in `integrations/overleaf`, `command -v node`,
-and `command -v python3`; run `"$FRIDICA_BIN" build-info`. The worker needs its
-own prepared dependencies. Do not copy another owner's environment/session.
-
-The launcher calls `fridica` on the worker's PATH. Make the matching venv visible
-to the local or noninteractive SSH launch, for example using the existing supported
-`machines.<name>.python_env` field. Do not replace a research venv unless that
-change is appropriate for the existing jobs; an already configured compatible
-environment can install this wheel instead.
-
-Here is a **configuration fragment**, not a replacement config. Fictional owner
-Alice has SSH alias `alice-lab`, registered machine `lab`, workspace `papers`,
-Linux install `/home/alice/fridica-native-trial`, Node `/usr/bin/node`, Python
-`/usr/bin/python3`, and authorized Slack channel `C012ABCDEF0`. Substitute actual
-discovered values and merge into existing tables without duplicate TOML tables.
-Keep your owner/Slack identity, backend settings, other channel entries and
-workspace policies. These values grant no access by themselves.
+For an intentionally single-project deployment, optional configuration is:
 
 ```toml
-[slack]
-channels = ["C012ABCDEF0"] # retain the rest of your authorized allowlist
-
-[machines.lab]
-transport = "ssh"
-host = "alice-lab"
-backends = ["codex"] # your already configured supported worker backend
-python_env = "/home/alice/fridica-native-trial/venv"
-
-[machines.lab.workspaces]
-papers = { path = "/home/alice/papers", policy = { mode = "write", network = ["*"], fetch_repos = [] } }
-
-[overleaf]
-enabled = true
-native_adapter = ["/usr/bin/python3", "/home/alice/fridica-native-trial/source/integrations/overleaf/adapter.py", "--node", "/usr/bin/node"]
-
 [overleaf.native_scope]
 expected_email = "alice@example.com"
 project = "0123456789abcdef01234567"
-channel = "C012ABCDEF0"
+channel = "C012ABCDEF0" # must already be allowed by the owner
 ```
 
-For an SSH Mac, keep `transport = "ssh"` and use its actual host alias and
-absolute `/Users/...`/Node/Python paths. For a worker on the owner's own Mac or
-Linux desktop, register `transport = "local"` and omit `host`; for example:
+`fridica overleaf-auth bind-recipient --help` describes optional binding to an
+actual existing worker and registered placement. Manual binding is not part of
+normal setup. Existing bound recipients and timed grants remain restrictive;
+replacing a legacy-bound worker requires an explicit grant update. Saved account
+changes require revocation. Deleting only the OS entry does not invalidate
+running copies or upstream's dedicated session/profile.
+
+## Explicit source installation
+
+Source builds need Rust >=1.91, Cargo, a platform compiler/SDK, Git, Python >=3.11,
+Node >=20 and npm. Use a new checkout/environment; preserve existing source and
+runtime state. Check out the exact revision you intend to install and record
+`git rev-parse HEAD` rather than assuming a moving branch matches a release.
+From that checkout:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+npm ci --prefix integrations/overleaf --no-audit --no-fund
+python -m pip install .
+fridica overleaf-auth login --expected-email alice@example.com --resources "$PWD/integrations/overleaf"
+```
+
+The locked Git dependency uses its standard prepare hook; do not use
+`--ignore-scripts`. Keep the prepared checkout in place. `pip install .` alone
+builds the CLI, without prepared wheel data. To build an installable wheel that
+also carries worker resources, use the [standard wheel commands](../integrations/overleaf/README.md#build-and-focused-checks).
+For source-only worker deployments, an explicit target-side override is supported:
 
 ```toml
-[machines.desktop]
-transport = "local"
-backends = ["codex"]
-python_env = "/Users/alice/fridica-native-trial/venv"
-
-[machines.desktop.workspaces]
-papers = { path = "/Users/alice/papers", policy = { mode = "write", network = ["*"], fetch_repos = [] } }
+[overleaf]
+enabled = true
+native_adapter = ["/usr/bin/python3", "/absolute/prepared/integrations/overleaf/adapter.py", "--node", "/absolute/node"]
 ```
 
-Use that local machine's discovered adapter/Node/Python paths in `[overleaf]`.
-On Linux substitute the actual Linux paths. Bind the actual `desktop` placement
-instead of `lab` when selecting this alternative; this is a configuration
-example, not permission to run workers on someone else's machine. The same
-account/project/channel/worker checks apply on both launch routes. Local launch
-uses Fridica's existing process credential route; SSH uses encrypted stdin.
-Only the adapter's upstream child gets the anonymous session FD, with no secret
-in its argv/environment and no worker credential store. Darwin's normal upstream
-cookie-store location is bypassed in injected mode, regardless of XDG settings.
+Owner `overleaf.login.resources/node/browser` settings are desktop paths. The
+optional `native_adapter` override contains worker paths. Installed wheels need
+neither override. Resource discovery also supports prepared bundles in the
+standard per-user data directory; there is no automatic network download.
 
-`overleaf.login.resources/node/browser` are desktop paths written by login;
-`overleaf.native_adapter` contains **worker** paths. Keep that distinction.
-Do not manually invent a `native_recipient` table. For a fresh trial, also give
-`[state] path` and `control_socket` unused absolute paths (socket path under 100
-bytes); a separate `--config` alone does not isolate the default state database.
-Follow [ordinary setup](../README.md#initialize-fridica) for owner/Slack/backend
-configuration before starting a listener. Do not run two listeners for the same
-Slack owner. This guide does not migrate official-release state automatically.
+The immutable upstream pin is
+[`42135403af5e76b80348303d742a5e1fe4da6d30`](https://github.com/happysky19/overleaf-mcp-native/commit/42135403af5e76b80348303d742a5e1fe4da6d30).
+Preserve its AGPL license, notices and exact corresponding source. It retains
+the no-OT-replay correction and anonymous inherited-FD session transport on
+macOS/Linux. Fridica does not reimplement its browser or native protocol.
 
-## 4. Discover, bind explicitly, and switch only when idle
+## Deployment and validation limits
 
-For an existing compatible listener, `FRIDICA_CONFIG` must identify its actual
-owner config/control socket. These read-only owner controls report real IDs:
+Keep the previous binary/configuration and consistent state backup when changing
+an existing installation. Use that owner's established idle activation workflow;
+login/preparation does not reload or start services, and an already running
+worker does not gain capability from a file edit. Do not start a second listener
+for the same owner. Source changes and synthetic tests do not certify a published
+release, real login, authenticated Overleaf operations or activation.
 
-```sh
-"$FRIDICA_BIN" status --config "$FRIDICA_CONFIG"
-"$FRIDICA_BIN" machines --config "$FRIDICA_CONFIG"
-"$FRIDICA_BIN" threads --config "$FRIDICA_CONFIG"
-"$FRIDICA_BIN" workers --config "$FRIDICA_CONFIG"
-```
-
-Use `threads`' `key.channel` and `id`; inspect that thread with
-`fridica threads THREAD_ID --config CONFIG_PATH`, replacing `THREAD_ID` with its
-returned full ID and `CONFIG_PATH` with the same absolute config path. Its
-`workers` records identify the actual `id`, `machine`, `workspace`, `slot` and
-`session_id`. Cross-check `machines` and `workers`; a slot number or backend
-session ID is **not** a worker UUID. If no worker exists, use the owner's normal
-Fridica delegation workflow to create a persistent worker for that authorized
-thread and placement, then discover its identity. Login can already be complete.
-For initial channel discovery before any thread exists, the supported
-`fridica configure --config CONFIG_PATH --detect` uses the owner's Slack setup;
-review its selected channel list because it replaces that list, not appends it.
-
-Make a sibling config copy for activation. In the commands below, `CHANNEL_ID`,
-`WORKER_ID`, `MACHINE_NAME` and `WORKSPACE_NAME` must be the observed values;
-`NEXT_CONFIG` must not already exist. The following values are fictional syntax
-examples, **not runnable binding authorization**:
-
-```sh
-CHANNEL_ID=C012ABCDEF0
-WORKER_ID=worker-12345678-1234-4234-8234-123456789abc
-MACHINE_NAME=lab
-WORKSPACE_NAME=papers
-NEXT_CONFIG="$FRIDICA_ROOT/config/native-next.toml"
-test ! -e "$NEXT_CONFIG"
-cp -p "$FRIDICA_CONFIG" "$NEXT_CONFIG"
-chmod 600 "$NEXT_CONFIG"
-"$FRIDICA_BIN" overleaf-auth bind-recipient --config "$NEXT_CONFIG" --channel "$CHANNEL_ID" --worker-id "$WORKER_ID" --machine "$MACHINE_NAME" --workspace "$WORKSPACE_NAME"
-```
-
-This writes `overleaf.native_recipient.worker_id/machine/workspace` and
-`overleaf.native_scope.channel`; it reads no credential and starts/forwards
-nothing. Leave optional `expires_at`/`--expires-at` unset unless the owner wants
-a timed grant. A valid existing binding needs no repeat bind: preserve its
-table and prepare only the matching resources/scope in the copied config.
-
-Before activation, prevent new admissions using the owner's established controls
-and wait for `status` to show zero `running_jobs`, `queued_jobs` and
-`pending_approvals`; inspect `workers`/the relevant thread as well. Retain the old
-binary/config and a consistent state backup. Configure the **actual existing**
-service or launch command to use the matching new binary and `NEXT_CONFIG` with
-the same OS user/keyring environment. There is no universal service name and
-no `fridica reload` command. Use that owner's existing service manager's normal
-idle restart workflow, not a guessed unit/plist or a second listener. If running
-manually, the supported launch is `"$FRIDICA_BIN" start --config "$NEXT_CONFIG"`
-only after the old listener has stopped. Recheck status/placement afterward.
-
-The binding takes effect on worker launch/resume under the new configuration;
-an already running worker does not gain credentials by editing a file. Reuse
-the same persistent worker through ordinary controls. If it has been replaced,
-discover the new actual UUID and obtain an explicit binding for that recipient.
-Do not weaken the gate or reuse an unrelated worker. The existing local process or encrypted SSH
-stdin path forwards the verified session, and the adapter rechecks account,
-project, methods, channel and recipient before native calls.
-
-## 5. Read-only native verification
-
-In the authorized thread, ask **the bound worker** to use its existing `overleaf`
-MCP server's `tools/list`, then the following `tools/call` requests. These are MCP
-tool names/arguments, not additional shell subcommands. Replace the fictional
-project ID with the authorized one. There must be no native writes or dummy data.
-
-```json
-{"name":"native_list_comments","arguments":{"project_id":"0123456789abcdef01234567","include_resolved":true}}
-{"name":"native_list_tracked_changes","arguments":{"project_id":"0123456789abcdef01234567","limit":200,"full_text":true}}
-```
-
-If comments exist, copy one actual 24-character `thread_id` from the list into
-`native_read_comment_thread` with arguments
-`{"project_id":"0123456789abcdef01234567","thread_id":"ACTUAL_RETURNED_THREAD_ID"}`.
-Never invent a thread ID or create a comment to test reading. An empty list is
-valid; report the thread-read step as skipped. Report truncation if the tracked
-change result hits its limit. Stop on auth/scope failures; do not retry with
-another account, project or worker. Pending Track Changes are native objects,
-not TeX diffs. Preparation alone does not prove authentication or operation.
+The installed-wheel smoke exercises account-only preparation, the real installed
+native/built-in worker entry without a Git token, and missing-target refusal using
+synthetic credentials. Focused adapter checks cover A/B targeting, legacy refusals,
+identity mismatch and no replay offline. No live operation is implied. The
+historical Darwin receipt below applies only to the stated earlier resources;
+it is not a macOS execution of this account-UX change.
 
 ## Credential-free Darwin check before deployment
 
@@ -351,13 +160,3 @@ before dispatch refuses the write; never suppress it or bypass the receipt.
 These fixture checks do not establish actual sandboxed local/SSH launch or
 authenticated native operation, and did not activate a listener or another
 user's machine.
-
-## Verification limits
-
-The installation/preparation smoke ran on Linux with isolated owner configuration
-and no credentials, model backend, browser or listener. The credential-free
-Darwin results above are attributed solely to the supplied owner-side receipt.
-Real login and OS-store use, sandboxed local-or-SSH launch, authenticated native
-operations and the latest Mac Rust build remain unverified/deferred. Listener
-activation remains deferred; these results do not establish end-to-end readiness
-or authorize activation on another user's machine.

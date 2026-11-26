@@ -16,26 +16,34 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 | NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
 | Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
 
-Native Overleaf comments and pending Track Changes use a dedicated desktop login.
-Start with the [public-source installation and local/SSH worker guide](docs/overleaf-native-source-install.md).
-Wheels built from this integration include the pinned JS resources and discover
-them automatically. Ordinary Node >=20, Chrome/Chromium and an OS credential
-store are still needed; npm, Rust and manual resource copying are not needed
-for a built wheel. This is a feature-branch trial, not an update to the already
-published PyPI v0.10.3 package.
-The project ID is the 24-character string immediately after `/project/` in an editor URL.
-For the fictional URL `https://www.overleaf.com/project/0123456789abcdef01234567`,
-the ID is `0123456789abcdef01234567`. Substitute your own authorized account and
-project ID before running:
+Native Overleaf comments and pending Track Changes use one account login:
 
 ```sh
-fridica overleaf-auth login --expected-email alice@example.com --project 0123456789abcdef01234567
+fridica overleaf-auth login --expected-email alice@example.com
 ```
 
-Source installs still require the guide's explicit npm preparation and
-`--resources`; prepared companion bundles and that override remain supported.
+Enter your credentials/MFA in the dedicated browser window. Later, `fridica
+overleaf-auth login` reuses the saved account and valid session. Login needs no
+project, channel, worker UUID or model client. Wheels built with this integration
+include the native resources; Node >=20, Chrome/Chromium and an OS credential
+store are still needed on the desktop. Install the same wheel and Node on each
+registered worker. Fridica attaches native tools automatically to eligible
+workers in allowed channels; no adapter path, manual recipient binding or Git
+token is needed for native comments. Git/compile keeps its existing workflow.
+Login enables Overleaf in the selected config; it does not start or reload a listener.
 
-No model client or worker is needed to sign in. See the [portable bundle, scope and optional recipient setup](integrations/overleaf/README.md#standalone-owner-login).
+Give each task its authorized Overleaf URL. Each native tool call must include
+`project_id`: the 24-character ID after `/project/`. For example, one channel and
+worker can review project `0123456789abcdef01234567`, then
+`abcdef0123456789abcdef01`; each call names its own project. Missing targets are
+refused instead of using the previous project. Existing restrictive
+project/channel/recipient grants remain enforced on upgrade.
+
+See [setup and optional source installation](docs/overleaf-native-source-install.md)
+and [native operations and restrictions](integrations/overleaf/README.md).
+Source installs require explicit resource preparation; built wheels need no
+npm, Rust or manual resource copying. These instructions describe this source
+version, not a claim that a new PyPI release has been published.
 
 Slack automatically checks the standard environment variables first and then their keyring entries. You can delete the four standard Slack token assignments from an existing `[slack]` table. Keep any overrides that point to custom names.
 
@@ -51,7 +59,7 @@ export ADS_TOKEN="$(python3 -c 'import getpass; print(getpass.getpass("ADS token
 fridica init
 ```
 
-On first setup, `init` enables each MCP with a nonblank environment token or a matching keyring entry. An existing local `gh` login also enables GitHub MCP. Discovery runs on the daemon machine and leaves workspace permissions intact. For credentials available only on an SSH worker, enable the corresponding MCP in `config.toml`. After configuring your workspaces, run `fridica doctor` to validate credentials on eligible workers. For Overleaf, also set `OVERLEAF_PROJECT_ID` to the 24-character ID in a project URL so doctor can verify read access.
+On first setup, `init` enables each MCP with a nonblank environment token or a matching keyring entry. An existing local `gh` login also enables GitHub MCP. Discovery runs on the daemon machine and leaves workspace permissions intact. For credentials available only on an SSH worker, enable the corresponding MCP in `config.toml`. After configuring your workspaces, run `fridica doctor` to validate credentials on eligible workers. For Overleaf Git access, `OVERLEAF_PROJECT_ID` lets doctor check the Git token against one project. It is not a default target for native tools; native comments use the separate account login. With a native account scope, doctor checks installed tools without a Git token or session forwarding; live account validation waits for an admitted task.
 
 For an isolated command-line installation, use `pipx install fridica` in place of the pip command. The wheel includes the native CLI and its credential helper. To install the version in this checkout, run `python -m pip install .` from the repository root with Rust 1.91 or newer.
 

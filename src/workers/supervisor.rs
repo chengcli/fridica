@@ -607,6 +607,10 @@ fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<Work
                 service.server_at(config, &m.name, &workspace.policy, Some(&workspace.path))
             }))
             .collect(),
+        native_channel: match session_id.split(':').collect::<Vec<_>>().as_slice() {
+            [team, channel, _] if *team == config.slack.workspace => Some((*channel).to_owned()),
+            _ => None,
+        },
         worker_id: w.id.clone(),
         machine: m.for_slot(w.slot),
         workspace,
@@ -629,41 +633,12 @@ fn make_spec(config: &Config, w: &WorkerRecord, session_id: &str) -> Result<Work
         excluded_env: config.secret_env().into_iter().map(str::to_owned).collect(),
         slot: w.slot,
     };
-    if config
-        .overleaf
-        .native_scope
-        .as_ref()
-        .and_then(|s| s.channel.as_deref())
-        .is_some_and(|channel| session_id.split(':').nth(1) == Some(channel))
-        && config
-            .overleaf
-            .native_recipient
-            .as_ref()
-            .is_some_and(|r| r.permits(&w.id, &w.machine, &w.workspace))
-    {
-        if let Some(server) = spec.mcp_servers.iter_mut().find(|s| s.name == "overleaf") {
-            let builtin = server.command.clone();
-            server.command = config.overleaf.native_adapter[0].clone();
-            server.args = config.overleaf.native_adapter[1..].to_vec();
-            server.args.extend([
-                "--builtin".into(),
-                builtin,
-                "--workspace".into(),
-                spec.workspace.path.to_string_lossy().into_owned(),
-                "--channel".into(),
-                config
-                    .overleaf
-                    .native_scope
-                    .as_ref()
-                    .and_then(|s| s.channel.clone())
-                    .expect("authorized channel"),
-                "--worker".into(),
-                w.id.clone(),
-            ]);
-            server
-                .env_vars
-                .push(crate::config::overleaf::NATIVE_ENV.into());
+    if let Some(server) = super::overleaf::server(config, &spec) {
+        if let Some(builtin) = spec.mcp_servers.iter_mut().find(|s| s.name == "overleaf") {
+            *builtin = server;
         }
+    } else {
+        spec.native_channel = None;
     }
     Ok(spec)
 }

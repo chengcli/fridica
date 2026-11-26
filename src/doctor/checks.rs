@@ -390,7 +390,7 @@ async fn machine(
                     }
                 };
                 let name = format!("{label} MCP {}:{}", machine.name, workspace.name);
-                let Some(server) = service.server_at(
+                let Some(mut server) = service.server_at(
                     &probe.config,
                     &machine.name,
                     &workspace.policy,
@@ -399,6 +399,31 @@ async fn machine(
                     report.add(Status::Skip, name, "workspace policy excludes this server");
                     continue;
                 };
+                let native = matches!(service, Service::Overleaf)
+                    && probe.config.overleaf.native_scope.is_some();
+                if native {
+                    // No recipient exists during doctor: validate resources/tool discovery,
+                    // never forward the account session or require the independent Git token.
+                    if let Some(command) = probe.config.overleaf.native_adapter.first() {
+                        let builtin = server.command;
+                        server.command = command.clone();
+                        server.args = probe.config.overleaf.native_adapter[1..].to_vec();
+                        server.args.extend([
+                            "--builtin".into(),
+                            builtin,
+                            "--workspace".into(),
+                            workspace.path.to_string_lossy().into_owned(),
+                        ]);
+                    } else {
+                        server.args = vec![
+                            "overleaf-mcp".into(),
+                            "--workspace-write".into(),
+                            workspace.path.to_string_lossy().into_owned(),
+                            "--native-probe".into(),
+                        ];
+                    }
+                    server.env_vars.clear();
+                }
                 let passed = match crate::workers::mcp_probe::launch(
                     &probe.config,
                     &probe.context.home,
@@ -412,6 +437,15 @@ async fn machine(
                         match crate::exec::process::run_with_open_stdin(launch, probe.timeout, 4096)
                             .await
                         {
+                            Ok(r) if native => {
+                                if r.returncode == 0
+                                    && r.stdout == b"fridica-overleaf-mcp:native-ready\n"
+                                {
+                                    report.add(Status::Warn, name, "native and built-in tools are ready; account/session validation runs only on admitted tasks, Git authentication is separate");
+                                    continue;
+                                }
+                                false
+                            }
                             Ok(r) if r.returncode == 0 && matches!(service, Service::Overleaf) => {
                                 if r.stdout == marker.as_bytes() {
                                     report.add(Status::Warn, name, "bundled tools are ready; set OVERLEAF_PROJECT_ID to verify the token against a project");
