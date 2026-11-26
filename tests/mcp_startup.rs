@@ -14,10 +14,12 @@ use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, path::PathBuf, ti
 const BACKEND: &str = r#"#!/usr/bin/python3
 import json, os, pathlib, sys
 args = sys.argv[1:]
+disabled = next((arg.partition('=')[2] for arg in args
+                 if arg.startswith('mcp_servers={')), '')
 for alias in json.loads(os.environ['DANGEROUS_ALIASES']):
-    flag = 'mcp_servers.' + json.dumps(alias, ensure_ascii=False) + '.enabled=false'
-    if flag not in args:
-        pathlib.Path('mcp-started').write_text(alias)
+    entry = json.dumps(alias, ensure_ascii=False) + ' = { "enabled" = false }'
+    if entry not in disabled:
+        pathlib.Path('mcp-started').write_text('ambient')
         raise SystemExit(9)
 assert not any(k.upper().startswith('FRIDICA_') or 'SLACK' in k.upper() for k in os.environ)
 assert 'OWNER_SECRET' not in os.environ
@@ -113,7 +115,7 @@ impl Fixture {
 #[tokio::test]
 async fn local_startup_disables_every_discovered_and_layered_server_before_initialization() {
     let mut f = Fixture::new();
-    let source = "# owner comments stay intact\nmodel='owner-model'\n[mcp_servers.renamed]\ncommand='/opt/fridica'\nenv={KEY='private-source'}\n[mcp_servers.docs]\ncommand='docs-server'\n";
+    let source = "# owner comments stay intact\nmodel='owner-model'\n[mcp_servers.renamed]\ncommand='/opt/fridica'\nenv={KEY='private-source'}\n[mcp_servers.docs]\ncommand='docs-server'\n[mcp_servers.\"wrapped.🚦\"]\ncommand='opaque-wrapper'\n";
     f.write("home/.codex/config.toml", source);
     f.write(
         "home/.codex/review.config.toml",
@@ -129,9 +131,16 @@ async fn local_startup_disables_every_discovered_and_layered_server_before_initi
     // Every server is disabled, the unrelated docs server included.
     f.env.insert(
         "DANGEROUS_ALIASES".into(),
-        json!(["renamed", "docs", "layered", "web", "env_alias"])
-            .to_string()
-            .into(),
+        json!([
+            "renamed",
+            "docs",
+            "layered",
+            "web",
+            "env_alias",
+            "wrapped.🚦"
+        ])
+        .to_string()
+        .into(),
     );
     let out = f.run().await;
     assert_eq!(
@@ -320,7 +329,7 @@ async fn discovery_runs_at_each_process_start_and_does_not_cache_constructed_lau
 }
 
 #[tokio::test]
-async fn explicit_server_overrides_a_colliding_ambient_alias_after_sanitization() {
+async fn unrestricted_startup_refuses_explicit_alias_collisions_without_changing_owner_settings() {
     let mut f = Fixture::new();
     f.write("home/.codex/config.toml", "[mcp_servers.fridica_github]\nurl='https://ambient.invalid'\nenv={SECRET='ambient-secret'}\n");
     f.env
@@ -333,27 +342,12 @@ async fn explicit_server_overrides_a_colliding_ambient_alias_after_sanitization(
         auto_approve: true,
     }];
     let out = f.run().await;
-    assert_eq!(
-        out.returncode,
-        0,
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let data: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let args = data["args"].as_array().unwrap();
-    let disabled = args
-        .iter()
-        .position(|v| v == "mcp_servers.\"fridica_github\".enabled=false")
-        .unwrap();
-    let configured = args
-        .iter()
-        .position(|v| {
-            v.as_str()
-                .is_some_and(|s| s.starts_with("mcp_servers.\"fridica_github\"={"))
-        })
-        .unwrap();
-    assert!(disabled < configured);
-    assert!(!args[configured].as_str().unwrap().contains("ambient"));
+    assert_eq!(out.returncode, 97);
+    assert!(out.stdout.is_empty());
+    assert!(!f.home.join("session-state").exists());
+    assert!(std::fs::read_to_string(f.home.join(".codex/config.toml"))
+        .unwrap()
+        .contains("ambient-secret"));
 }
 
 #[tokio::test]

@@ -129,7 +129,10 @@ without creating a Slack message.
   SDK. `policy.claude_prompts = "none"` falls back to deny-all prompts.
 - **Codex configuration.** `codex app-server` loads the machine owner's
   `~/.codex/config.toml`; the startup helper disables ambient MCP servers before
-  applying trusted worker servers. GitHub MCP defaults to the bundled Rust
+  applying trusted worker servers. Literal server names are passed inside a TOML
+  table so dots and Unicode names remain disabled. Unrestricted startup refuses
+  inherited entries that collide with trusted server names; remove the duplicate
+  entry from the owner's Codex settings before retrying. GitHub MCP defaults to the bundled Rust
   `fridica github-mcp` subcommand on eligible local/SSH placements. The optional
   `fridica-agent::github` module owns its protocol, octocrab API calls and gitoxide
   repository reads; it has no dependency on the daemon or database. Fridica owns

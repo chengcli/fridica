@@ -133,9 +133,6 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
     if len(aliases) > 128:
         raise Refused()
 
-    if codex_only:
-        return [], sorted(aliases)
-
     def toml(value, depth=0):
         if depth > 64:
             raise Refused()
@@ -157,6 +154,17 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
                                     for k, v in value.items()) + " }"
         raise Refused()
 
+    # CLI paths split on dots without decoding quoted keys. Put literal server
+    # names in the TOML value instead; Codex merges this with inherited settings.
+    disabled = "mcp_servers=" + toml({alias: {"enabled": False} for alias in sorted(aliases)})
+    if codex_only:
+        # An unrestricted launch keeps owner settings intact. Codex deep-merges
+        # same-name entries, so a trusted entry could inherit ambient credentials.
+        explicit = {"mcp_servers." + alias for alias in aliases}
+        if any(arg.partition("=")[0] in explicit for arg in command):
+            raise Refused()
+        return [], disabled
+
     snapshots = []
     for name, document in documents:
         visit(document, clean=True)
@@ -170,4 +178,4 @@ def settings_snapshots(home, workspace, masks, state, request, environment, comm
         if len(data) > 2 * limit:
             raise Refused()
         snapshots.append((name, data))
-    return snapshots, sorted(aliases)
+    return snapshots, disabled

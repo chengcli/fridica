@@ -23,12 +23,9 @@ def main():
     # discovery. Close it before exec; no helper descriptors reach the backend.
     fd = directory(workspace, create=request["create"])
     try:
-        _, aliases = settings_snapshots(home, workspace, [], [], request, environment,
-                                        command, codex_only=True)
-        disabled = []
-        for alias in aliases:
-            disabled += ["-c", "mcp_servers." + json.dumps(alias, ensure_ascii=False) + ".enabled=false"]
-        command = command[:2] + disabled + command[2:]
+        _, disabled = settings_snapshots(home, workspace, [], [], request, environment,
+                                         command, codex_only=True)
+        command = command[:2] + ["-c", disabled] + command[2:]
         os.fchdir(fd)
     finally:
         os.close(fd)
