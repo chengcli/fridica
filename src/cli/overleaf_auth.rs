@@ -49,11 +49,11 @@ pub fn run(command: Command) -> Result<()> {
         Command::Plan => println!(
             "{}",
             serde_json::json!({
-                "live_validated":false,"scope":"explicit expected email, project and optional channel in owner configuration",
+                "live_validated":false,"scope":"one verified account; optional project/channel/recipient restrictions",
                 "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,
                 "login":"fridica overleaf-auth login reuses upstream dedicated-profile login and saved session",
                 "lifetime":"actual cookie/server expiry or owner revocation; optional explicitly timed grant",
-                "recipient":"default deny; separately bind an actual worker, registered placement and exact channel",
+                "recipient":"automatic for admitted eligible workers in allowed channels; legacy restrictions retained",
                 "transport":"OS credential store and existing encrypted SSH stdin route",
                 "platform":"owner helper needs Node >=20 and Chrome; listener needs this Fridica feature build",
                 "revocation":"delete entry, stop holder workers and invalidate the dedicated Overleaf session"
@@ -93,6 +93,10 @@ pub fn run(command: Command) -> Result<()> {
                 .read_to_string(&mut raw)
                 .map_err(|_| anyhow::anyhow!("cannot read verified native session"))?;
             crate::config::overleaf::validate_session(&raw)?;
+            // Session renewal must preserve both identity and old restrictive grants.
+            if let Some(previous) = NativeStore.get(ENTRY)? {
+                raw = crate::config::overleaf::renew_session(&previous, &raw)?;
+            }
             if let Some(path) = config {
                 let source = crate::config::editor::read(&path)?;
                 let document = source.parse::<toml_edit::DocumentMut>()?;
@@ -103,18 +107,6 @@ pub fn run(command: Command) -> Result<()> {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("configure native login scope first"))?;
                 crate::config::overleaf::validate_session_scope(&raw, scope)?;
-            }
-            // Session renewal cannot silently bind a different account.
-            if let Some(previous) = NativeStore.get(ENTRY)? {
-                let old: serde_json::Value = serde_json::from_slice(&previous).map_err(|_| {
-                    anyhow::anyhow!("invalid saved session; explicit revocation required")
-                })?;
-                let new: serde_json::Value = serde_json::from_str(&raw)?;
-                anyhow::ensure!(
-                    old["account_id"] == new["account_id"]
-                        && old["expected_email"] == new["expected_email"],
-                    "native account changed; explicit revocation required"
-                );
             }
             NativeStore.set(ENTRY, raw.as_bytes())?;
             println!("Verified native session saved. No worker started or credential forwarded.");
@@ -168,7 +160,7 @@ fn bind_recipient(
     };
     recipient.validate()?;
     let mut scope = config.overleaf.native_scope.clone().ok_or_else(|| {
-        anyhow::anyhow!("run overleaf-auth login with explicit account/project first")
+        anyhow::anyhow!("run overleaf-auth login with the expected account first")
     })?;
     if let Some(channel) = channel {
         scope.channel = Some(channel);

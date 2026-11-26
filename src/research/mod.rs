@@ -1,4 +1,6 @@
 //! Bundled research tools and the worker placements that can run them.
+pub(crate) mod overleaf;
+
 use crate::config::{registry::Policy, Config};
 use fridica_agent::McpServer;
 use std::path::Path;
@@ -50,7 +52,7 @@ impl Service {
         match self {
             Self::Alphaxiv => fridica_agent::alphaxiv::INSTRUCTIONS,
             Self::Scix => fridica_agent::scix::INSTRUCTIONS,
-            Self::Overleaf => "Use the Overleaf tools for the requested project. Preview changes before pushing and report whether the push succeeded.",
+            Self::Overleaf => "For manuscript edits and pushes, use only the thread-confirmed Overleaf project URL supplied by the host in this job. If it is missing or conflicts with the requested manuscript, stop and ask. Pass the ID explicitly to Overleaf tools. Before editing, verify the clone’s fetch origin and all effective push URLs (git remote get-url --push --all origin) identify git.overleaf.com and that exact project ID. Recheck before publishing, preview changes, push through the Overleaf tool, and report the confirmed head.",
         }
     }
     pub fn server(self, config: &Config, machine: &str, policy: &Policy) -> Option<McpServer> {

@@ -11,6 +11,12 @@ pub struct WorkerSpec {
     pub python_env: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<fridica_agent::McpServer>,
+    /// Channel derived by the supervisor from the admitted job, never model arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_channel: Option<String>,
+    /// Project confirmed in this job’s requesting thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_project: Option<String>,
     pub worker_id: String,
     pub machine: Machine,
     pub workspace: Workspace,

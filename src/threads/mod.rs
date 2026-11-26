@@ -9,6 +9,7 @@ use fridica_core::delegation;
 mod effects;
 pub mod external;
 mod linked;
+mod overleaf;
 mod posts;
 mod progress;
 pub mod refusal;

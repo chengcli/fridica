@@ -45,8 +45,12 @@ def require(ok, message="Native operation refused by scope policy"):
 def session(raw, worker, channel):
     require(len(raw) <= 16384)
     s = json.loads(raw)
-    require(isinstance(s, dict) and s.get("schema") == 2)
-    require(isinstance(s.get("projects"), list) and len(s["projects"]) == 1 and re.fullmatch(r"[0-9a-f]{24}", s["projects"][0]) and s.get("operations") == OPERATIONS)
+    require(isinstance(s, dict) and s.get("schema") in (2, 3))
+    projects = s.get("projects")
+    require(s["schema"] != 2 or isinstance(projects, list) and len(projects) == 1)
+    require(projects is None or isinstance(projects, list) and projects and
+            all(isinstance(p, str) and re.fullmatch(r"[0-9a-f]{24}", p) for p in projects))
+    require(s.get("operations") == OPERATIONS)
     require(s.get("channel") == channel and re.fullmatch(r"[CG][A-Z0-9]+", channel))
     r = s.get("recipient", {})
     require(r.get("worker_id") == worker and all(isinstance(r.get(k), str) and r[k] and not any(ord(c) < 32 for c in r[k]) for k in ("machine", "workspace")))
@@ -78,10 +82,10 @@ class Meta(html.parser.HTMLParser):
             self.values[d["name"]] = d.get("content", "")
 
 
-def identity(body, s):
+def identity(body, s, project):
     m = Meta()
     m.feed(body)
-    require(m.values.get("ol-project_id") == s["projects"][0], "Native project verification failed")
+    require(m.values.get("ol-project_id") == project, "Native project verification failed")
     user = json.loads(m.values.get("ol-user", "{}"))
     require(user.get("_id", user.get("id")) == s["account_id"]
             and user.get("email", "").lower() == s["expected_email"].lower(), "Native account verification failed")
@@ -92,16 +96,16 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def verify_identity(s):
+def verify_identity(s, project):
     # Independent, fixed HTTPS account/project check. No dashboard listing or redirects.
-    request = urllib.request.Request(f"{ORIGIN}/project/{s['projects'][0]}", headers={"Cookie": s["cookie"], "Accept": "text/html"})
+    request = urllib.request.Request(f"{ORIGIN}/project/{project}", headers={"Cookie": s["cookie"], "Accept": "text/html"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
         with opener.open(request, timeout=15) as response:
             require(response.status == 200 and response.headers.get_content_type() == "text/html")
             body = response.read(1024 * 1024 + 1)
             require(len(body) <= 1024 * 1024)
-        identity(body.decode("utf-8"), s)
+        identity(body.decode("utf-8"), s, project)
     except Exception:
         raise Refusal("Native account/project verification failed; check owner login or session expiry") from None
 
@@ -192,14 +196,16 @@ def native_peer(node, root, state, cookie=""):
         return Peer([node, str(pkg / "dist/index.js")], env, str(state), (reader.fileno(),))
 
 
-def arguments(name, given, schema, project):
+def arguments(name, given, schema, projects):
     require(name in NAMES and isinstance(given, dict))
     op = NAMES[name]
     args = dict(given)
     opid = args.pop("operation_id", None)
     require(set(args) <= set(schema["properties"]))
-    require(args.get("project_id", project) == project)
-    args["project_id"] = project
+    project = args.get("project_id")
+    require(isinstance(project, str) and re.fullmatch(r"[0-9a-f]{24}", project),
+            "An explicit project_id (24-character Overleaf ID) is required on every native call")
+    require(projects is None or project in projects, "Project is outside the saved native grant")
     if "thread_id" in args:
         require(isinstance(args["thread_id"], str) and re.fullmatch(r"[0-9a-f]{24}", args["thread_id"]))
     if "path" in args:
@@ -260,6 +266,9 @@ class Adapter:
         require(self.workspace.is_dir())
         self.raw = os.environ.pop("OVERLEAF_NATIVE_SESSION", "")
         self.grant = session(self.raw, options.worker, options.channel) if self.raw else None
+        if self.grant:
+            require(options.thread_project and self.grant.get("projects") == [options.thread_project],
+                    "Native session must match the thread-confirmed project")
         self.state = tempfile.TemporaryDirectory(prefix=".overleaf-mcp-", dir=self.workspace)
         self.native = None
         self.builtin = None
@@ -267,7 +276,10 @@ class Adapter:
             safe_env = {k: v for k, v in os.environ.items() if k in {
                 "PATH", "HOME", "LANG", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "OVERLEAF_GIT_TOKEN",
                 "ADS_TOKEN", "OVERLEAF_PROJECT_ID", "INTERLEAF_CONFIG", "INTERLEAF_WORKSPACE"}}
-            self.builtin = Peer([options.builtin, "overleaf-mcp", "--workspace-write", str(self.workspace)], safe_env, str(self.workspace))
+            builtin = [options.builtin, "overleaf-mcp", "--workspace-write", str(self.workspace)]
+            if options.thread_project:
+                builtin.extend(["--thread-project", options.thread_project])
+            self.builtin = Peer(builtin, safe_env, str(self.workspace))
             self.native = native_peer(options.node, self.root, Path(self.state.name), self.grant["cookie"] if self.grant else "")
             tools = self.native.call("tools/list")["tools"]
             self.schemas = {t["name"]: t for t in tools if t["name"] in OPERATIONS}
@@ -284,13 +296,19 @@ class Adapter:
 
     def dispatch(self, method, params):
         if method == "initialize":
-            return {**self.builtin.info, "instructions": "Use built-in Interleaf for Git/compile. Native review tools are restricted to the owner-configured project. Native suggestions must remain pending; never accept/reject author changes."}
+            return {**self.builtin.info, "instructions": "Use built-in Interleaf for Git/compile. Every native call requires an explicit project_id from the authorized task; never infer a previous target. Optional owner restrictions apply. Native suggestions must remain pending; never accept/reject author changes."}
         if method == "tools/list":
             tools = self.builtin.call(method, params)["tools"]
             for name, op in (NAMES.items() if self.grant else []):
                 tool = json.loads(json.dumps(self.schemas[op]))
                 tool["name"] = name
-                tool["inputSchema"]["properties"]["project_id"] = {"type": "string", "const": self.grant["projects"][0], "default": self.grant["projects"][0]}
+                target = {"type": "string", "pattern": "^[0-9a-f]{24}$", "description": "Explicit project ID from this authorized task; required on every call."}
+                if self.grant.get("projects") is not None:
+                    target["enum"] = self.grant["projects"]
+                tool["inputSchema"]["properties"]["project_id"] = target
+                tool["inputSchema"].setdefault("required", [])
+                if "project_id" not in tool["inputSchema"]["required"]:
+                    tool["inputSchema"]["required"].append("project_id")
                 if op in WRITES:
                     tool["inputSchema"]["properties"]["operation_id"] = {"type": "string", "description": "Stable UUID; reuse after ambiguous outcomes to prevent replay."}
                     tool["inputSchema"].setdefault("required", []).append("operation_id")
@@ -304,10 +322,10 @@ class Adapter:
             return self.builtin.call(method, params)
         name = params.get("name")
         require(name in NAMES)
-        require(self.grant is not None, "Native session not configured; owner login and explicit recipient binding required")
-        op, args, opid = arguments(name, params.get("arguments", {}), self.schemas[NAMES[name]]["inputSchema"], self.grant["projects"][0])
+        require(self.grant is not None, "Native session not configured; run fridica overleaf-auth login on the owner desktop")
+        op, args, opid = arguments(name, params.get("arguments", {}), self.schemas[NAMES[name]]["inputSchema"], self.grant.get("projects"))
         s = session(self.raw, self.options.worker, self.options.channel)
-        verify_identity(s)
+        verify_identity(s, args["project_id"])
         def call():
             result = self.native.call("tools/call", {"name": op, "arguments": args})
             if result.get("isError"):
@@ -327,9 +345,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--node", required=True)
     p.add_argument("--builtin", required=True)
+    p.add_argument("--thread-project")
     p.add_argument("--workspace", required=True)
-    p.add_argument("--worker", required=True)
-    p.add_argument("--channel", required=True)
+    p.add_argument("--worker")
+    p.add_argument("--channel")
+    p.add_argument("--probe", action="store_true", help="Discover resources/tools without authentication")
     o = p.parse_args()
     adapter = None
     def stop(*_):
@@ -337,7 +357,15 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
+        if o.probe:
+            os.environ.pop("OVERLEAF_NATIVE_SESSION", None)
+        else:
+            require(o.worker and o.channel, "Admitted worker/channel context required")
         adapter = Adapter(o)
+        if o.probe:
+            require(adapter.builtin.call("tools/list")["tools"], "Built-in Overleaf tools missing")
+            print("fridica-overleaf-mcp:native-ready", flush=True)
+            return 0
         while True:
             line = sys.stdin.buffer.readline(LIMIT + 1)
             if not line:

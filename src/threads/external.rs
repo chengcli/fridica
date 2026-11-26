@@ -60,12 +60,13 @@ pub async fn delegate(
             if matches!(view.control.as_str(), "closed" | "archived" | "cleaned") {
                 return Ok(Err((409, "thread_closed")));
             }
-            let parent = turn_request(u, &session, &view)?;
+            let mut parent = turn_request(u, &session, &view)?;
+            super::overleaf::attach(u, &mut parent, &config.owner.slack_user)?;
             let backend = match backend(&request.backend, &config, &parent.session) {
                 Ok(backend) => backend,
                 Err(refusal) => return Ok(Err(refusal)),
             };
-            let decision = Decision {
+            let mut decision = Decision {
                 delegations: vec![Delegation {
                     brief: request.brief.clone(),
                     worker_id: request.worker_id.clone(),
@@ -78,6 +79,9 @@ pub async fn delegate(
                 }],
                 ..Decision::default()
             };
+            if super::overleaf::check(&mut decision, &parent).is_err() {
+                return Ok(Err((409, "overleaf_project_unconfirmed")));
+            }
             let scope = Scope {
                 allowed: config.slack.channels.contains(&view.channel)
                     && config.slack.may_delegate(&view.channel),
@@ -163,7 +167,7 @@ fn turn_request(
         call: "delegate".into(),
         session: json!({
             "id":session,"workspace":view.workspace,"channel":view.channel,"root_ts":view.root_ts,
-            "status":view.status,"turns":view.turns,"summary":view.summary,
+            "reset_at":view.reset_at,"status":view.status,"turns":view.turns,"summary":view.summary,
             "context":serde_json::from_str::<Value>(&view.context_json)?,
             "decisions":serde_json::from_str::<Value>(&view.decisions_json)?,
             "notes":{"revision":revision,"data":notes},

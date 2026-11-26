@@ -33,6 +33,7 @@ pub fn catalog() -> Vec<(String, &'static [u8])> {
         "helpers/isolation_settings.py" => "../exec/isolation_settings.py",
         "helpers/isolation_helper.py" => "../exec/isolation_helper.py",
         "helpers/mcp_startup.py" => "../exec/mcp_startup.py",
+        "helpers/overleaf_git.py" => "../exec/overleaf_git.py",
         "helpers/readiness.py" => "../exec/readiness.py",
         "helpers/diagnostics.py" => "../exec/diagnostics.py",
     ]);
