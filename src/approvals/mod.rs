@@ -108,7 +108,7 @@ impl Broker {
         {
             Some(ApprovalDecision::Deny)
         } else {
-            rules::for_job(policy, &job, &request)
+            rules::for_job(policy, &worker.backend, &job, &request)
         };
         let approval = NewApproval {
             id: id.clone(),

@@ -92,8 +92,10 @@ Exact MCP tools can use the same owner-managed lists. A selector is
 ``mcp:overleaf/native_reply_comment@0123456789abcdef01234567``.
 Add only tools already authorized by the owner's task rules. A matching
 ``auto_deny`` wins, and every automatic approval is audited as ``once``;
-no server-wide or backend-session grant is created. Unknown requests and
-interactive forms still wait for the owner.
+no server-wide or backend-session grant is created. These opt-in rules cover
+requests that reach the broker and do not override a read-only workspace.
+Unmatched tool confirmations still wait for the owner. Unsupported interactive
+forms are refused by the backend adapter before reaching the approval queue.
 
 An Overleaf selector must match the project confirmed in the job's requesting
 thread and the call's project argument. Suggestions must remain tracked with

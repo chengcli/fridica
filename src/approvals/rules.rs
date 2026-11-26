@@ -15,6 +15,7 @@ pub fn decide(policy: &Policy, request: &ApprovalRequest) -> Option<ApprovalDeci
 
 pub(super) fn for_job(
     policy: &Policy,
+    backend: &str,
     job: &Job,
     request: &ApprovalRequest,
 ) -> Option<ApprovalDecision> {
@@ -25,7 +26,7 @@ pub(super) fn for_job(
         .auto_deny
         .iter()
         .filter_map(|r| Selector::parse(r))
-        .any(|selector| selector.params(request).is_some())
+        .any(|selector| selector.params(request, backend).is_some())
     {
         return Some(ApprovalDecision::Deny);
     }
@@ -34,7 +35,7 @@ pub(super) fn for_job(
     }
     policy.auto_approve.iter().find_map(|r| {
         let selector = Selector::parse(r)?;
-        let params = selector.params(request)?;
+        let params = selector.params(request, backend)?;
         if selector.server == "overleaf" {
             let project = selector.project?;
             if crate::workers::overleaf::job_project(&job.brief) != Some(project) {
@@ -90,25 +91,38 @@ impl<'a> Selector<'a> {
         })
     }
 
-    fn params<'r>(&self, request: &'r ApprovalRequest) -> Option<&'r Value> {
+    fn params<'r>(&self, request: &'r ApprovalRequest, backend: &str) -> Option<&'r Value> {
         let detail = &request.detail;
         let claude = format!("mcp__{}__{}", self.server, self.tool);
-        let params = if detail["tool"] == claude {
-            &detail["input"]
-        } else {
-            let message = format!(
-                "Allow the {} MCP server to run tool \"{}\"?",
-                self.server, self.tool
-            );
-            if detail["serverName"] != self.server
-                || detail["message"] != message
-                || detail["mode"] != "form"
-                || detail["_meta"]["codex_approval_kind"] != "mcp_tool_call"
-                || detail["requestedSchema"] != json!({"type":"object","properties":{}})
-            {
-                return None;
+        let params = match backend {
+            "claude" => {
+                if detail["tool"] != claude
+                    || ["serverName", "message", "mode", "requestedSchema", "_meta"]
+                        .iter()
+                        .any(|key| detail.get(key).is_some())
+                {
+                    return None;
+                }
+                &detail["input"]
             }
-            &detail["_meta"]["tool_params"]
+            "codex" => {
+                let message = format!(
+                    "Allow the {} MCP server to run tool \"{}\"?",
+                    self.server, self.tool
+                );
+                if detail.get("tool").is_some()
+                    || detail.get("input").is_some()
+                    || detail["serverName"] != self.server
+                    || detail["message"] != message
+                    || detail["mode"] != "form"
+                    || detail["_meta"]["codex_approval_kind"] != "mcp_tool_call"
+                    || detail["requestedSchema"] != json!({"type":"object","properties":{}})
+                {
+                    return None;
+                }
+                &detail["_meta"]["tool_params"]
+            }
+            _ => return None,
         };
         if !params.is_object() {
             return None;

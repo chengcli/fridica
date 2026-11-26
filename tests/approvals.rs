@@ -486,6 +486,15 @@ async fn saved_mcp_rules_approve_each_scoped_call_once_and_audit_it() {
     let mut h = Harness::new(30.).await;
     mcp_policy(&mut h).await;
     for claude in [false, true, false] {
+        h.worker.backend = if claude { "claude" } else { "codex" }.into();
+        let backend = h.worker.backend.clone();
+        h.store
+            .call(move |c| {
+                c.execute("UPDATE workers SET backend=? WHERE id='w1'", [backend])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
         let mut call = mcp_request("native_suggest_edit", edit_params());
         if claude {
             call.detail =
@@ -493,6 +502,10 @@ async fn saved_mcp_rules_approve_each_scoped_call_once_and_audit_it() {
         }
         assert_eq!(finish(h.tool(call)).await, ApprovalDecision::Once);
     }
+    let mut catalog = mcp_request("search", json!({"query":"paper"}));
+    catalog.detail["serverName"] = json!("catalog");
+    catalog.detail["message"] = json!("Allow the catalog MCP server to run tool \"search\"?");
+    assert_eq!(finish(h.tool(catalog)).await, ApprovalDecision::Once);
     assert!(approvals::pending(&h.store, 100).await.unwrap().is_empty());
     let actions: Vec<String> = h
         .store
@@ -503,7 +516,7 @@ async fn saved_mcp_rules_approve_each_scoped_call_once_and_audit_it() {
         })
         .await
         .unwrap();
-    assert_eq!(actions, vec!["approval.allow"; 3]);
+    assert_eq!(actions, vec!["approval.allow"; 4]);
 }
 #[tokio::test]
 async fn mcp_rules_keep_unknown_cross_project_and_unsafe_edits_pending() {
@@ -511,6 +524,15 @@ async fn mcp_rules_keep_unknown_cross_project_and_unsafe_edits_pending() {
     mcp_policy(&mut h).await;
     let valid = mcp_request("native_suggest_edit", edit_params());
     let mut cases = vec![];
+    // Codex forwards extra fields: they must not select the Claude parser.
+    let mut mixed = valid.clone();
+    mixed.detail["tool"] = json!("mcp__overleaf__native_suggest_edit");
+    mixed.detail["input"] = edit_params();
+    mixed.detail["_meta"]["tool_params"]["project_id"] = json!("222222222222222222222222");
+    cases.push(mixed);
+    let mut claude_only = valid.clone();
+    claude_only.detail = json!({"tool":"mcp__overleaf__native_suggest_edit","input":edit_params()});
+    cases.push(claude_only);
     let mut c = valid.clone();
     c.detail["_meta"]["tool_params"]["project_id"] = json!("222222222222222222222222");
     cases.push(c);
@@ -551,6 +573,15 @@ async fn mcp_rules_keep_unknown_cross_project_and_unsafe_edits_pending() {
             .unwrap();
         assert_eq!(finish(task).await, ApprovalDecision::Deny);
     }
+    // A selector cannot supply missing or different task authorization.
+    for brief in ["Read a file.", "Thread-confirmed Overleaf project: https://www.overleaf.com/project/222222222222222222222222\nEdit."] {
+        h.job.brief = brief.into();
+        let task = h.tool(valid.clone());
+        let id = h.pending().await;
+        h.broker.decide(id, ApprovalDecision::Deny, Authority::Owner).await.unwrap();
+        assert_eq!(finish(task).await, ApprovalDecision::Deny);
+    }
+    mcp_policy(&mut h).await;
     // An exact deny wins over an exact project grant.
     let mut config = (*h.config).clone();
     for machine in &mut config.machines.machines {
@@ -568,10 +599,11 @@ async fn mcp_rules_keep_unknown_cross_project_and_unsafe_edits_pending() {
 async fn approval_blocker_is_deduplicated_and_quiet_jobs_do_not_publish() {
     use fridica::core::delivery::Post;
     use fridica_core::store::Store as _;
-    for public in [true, false] {
+    for origin in ["public", "quiet", "external"] {
+        let public = origin == "public";
         let mut h = Harness::new(30.).await;
-        h.job.inbox_id = Some(17);
-        if public {
+        h.job.inbox_id = (origin != "external").then_some(17);
+        if origin != "quiet" {
             h.store
                 .transact(|u| {
                     u.queue_post(
