@@ -102,7 +102,7 @@ workspace = work / "worker"
 workspace.mkdir()
 probe = subprocess.run([str(prefix / "bin/fridica"), "overleaf-mcp", "--workspace-write", str(workspace),
                         "--native-probe", "--probe"], env=env, cwd=workspace,
-                       text=True, capture_output=True, timeout=30, check=True)
+                       text=True, stdout=subprocess.PIPE, timeout=30, check=True)
 assert probe.stdout == "fridica-overleaf-mcp:native-ready\n"
 worker = "worker-11111111-1111-4111-8111-111111111111"
 channel = "CEXAMPLE"
@@ -121,7 +121,7 @@ result = subprocess.run([str(prefix / "bin/fridica"), "overleaf-mcp", "--workspa
                          "--native-worker", worker, "--native-channel", channel, "--thread-project", "3" * 24],
                         input="".join(json.dumps(r) + "\n" for r in requests),
                         env={**env, "OVERLEAF_NATIVE_SESSION": json.dumps(grant)}, cwd=workspace,
-                        text=True, capture_output=True, timeout=30, check=True)
+                        text=True, stdout=subprocess.PIPE, timeout=30, check=True)
 replies = [json.loads(line) for line in result.stdout.splitlines()]
 listed = replies[1]["result"]["tools"]
 names = {t["name"] for t in listed}

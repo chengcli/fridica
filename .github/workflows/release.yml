@@ -88,6 +88,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Set up Linux confinement for the installed wheel
+        run: scripts/setup_ci_bubblewrap.sh
       - name: Stamp release version
         env:
           RELEASE_TAG: ${{ inputs.tag }}
