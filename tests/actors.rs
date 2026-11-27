@@ -1304,6 +1304,8 @@ async fn overleaf_dispatch_uses_only_the_target_from_this_thread() {
         job(pyharp),
         job(moist),
         job(pyharp),
+        json!({"delegations":[{"brief":format!("Thread-confirmed Overleaf project ID: {moist}\nRead the manuscript.")}],
+               "reply":{"text":"Starting.","status":"complete"}}),
     ]));
     let mut actor = actor(&store, parent);
     let corpus: Value = serde_json::from_str(include_str!("corpus/placement.json")).unwrap();
@@ -1346,6 +1348,7 @@ async fn overleaf_dispatch_uses_only_the_target_from_this_thread() {
             "!f Update the title in that project".into(),
             "2",
         ),
+        ("102.1", "102.1", "!f Check manuscript status".into(), "2"),
     ] {
         let envelope = json!({"type":"events_api","envelope_id":ts,"payload":{"type":"event_callback",
             "team_id":"TTEAM","event_id":ts,"event":{"type":"message","user":"UOWNER","channel":"CROOM",

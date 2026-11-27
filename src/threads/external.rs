@@ -61,7 +61,7 @@ pub async fn delegate(
                 return Ok(Err((409, "thread_closed")));
             }
             let mut parent = turn_request(u, &session, &view)?;
-            super::overleaf::attach(u, &mut parent, &config.owner.slack_user)?;
+            super::overleaf::attach(u, &mut parent, &config.owner.slack_user, config.overleaf.origin())?;
             let backend = match backend(&request.backend, &config, &parent.session) {
                 Ok(backend) => backend,
                 Err(refusal) => return Ok(Err(refusal)),

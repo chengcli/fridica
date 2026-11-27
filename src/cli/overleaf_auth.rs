@@ -6,7 +6,7 @@ use clap::Subcommand;
 
 mod login;
 
-const ENTRY: &str = "fridica/overleaf/native-session";
+use crate::config::overleaf::{MAX_SESSION_BYTES, NATIVE_ENTRY as ENTRY, NATIVE_ENV};
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -77,7 +77,7 @@ pub fn run(command: Command) -> Result<()> {
             })
         ),
         Command::Status => {
-            let from_env = std::env::var("OVERLEAF_NATIVE_SESSION").ok();
+            let from_env = std::env::var(NATIVE_ENV).ok();
             let raw = match from_env {
                 Some(value) if !value.trim().is_empty() => Some(value),
                 _ => NativeStore
@@ -106,7 +106,7 @@ pub fn run(command: Command) -> Result<()> {
             use std::io::Read;
             let mut raw = String::new();
             std::io::stdin()
-                .take(16385)
+                .take((MAX_SESSION_BYTES + 1) as u64)
                 .read_to_string(&mut raw)
                 .map_err(|_| anyhow::anyhow!("cannot read verified native session"))?;
             crate::config::overleaf::validate_session(&raw)?;

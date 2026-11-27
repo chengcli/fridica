@@ -7,7 +7,6 @@ pub mod inputs;
 pub mod instructions;
 pub mod launcher;
 pub(crate) mod mcp_probe;
-pub(crate) mod overleaf;
 pub mod progress;
 pub mod protocol;
 pub(crate) mod redelivery;

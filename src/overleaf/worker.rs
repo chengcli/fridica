@@ -1,6 +1,6 @@
 //! Native capability follows an admitted task's channel and registered placement.
 //! No worker/model input can supply a recipient grant or adapter command.
-use super::protocol::WorkerSpec;
+use crate::workers::protocol::WorkerSpec;
 use crate::{
     config::{
         overleaf::{Recipient, NATIVE_ENV},
@@ -92,4 +92,35 @@ pub(crate) fn server(config: &Config, spec: &WorkerSpec) -> Option<McpServer> {
     ]);
     server.env_vars.push(NATIVE_ENV.into());
     Some(server)
+}
+
+/// Bind the stored owner grant to the admitted task and include its receipt roots.
+pub(crate) fn bind_grant(config: &Config, spec: &WorkerSpec, raw: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+    let recipient = recipient(config, spec).context("native recipient unavailable")?;
+    let mut scope = config
+        .overleaf
+        .native_scope
+        .clone()
+        .context("native scope missing")?;
+    if let Some(project) = &spec.thread_project {
+        scope.project = Some(project.clone());
+    }
+    crate::config::overleaf::bound_session(
+        raw,
+        &recipient,
+        config.overleaf.native_recipient.as_ref(),
+        &scope,
+        spec.native_channel
+            .as_deref()
+            .context("missing native channel")?,
+        config.overleaf.origin(),
+        config
+            .machines
+            .get(&spec.machine.name)
+            .context("missing native machine")?
+            .workspaces
+            .iter()
+            .map(|w| w.path.clone()),
+    )
 }

@@ -1,7 +1,7 @@
 //! Standalone owner login using the built-in Rust backend. Preparation never reads credentials.
 use crate::config::{
     editor, loader,
-    overleaf::{Scope, Settings},
+    overleaf::{full_operations, Scope, Settings},
     setup, LoadContext,
 };
 use crate::core::secret::SecretStore;
@@ -11,7 +11,6 @@ use clap::Args;
 use fridica_agent::overleaf::login::{
     capture_session_at, normalize_base_url, validate_cookie_at, Identity, ValidationError,
 };
-use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -51,20 +50,6 @@ pub struct Options {
     expires_at: Option<u64>,
 }
 
-// Never derive Debug: this is a credential envelope already checked by the config boundary.
-#[derive(Deserialize)]
-struct Saved {
-    cookie: String,
-    account_id: String,
-    expected_email: String,
-    #[serde(default = "default_origin")]
-    base_url: String,
-}
-
-fn default_origin() -> String {
-    "https://www.overleaf.com".into()
-}
-
 pub fn run(o: Options) -> Result<()> {
     super::validate_expiry(o.expires_at)?;
     let context = LoadContext::current()?;
@@ -75,17 +60,7 @@ pub fn run(o: Options) -> Result<()> {
     let source = editor::read(&path)?;
     let mut document = source.parse::<DocumentMut>()?;
     let settings: Settings = loader::decode(document.get("overleaf"))?;
-    let base_url = normalize_base_url(
-        o.base_url
-            .as_deref()
-            .or_else(|| {
-                settings
-                    .login
-                    .as_ref()
-                    .and_then(|login| login.base_url.as_deref())
-            })
-            .unwrap_or("https://www.overleaf.com"),
-    )?;
+    let base_url = normalize_base_url(o.base_url.as_deref().unwrap_or(settings.origin()))?;
     let old_scope = settings.native_scope.as_ref();
     let scope = Scope {
         expected_email: o
@@ -144,16 +119,10 @@ pub fn run(o: Options) -> Result<()> {
         .map(|previous| {
             let raw = std::str::from_utf8(previous)
                 .map_err(|_| anyhow::anyhow!("invalid native session encoding"))?;
-            crate::config::overleaf::validate_session_scope(raw, &scope)?;
-            let saved: Saved = serde_json::from_str(raw)
-                .map_err(|_| anyhow::anyhow!("invalid saved native session"))?;
+            let saved = crate::config::overleaf::validate_session_scope(raw, &scope)?;
             ensure!(
-                normalize_base_url(&saved.base_url)? == base_url,
+                saved.base_url == base_url,
                 "saved Overleaf origin changed; explicit revocation required"
-            );
-            ensure!(
-                saved.expected_email == scope.expected_email,
-                "saved native account changed; explicit revocation required"
             );
             Ok::<_, anyhow::Error>(saved)
         })
@@ -161,14 +130,15 @@ pub fn run(o: Options) -> Result<()> {
     // A restricted saved login must not probe the account dashboard on renewal.
     let mut verification_scope = scope.clone();
     if verification_scope.project.is_none() {
-        if let Some(previous) = &previous {
-            let raw = std::str::from_utf8(previous)
-                .map_err(|_| anyhow::anyhow!("invalid saved session encoding"))?;
-            let (_, projects, _) = crate::config::overleaf::session_policy(raw)?;
-            if let Some(projects) = projects {
-                verification_scope.project = Some(projects.first()
-                    .context("saved session has an empty project grant; explicit revocation required")?.clone());
-            }
+        if let Some(projects) = saved.as_ref().and_then(|s| s.projects.as_ref()) {
+            verification_scope.project = Some(
+                projects
+                    .first()
+                    .context(
+                        "saved session has an empty project grant; explicit revocation required",
+                    )?
+                    .clone(),
+            );
         }
     }
     let (cookie, identity) = match &saved {
@@ -269,10 +239,4 @@ fn save_config(
         editor::replace(path, &editor::fingerprint(source), &updated)?;
     }
     Ok(())
-}
-
-fn full_operations() -> Vec<String> {
-    let mut ops = fridica_agent::overleaf::native_operations();
-    ops.push("direct_edit".into());
-    ops
 }

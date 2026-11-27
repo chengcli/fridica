@@ -270,7 +270,7 @@ impl Supervisor {
                 &config,
                 &view,
                 &j.session_id,
-                super::overleaf::job_project(&j.brief),
+                crate::overleaf::worker::job_project(&j.brief),
             )
             .and_then(|mut spec| {
                 spec.instructions = self.factory.instructions(&config, &view)?;
@@ -645,7 +645,7 @@ fn make_spec(
         excluded_env: config.secret_env().into_iter().map(str::to_owned).collect(),
         slot: w.slot,
     };
-    if let Some(server) = super::overleaf::server(config, &spec) {
+    if let Some(server) = crate::overleaf::worker::server(config, &spec) {
         if let Some(builtin) = spec.mcp_servers.iter_mut().find(|s| s.name == "overleaf") {
             *builtin = server;
         }

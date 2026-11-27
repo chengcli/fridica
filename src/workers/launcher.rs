@@ -203,7 +203,7 @@ impl Launcher for SystemLauncher {
     fn launch(&self, spec: &WorkerSpec, command: Vec<String>) -> Result<Launch, WorkerFailure> {
         use crate::config::overleaf::NATIVE_ENV;
         use crate::core::secret::SecretStore;
-        let native_allowed = super::overleaf::server(&self.native_config, spec)
+        let native_allowed = crate::overleaf::worker::server(&self.native_config, spec)
             .is_some_and(|expected| spec.mcp_servers.iter().any(|s| s == &expected));
         let mut spec = spec.clone();
         if !native_allowed {
@@ -239,59 +239,7 @@ impl Launcher for SystemLauncher {
                 .get(std::ffi::OsStr::new(NATIVE_ENV))
                 .and_then(|value| value.to_str())
             {
-                let mut scope = self
-                    .native_config
-                    .overleaf
-                    .native_scope
-                    .clone()
-                    .expect("authorized scope");
-                if let Some(project) = &spec.thread_project {
-                    scope.project = Some(project.clone());
-                }
-                let (saved_origin, _, _) = crate::config::overleaf::session_policy(raw)
-                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
-                let configured_origin = fridica_agent::overleaf::login::normalize_base_url(
-                    self.native_config
-                        .overleaf
-                        .login
-                        .as_ref()
-                        .and_then(|login| login.base_url.as_deref())
-                        .unwrap_or("https://www.overleaf.com"),
-                )
-                .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
-                if saved_origin != configured_origin {
-                    return Err(failure(
-                        Failure::Refusal,
-                        "worker_mcp_credential_unavailable",
-                    ));
-                }
-                let raw = crate::config::overleaf::bound_session(
-                    raw,
-                    &super::overleaf::recipient(&self.native_config, &spec)
-                        .expect("authorized recipient"),
-                    self.native_config.overleaf.native_recipient.as_ref(),
-                    &scope,
-                    spec.native_channel.as_deref().expect("admitted channel"),
-                )
-                .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
-                let mut raw: serde_json::Value = serde_json::from_str(&raw)
-                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
-                let mut legacy = crate::config::overleaf::legacy_workspaces(&raw.to_string())
-                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
-                legacy.extend(
-                    self.native_config
-                        .machines
-                        .get(&spec.machine.name)
-                        .expect("registered machine")
-                        .workspaces
-                        .iter()
-                        .map(|w| w.path.clone()),
-                );
-                legacy.sort();
-                legacy.dedup();
-                raw["legacy_workspaces"] = serde_json::json!(legacy);
-                let raw = raw.to_string();
-                crate::config::overleaf::validate_session(&raw)
+                let raw = crate::overleaf::worker::bind_grant(&self.native_config, &spec, raw)
                     .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
                 environment.insert(NATIVE_ENV.into(), raw.into());
             }
@@ -413,7 +361,7 @@ impl Launcher for SystemLauncher {
                 if native_available {
                     // Outside the existing startup/isolation helper, after Python activation:
                     // the Rust broker consumes the grant, then execs that same guarded launch.
-                    let executable = super::overleaf::server(&self.native_config, &spec)
+                    let executable = crate::overleaf::worker::server(&self.native_config, &spec)
                         .expect("authorized native server")
                         .command;
                     let mut prefix = vec![

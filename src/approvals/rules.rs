@@ -38,7 +38,7 @@ pub(super) fn for_job(
         let params = selector.params(request, backend)?;
         if selector.server == "overleaf" {
             let project = selector.project?;
-            if crate::workers::overleaf::job_project(&job.brief) != Some(project) {
+            if crate::overleaf::worker::job_project(&job.brief) != Some(project) {
                 return None;
             }
             if matches!(

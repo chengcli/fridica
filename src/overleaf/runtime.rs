@@ -7,18 +7,7 @@ use std::{
 };
 
 pub fn launch(workspace: &Path, probe: bool, thread_project: Option<&str>) -> Result<()> {
-    let root = match workspace.strip_prefix("~") {
-        Ok(rest) => std::env::home_dir()
-            .context("missing worker home")?
-            .join(rest),
-        Err(_) => workspace.to_owned(),
-    };
-    ensure!(
-        root.is_absolute()
-            && root.parent().is_some()
-            && !root.components().any(|c| c == Component::ParentDir),
-        "expected an absolute worker workspace"
-    );
+    let root = workspace_root(workspace)?;
     let mut command = sandbox(&root, None)?;
     command
         .arg(std::env::current_exe()?)
@@ -86,13 +75,12 @@ pub fn launch_native(
         let path = endpoint
             .strip_prefix("unix:")
             .context("native tools require the Fridica session broker")?;
-        return super::overleaf_broker::proxy(Path::new(path));
+        return super::broker::proxy(Path::new(path));
     }
-    let raw = native_grant()?;
-    let (_, account, _) = crate::config::overleaf::task_session(&raw, worker, channel, project)?;
+    let raw = super::read_grant(std::io::stdin().lock())?;
+    let grant = crate::config::overleaf::task_session(&raw, worker, channel, project)?;
     let root = workspace_root(workspace)?;
-    let (origin, _, _) = crate::config::overleaf::session_policy(&raw)?;
-    let state = native_state(&account, project, &origin)?;
+    let state = native_state(&grant.account_id, project, &grant.base_url)?;
     let mut command = sandbox(&root, Some(&state))?;
     command
         .arg(std::env::current_exe()?)
@@ -172,23 +160,21 @@ pub fn discover_native() -> Result<()> {
 
 pub fn serve_native(worker: &str, channel: &str, project: &str) -> Result<()> {
     use sha2::{Digest, Sha256};
-    let raw = native_grant()?;
-    let (cookie, account, email) =
-        crate::config::overleaf::task_session(&raw, worker, channel, project)?;
-    let (base_url, projects, operations) = crate::config::overleaf::session_policy(&raw)?;
-    let state = native_state(&account, project, &base_url)?;
+    let raw = super::read_grant(std::io::stdin().lock())?;
+    let grant = crate::config::overleaf::task_session(&raw, worker, channel, project)?;
+    let state = native_state(&grant.account_id, project, &grant.base_url)?;
     let workspace = std::env::current_dir()?.canonicalize()?;
-    let mut legacy = crate::config::overleaf::legacy_workspaces(&raw)?;
+    let mut legacy = grant.legacy_workspaces;
     legacy.push(workspace.clone());
     let legacy = legacy_receipt_dirs(&legacy)?;
     let session = fridica_agent::overleaf::NativeSession::from_reader(
-        serde_json::json!({"baseUrl":base_url,"cookie":cookie})
+        serde_json::json!({"baseUrl":grant.base_url,"cookie":grant.cookie})
             .to_string()
             .as_bytes(),
         state,
     )?
-    .with_identity(&account, &email)?
-    .with_capabilities(projects, operations)?
+    .with_identity(&grant.account_id, &grant.expected_email)?
+    .with_capabilities(grant.projects, grant.operations)?
     .with_upload_roots(vec![workspace])?;
     fridica_agent::overleaf::run_native(session, |name, args| {
         crate::config::overleaf::permit_tool(&raw, worker, channel, project, name, args)?;
@@ -238,23 +224,7 @@ fn legacy_receipt_dirs(workspaces: &[std::path::PathBuf]) -> Result<Vec<std::pat
     Ok(result.into_iter().collect())
 }
 
-fn native_grant() -> Result<String> {
-    use std::io::{BufRead, Read};
-    let mut raw = String::new();
-    std::io::stdin()
-        .lock()
-        .take(16385)
-        .read_line(&mut raw)
-        .map_err(|_| anyhow::anyhow!("cannot read scoped native session"))?;
-    ensure!(
-        !raw.is_empty() && raw.len() <= 16384 && raw.ends_with('\n'),
-        "invalid scoped native session transport"
-    );
-    raw.pop();
-    Ok(raw)
-}
-
-fn workspace_root(workspace: &Path) -> Result<std::path::PathBuf> {
+pub(super) fn workspace_root(workspace: &Path) -> Result<std::path::PathBuf> {
     let root = match workspace.strip_prefix("~") {
         Ok(rest) => std::env::home_dir()
             .context("missing worker home")?
@@ -282,7 +252,7 @@ fn native_state(account: &str, project: &str, origin: &str) -> Result<std::path:
         .context("missing worker home")?
         .canonicalize()?;
     let mut path = home;
-    let origin_key = if origin == "https://www.overleaf.com" {
+    let origin_key = if origin == crate::config::overleaf::DEFAULT_ORIGIN {
         account.to_owned()
     } else {
         use sha2::{Digest, Sha256};

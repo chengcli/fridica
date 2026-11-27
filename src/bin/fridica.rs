@@ -258,28 +258,28 @@ async fn run(cli: Cli) -> Result<()> {
             native_session_stdin,
         } => {
             if native_discovery {
-                return fridica::exec::overleaf::discover_native();
+                return fridica::overleaf::runtime::discover_native();
             }
             if native_serve {
                 anyhow::ensure!(
                     native_session_stdin,
                     "native session must use the memory pipe"
                 );
-                return fridica::exec::overleaf::serve_native(
+                return fridica::overleaf::runtime::serve_native(
                     native_worker.as_deref().expect("native worker"),
                     native_channel.as_deref().expect("native channel"),
                     thread_project.as_deref().expect("native project"),
                 );
             }
             if native_probe {
-                return fridica::exec::overleaf::probe_native(
+                return fridica::overleaf::runtime::probe_native(
                     workspace_write.as_deref().expect("probe workspace"),
                 );
             }
             if let (Some(worker), Some(channel), Some(root)) =
                 (&native_worker, &native_channel, &workspace_write)
             {
-                return fridica::exec::overleaf::launch_native(
+                return fridica::overleaf::runtime::launch_native(
                     root,
                     worker,
                     channel,
@@ -292,10 +292,10 @@ async fn run(cli: Cli) -> Result<()> {
                 "native tools require the workspace sandbox"
             );
             if let Some(root) = workspace_write {
-                return fridica::exec::overleaf::launch(&root, probe, thread_project.as_deref());
+                return fridica::overleaf::runtime::launch(&root, probe, thread_project.as_deref());
             }
             if let Some(project) = thread_project {
-                return fridica::exec::overleaf::serve_project(&project);
+                return fridica::overleaf::runtime::serve_project(&project);
             }
             if probe {
                 if fridica::research::probe_overleaf().await? {
@@ -314,7 +314,7 @@ async fn run(cli: Cli) -> Result<()> {
             project,
             command,
         } => {
-            return fridica::exec::overleaf_broker::run(
+            return fridica::overleaf::broker::run(
                 &workspace, &worker, &channel, &project, &command,
             )
         }
@@ -325,7 +325,7 @@ async fn run(cli: Cli) -> Result<()> {
             channel,
             project,
         } => {
-            return fridica::exec::overleaf_broker::serve(
+            return fridica::overleaf::broker::serve(
                 &socket, &workspace, &worker, &channel, &project,
             )
         }

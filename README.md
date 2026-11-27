@@ -34,9 +34,11 @@ matching Fridica build on registered workers; no Node, npm, Python adapter,
 worker browser or Git token is needed for native comments and Track Changes.
 Fridica attaches native tools only to admitted eligible jobs, retaining workspace,
 channel, task-project and tool-approval guards. Supply the editor URL in the
-requesting Slack thread; every call requires that task's explicit project ID.
-Native mode exposes the seven collaboration tools and `native_compile`, with
-no Git-write tools. Compilation needs TeX Live/`latexmk` on the worker. Separate
+requesting Slack thread to bind a project for writes. Unbound tasks can discover
+and read projects within their grant. Existing logins retain seven operations.
+Owners can enable the full native tool set with `fridica overleaf-auth grant --all`.
+`native_compile` uses Overleaf's cloud compiler. Only `native_compile_local`
+requires TeX Live and `latexmk` on the worker. Separate
 Git mode keeps its existing token-based workflow.
 
 Existing account/project/channel/recipient restrictions remain effective. See
@@ -271,7 +273,7 @@ Authenticate as the worker's execution user with `gh auth login --hostname githu
 
 **NASA ADS (SciX).** Set `[scix].enabled = true`, allow `api.adsabs.harvard.edu` in the workspace network policy, and provide `ADS_TOKEN`. Workers can search papers, export citations and manage ADS libraries. Because the bundled server includes library edits, Fridica attaches it to writable placements. Run `fridica scix-mcp --probe` on the worker to verify ADS accepts the token.
 
-**Overleaf.** Set `[overleaf].enabled = true` and provide `OVERLEAF_GIT_TOKEN`. Use `network = ["*"]` because the server accepts general Git remotes. The default `write` mode confines Overleaf, Git and TeX writes to the assigned worker directory. The execution machine needs bubblewrap with user namespaces on Linux or the system sandbox on macOS. Install Git on the worker, plus TeX Live for compilation and PDF review. For Slack manuscript work, supply the project link or 24-character ID in the requesting thread. Fridica carries that selection into later jobs in the same thread and checks the Git destination before pushing. Standalone tools can use `OVERLEAF_PROJECT_ID` as their default. Citation checks use `ADS_TOKEN`. With the token in the worker environment, `fridica overleaf-mcp --probe` checks tool discovery and reads the default project’s Git references when a project ID is set.
+**Overleaf Git mode.** Set `[overleaf].enabled = true` and provide `OVERLEAF_GIT_TOKEN`. Use `network = ["*"]` because the server accepts general Git remotes. The default `write` mode confines Overleaf, Git and TeX writes to the assigned worker directory. The execution machine needs bubblewrap with user namespaces on Linux or the system sandbox on macOS. Install Git on the worker, plus TeX Live for compilation and PDF review. For Slack manuscript work, supply the project link or 24-character ID in the requesting thread. Fridica carries that selection into later jobs in the same thread and checks the Git destination before pushing. Standalone tools can use `OVERLEAF_PROJECT_ID` as their default. Citation checks use `ADS_TOKEN`. With the token in the worker environment, `fridica overleaf-mcp --probe` checks tool discovery and reads the default project’s Git references when a project ID is set.
 
 Running `fridica doctor` checks each enabled research server on its eligible local and SSH workspaces. Its ADS check verifies authentication with a zero-result query. Its Overleaf check warns when a project ID is missing and verifies remote read access when one is supplied.
 

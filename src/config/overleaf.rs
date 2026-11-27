@@ -7,10 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) const MAX_SESSION_BYTES: usize = 16384;
 pub const NATIVE_ENV: &str = "OVERLEAF_NATIVE_SESSION";
 pub const NATIVE_ENTRY: &str = "fridica/overleaf/native-session";
+pub(crate) const DEFAULT_ORIGIN: &str = "https://www.overleaf.com";
 fn default_base_url() -> String {
-    "https://www.overleaf.com".into()
+    DEFAULT_ORIGIN.into()
 }
 pub const OPERATIONS: [&str; 7] = [
     "list_comments",
@@ -44,6 +46,13 @@ pub struct Settings {
     pub login: Option<Login>,
 }
 impl Settings {
+    pub(crate) fn origin(&self) -> &str {
+        self.login
+            .as_ref()
+            .and_then(|login| login.base_url.as_deref())
+            .unwrap_or(DEFAULT_ORIGIN)
+    }
+
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
@@ -182,24 +191,28 @@ pub fn validate(config: &super::Config) -> Result<()> {
 /// Fridica account and task grant; Rust Interleaf handles the native protocol.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Session {
+pub(crate) struct Session {
     schema: u8,
     #[serde(default = "default_base_url")]
-    base_url: String,
-    cookie: String,
-    account_id: String,
-    expected_email: String,
-    projects: Option<Vec<String>>,
-    operations: Vec<String>,
+    pub(crate) base_url: String,
+    pub(crate) cookie: String,
+    pub(crate) account_id: String,
+    pub(crate) expected_email: String,
+    pub(crate) projects: Option<Vec<String>>,
+    pub(crate) operations: Vec<String>,
     expires_at: Option<u64>,
     recipient: Option<Recipient>,
     channel: Option<String>,
     #[serde(default)]
-    legacy_workspaces: Vec<std::path::PathBuf>,
+    pub(crate) legacy_workspaces: Vec<std::path::PathBuf>,
 }
 pub(crate) fn validate_session(raw: &str) -> Result<()> {
-    ensure!(raw.len() <= 16384, "native session too large");
-    let s: Session =
+    parse_session(raw).map(|_| ())
+}
+
+fn parse_session(raw: &str) -> Result<Session> {
+    ensure!(raw.len() <= MAX_SESSION_BYTES, "native session too large");
+    let mut s: Session =
         serde_json::from_str(raw).map_err(|_| anyhow::anyhow!("invalid native session"))?;
     let origin = normalize_base_url(&s.base_url)?;
     let catalog = native_operations();
@@ -264,41 +277,34 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
             .is_none_or(|c| super::loader::slack_id(c, "CG")),
         "native channel mismatch"
     );
-    Ok(())
+    s.base_url = origin;
+    Ok(s)
 }
-/// Read validated origin, project limits and capabilities without touching a store.
-pub(crate) fn session_policy(raw: &str) -> Result<(String, Option<Vec<String>>, Vec<String>)> {
-    validate_session(raw)?;
-    let session: Session = serde_json::from_str(raw)?;
-    Ok((
-        normalize_base_url(&session.base_url)?,
-        session.projects,
-        session.operations,
-    ))
+
+pub(crate) fn full_operations() -> Vec<String> {
+    let mut ops = native_operations();
+    ops.push("direct_edit".into());
+    ops
 }
 
 /// Explicit owner action: expand operations while retaining every other saved limit.
 pub(crate) fn upgrade_operations(raw: &str) -> Result<String> {
-    validate_session(raw)?;
-    let saved: Session = serde_json::from_str(raw)?;
+    let saved = parse_session(raw)?;
     ensure!(
         saved.schema >= 3 || (saved.channel.is_some() && saved.recipient.is_some()),
         "legacy native session requires explicit channel and recipient grants before an operation upgrade"
     );
     let mut value: serde_json::Value = serde_json::from_str(raw)?;
-    let mut operations = native_operations();
-    operations.push("direct_edit".into());
     value["schema"] = 4.into();
-    value["operations"] = serde_json::json!(operations);
+    value["operations"] = serde_json::json!(full_operations());
     let raw = value.to_string();
     validate_session(&raw)?;
     Ok(raw)
 }
 
-pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<()> {
-    validate_session(raw)?;
+pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<Session> {
     scope.validate()?;
-    let s: Session = serde_json::from_str(raw)?;
+    let s = parse_session(raw)?;
     ensure!(
         s.expected_email == scope.expected_email
             && scope
@@ -310,27 +316,24 @@ pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<()> {
                 .is_none_or(|c| scope.channel.as_ref().is_none_or(|limit| c == limit)),
         "saved native session does not match configured account/project/channel"
     );
-    Ok(())
+    Ok(s)
 }
 /// A new account-wide login cannot erase a legacy grant stored with the session.
 pub(crate) fn renew_session(previous: &[u8], raw: &str) -> Result<String> {
-    validate_session(raw)?;
+    let incoming = parse_session(raw)?;
     let previous_raw = std::str::from_utf8(previous)
         .map_err(|_| anyhow::anyhow!("invalid saved session; explicit revocation required"))?;
-    validate_session(previous_raw)?;
-    let old: Session = serde_json::from_slice(previous)
-        .map_err(|_| anyhow::anyhow!("invalid saved session; explicit revocation required"))?;
+    let old = parse_session(previous_raw)?;
     ensure!(
         old.schema != 2 || (old.channel.is_some() && old.recipient.is_some()),
         "legacy native session requires explicit channel and recipient grants"
     );
-    let incoming: Session = serde_json::from_str(raw)?;
     let mut new: serde_json::Value = serde_json::from_str(raw)?;
     ensure!(
-        normalize_base_url(&old.base_url)? == normalize_base_url(&incoming.base_url)?,
+        old.base_url == incoming.base_url,
         "native origin changed; explicit revocation required"
     );
-    new["base_url"] = normalize_base_url(&old.base_url)?.into();
+    new["base_url"] = old.base_url.into();
     new["schema"] = old.schema.max(incoming.schema).into();
     new["operations"] = serde_json::json!(old
         .operations
@@ -396,10 +399,15 @@ pub(crate) fn bound_session(
     configured_recipient: Option<&Recipient>,
     scope: &Scope,
     channel: &str,
+    origin: &str,
+    workspaces: impl IntoIterator<Item = std::path::PathBuf>,
 ) -> Result<String> {
-    validate_session_scope(raw, scope)?;
+    let saved = validate_session_scope(raw, scope)?;
+    ensure!(
+        saved.base_url == normalize_base_url(origin)?,
+        "saved native origin differs from configured origin"
+    );
     recipient.validate()?;
-    let saved: Session = serde_json::from_str(raw)?;
     // Schema2 predates automatic admission. An absent legacy grant was a denial,
     // not permission to bind the saved login to any newly admitted worker.
     ensure!(
@@ -438,6 +446,12 @@ pub(crate) fn bound_session(
             .as_u64()
             .map_or(deadline, |t| t.min(deadline)));
     }
+    let legacy: BTreeSet<_> = saved
+        .legacy_workspaces
+        .into_iter()
+        .chain(workspaces)
+        .collect();
+    value["legacy_workspaces"] = serde_json::json!(legacy);
     value["recipient"] = serde_json::to_value(recipient)?;
     value["channel"] = channel.into();
     let raw = value.to_string();
@@ -451,9 +465,8 @@ pub(crate) fn task_session(
     worker: &str,
     channel: &str,
     project: &str,
-) -> Result<(String, String, String)> {
-    validate_session(raw)?;
-    let session: Session = serde_json::from_str(raw)?;
+) -> Result<Session> {
+    let session = parse_session(raw)?;
     ensure!(
         (project == "unbound"
             || (valid_id(project)
@@ -468,12 +481,7 @@ pub(crate) fn task_session(
                 .is_some_and(|r| r.worker_id == worker && r.expires_at.is_none_or(|t| t > now())),
         "native session does not permit this worker/channel/project"
     );
-    Ok((session.cookie, session.account_id, session.expected_email))
-}
-
-pub(crate) fn legacy_workspaces(raw: &str) -> Result<Vec<std::path::PathBuf>> {
-    validate_session(raw)?;
-    Ok(serde_json::from_str::<Session>(raw)?.legacy_workspaces)
+    Ok(session)
 }
 
 pub(crate) fn permit_tool(
@@ -484,10 +492,9 @@ pub(crate) fn permit_tool(
     name: &str,
     args: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
-    task_session(raw, worker, channel, project)?;
+    let session = task_session(raw, worker, channel, project)?;
     let operation = native_operation(name)
         .ok_or_else(|| anyhow::anyhow!("tool is unavailable in native mode"))?;
-    let session: Session = serde_json::from_str(raw)?;
     ensure!(
         session.operations.contains(&operation),
         "native tool is outside this task's capability grant"
@@ -570,7 +577,16 @@ mod tests {
         };
         let s = serde_json::json!({"schema":2,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":"owner@example.invalid", "projects":[PROJECT], "operations":OPERATIONS});
         let b: serde_json::Value = serde_json::from_str(
-            &bound_session(&s.to_string(), &r, Some(&r), &scope, CHANNEL).unwrap(),
+            &bound_session(
+                &s.to_string(),
+                &r,
+                Some(&r),
+                &scope,
+                CHANNEL,
+                DEFAULT_ORIGIN,
+                [],
+            )
+            .unwrap(),
         )
         .unwrap();
         assert!(b["expires_at"].is_null());
@@ -631,7 +647,16 @@ mod tests {
         let mut timed = r;
         timed.expires_at = Some(now() + 60);
         let b: serde_json::Value = serde_json::from_str(
-            &bound_session(&s.to_string(), &timed, Some(&timed), &scope, CHANNEL).unwrap(),
+            &bound_session(
+                &s.to_string(),
+                &timed,
+                Some(&timed),
+                &scope,
+                CHANNEL,
+                DEFAULT_ORIGIN,
+                [],
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(b["expires_at"], timed.expires_at.unwrap());
@@ -651,7 +676,16 @@ mod tests {
         };
         let raw = serde_json::json!({"schema":3,"cookie":"overleaf_session2=fixture", "account_id":"111111111111111111111111", "expected_email":scope.expected_email,"operations":OPERATIONS});
         let bound: serde_json::Value = serde_json::from_str(
-            &bound_session(&raw.to_string(), &recipient, None, &scope, CHANNEL).unwrap(),
+            &bound_session(
+                &raw.to_string(),
+                &recipient,
+                None,
+                &scope,
+                CHANNEL,
+                DEFAULT_ORIGIN,
+                [],
+            )
+            .unwrap(),
         )
         .unwrap();
         assert!(bound.get("projects").is_none());
@@ -662,7 +696,16 @@ mod tests {
             ..scope.clone()
         };
         let mut legacy: serde_json::Value = serde_json::from_str(
-            &bound_session(&raw.to_string(), &recipient, None, &restricted, CHANNEL).unwrap(),
+            &bound_session(
+                &raw.to_string(),
+                &recipient,
+                None,
+                &restricted,
+                CHANNEL,
+                DEFAULT_ORIGIN,
+                [],
+            )
+            .unwrap(),
         )
         .unwrap();
         let deadline = now() + 3600;
@@ -678,12 +721,23 @@ mod tests {
         assert_eq!(saved["recipient"]["worker_id"], recipient.worker_id);
         assert_eq!(saved["recipient"]["expires_at"], deadline);
         assert_eq!(saved["expires_at"], deadline);
-        assert!(bound_session(&renewed, &recipient, None, &scope, "COTHER").is_err());
+        assert!(bound_session(
+            &renewed,
+            &recipient,
+            None,
+            &scope,
+            "COTHER",
+            DEFAULT_ORIGIN,
+            []
+        )
+        .is_err());
         let other = Recipient {
             worker_id: "worker-22222222-2222-4222-8222-222222222222".into(),
             ..recipient.clone()
         };
-        assert!(bound_session(&renewed, &other, None, &scope, CHANNEL).is_err());
+        assert!(
+            bound_session(&renewed, &other, None, &scope, CHANNEL, DEFAULT_ORIGIN, []).is_err()
+        );
         assert!(renew_session(
             legacy.as_bytes(),
             &raw.to_string().replace("owner@", "other@")
@@ -727,7 +781,8 @@ mod tests {
         other["base_url"] = "https://ce.example.invalid".into();
         assert!(renew_session(legacy.to_string().as_bytes(), &other.to_string()).is_err());
         other["base_url"] = "http://127.0.0.1:3000/".into();
-        let (origin, projects, _) = session_policy(&other.to_string()).unwrap();
+        let session = parse_session(&other.to_string()).unwrap();
+        let (origin, projects) = (session.base_url, session.projects);
         assert_eq!(origin, "http://127.0.0.1:3000");
         assert_eq!(projects, Some(vec![PROJECT.into()]));
         other["operations"] = serde_json::json!(["read_file", "read_file"]);

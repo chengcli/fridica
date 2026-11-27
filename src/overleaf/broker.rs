@@ -177,16 +177,7 @@ pub fn serve(
     let _cleanup = SocketCleanup {
         socket: path.to_owned(),
     };
-    let mut raw = String::new();
-    // One header, no credential in argv or the process's initial environment.
-    let mut input = io::stdin().lock().take(16386);
-    let length = io::BufRead::read_line(&mut input, &mut raw)
-        .map_err(|_| anyhow!("cannot read native broker grant"))?;
-    ensure!(
-        length <= 16385 && raw.ends_with('\n'),
-        "native broker grant header is invalid"
-    );
-    raw.pop();
+    let raw = super::read_grant(io::stdin().lock())?;
     crate::config::overleaf::task_session(&raw, worker, channel, project)?;
     // These are dedicated broker/proxy processes; short relative names avoid AF_UNIX path limits.
     std::env::set_current_dir(directory)
@@ -377,12 +368,7 @@ fn write_pending(writer: &mut impl Write, buffer: &mut VecDeque<u8>) -> io::Resu
 }
 
 fn workspace_root(workspace: &Path) -> Result<PathBuf> {
-    let root = match workspace.strip_prefix("~") {
-        Ok(rest) => std::env::home_dir()
-            .ok_or_else(|| anyhow!("worker home missing"))?
-            .join(rest),
-        Err(_) => workspace.to_owned(),
-    };
+    let root = super::runtime::workspace_root(workspace)?;
     ensure!(
         root.is_absolute() && root.canonicalize()? == root,
         "native broker requires a resolved workspace"
