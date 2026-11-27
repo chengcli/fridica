@@ -15,20 +15,28 @@ pub(crate) fn launch(
     machine: &Machine,
     workspace: &Workspace,
     server: fridica_agent::McpServer,
-) -> anyhow::Result<(crate::exec::process::Launch, tempfile::TempDir)> {
+    shared_control: Option<&Path>,
+) -> anyhow::Result<(crate::exec::process::Launch, Option<tempfile::TempDir>)> {
     let mut command = vec![server.command.clone()];
     command.extend(server.args.iter().cloned());
     command.push("--probe".into());
-    let control = tempfile::Builder::new()
-        .prefix("fridica-mcp-")
-        .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in("/tmp")?;
-    let launcher = SystemLauncher::from_config(
-        config,
-        home.to_owned(),
-        environment,
-        control.path().to_owned(),
-    )?;
+    let owned;
+    let directory = match shared_control {
+        Some(path) => {
+            owned = None;
+            path
+        }
+        None => {
+            let temp = tempfile::Builder::new()
+                .prefix("fridica-mcp-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir_in("/tmp")?;
+            owned = Some(temp);
+            owned.as_ref().unwrap().path()
+        }
+    };
+    let launcher =
+        SystemLauncher::from_config(config, home.to_owned(), environment, directory.to_owned())?;
     let spec = crate::workers::protocol::WorkerSpec {
         python_env: config
             .python_envs
@@ -54,7 +62,11 @@ pub(crate) fn launch(
         .launch(&spec, command)
         .map_err(|_| anyhow::anyhow!("MCP probe launch refused"))?;
     if machine.transport == "ssh" {
-        crate::exec::isolation::read_only_ssh_probe(&mut launch);
+        if shared_control.is_some() {
+            crate::exec::isolation::shared_ssh_probe(&mut launch);
+        } else {
+            crate::exec::isolation::read_only_ssh_probe(&mut launch);
+        }
     }
-    Ok((launch, control))
+    Ok((launch, owned))
 }
