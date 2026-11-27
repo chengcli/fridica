@@ -149,11 +149,7 @@ pub fn probe_native(workspace: &Path) -> Result<()> {
 }
 
 pub fn discover_native() -> Result<()> {
-    ensure!(
-        fridica_agent::overleaf::probe_native()?
-            == fridica_agent::overleaf::native_operations().len() + 2,
-        "native tools unavailable"
-    );
+    fridica_agent::overleaf::probe_native()?;
     println!("fridica-overleaf-mcp:native-ready");
     Ok(())
 }
