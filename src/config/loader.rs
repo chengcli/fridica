@@ -308,6 +308,7 @@ fn state(root: &Table, base: &Path, context: &LoadContext) -> Result<State> {
                 "path",
                 "control_socket",
                 "archive_after_days",
+                "project_review_interval_seconds",
                 "archive_events_after_hours",
                 "record",
             ],
@@ -373,7 +374,18 @@ fn state(root: &Table, base: &Path, context: &LoadContext) -> Result<State> {
             fallback
         }
     };
+    let project_review_interval_seconds = match state_data
+        .and_then(|t| t.get("project_review_interval_seconds"))
+    {
+        None => super::schema::default_review_interval(),
+        Some(item) => item
+            .as_integer()
+            .and_then(|s| u32::try_from(s).ok())
+            .filter(|s| *s > 0)
+            .context("state.project_review_interval_seconds must be a positive 32-bit integer")?,
+    };
     Ok(State {
+        project_review_interval_seconds,
         path: state_path,
         control_socket,
         archive_after_days,

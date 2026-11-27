@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 pub(super) struct Outcome {
     pub(super) request: ParentRequest,
     pub(super) decision: Decision,
+    pub(super) project: Option<super::projects::Command>,
     pub(super) work: super::delegation::Work,
     pub(super) calls: Vec<Call>,
     pub(super) verdict: String,
@@ -30,6 +31,7 @@ pub(super) struct Rules {
     pub(super) now: f64,
     /// The wait or no-progress streak that opens a signal.
     pub(super) signal: usize,
+    pub(super) review_interval: u32,
     pub(super) reply_limit: usize,
 }
 /// The thread's streak counters and status, as this turn leaves them.
@@ -323,6 +325,17 @@ pub(super) async fn commit(
     store
         .transact(move |u| {
             let now = rules.now;
+            // A completion can also bump the thread version. Yield to its result
+            // before the ordinary stale-turn path requeues this older timer.
+            let request = &outcome.request;
+            if request.trigger["kind"] == "project_review"
+                && u.thread_active(&session)?
+                && u.inbox_attempts(id)?.1 == "processing"
+                && super::projects::result_arrived(u, request)?
+            {
+                u.defer_turn(id, now + 1.)?;
+                return Ok(Step::Deferred);
+            }
             if superseded(
                 u,
                 id,
@@ -334,7 +347,7 @@ pub(super) async fn commit(
                 u.return_turn(id)?;
                 return Ok(Step::Stale);
             }
-            let request = &outcome.request;
+
             if let Some(cooldown) = outcome
                 .cooldown
                 .filter(|_| outcome.decision.reply.is_some())
@@ -350,7 +363,8 @@ pub(super) async fn commit(
             }
             let mut progress = Progress {
                 waiting: request.session["wait_streak"].as_i64().unwrap_or(0),
-                quiet: request.session["no_progress"].as_i64().unwrap_or(0) + 1,
+                quiet: request.session["no_progress"].as_i64().unwrap_or(0)
+                    + i64::from(request.trigger["kind"] != "project_review"),
                 status: request.session["status"]
                     .as_str()
                     .unwrap_or("new")
@@ -399,6 +413,15 @@ pub(super) async fn commit(
             let work = &outcome.work;
             u.add_workers(&work.workers, now)?;
             u.queue_jobs(&work.jobs, now)?;
+            super::projects::commit(
+                u,
+                request,
+                outcome.project.as_ref(),
+                &work.jobs,
+                &rules.owner,
+                now,
+                rules.review_interval,
+            )?;
             u.queue_worker_controls(request, &decision.worker_control, now)?;
             if is_result(request) {
                 let jobs: Vec<Option<String>> = request.trigger["results"]
@@ -464,15 +487,20 @@ pub(super) async fn commit(
                 .collect();
             u.open_asks(&session, &asks, now)?;
             let signal = rules.signal as i64;
-            if progress.waiting == signal || progress.quiet == signal {
+            if request.trigger["kind"] != "project_review"
+                && (progress.waiting == signal || progress.quiet == signal)
+            {
                 let key = format!("streak:{session}:{id}");
                 u.open_streak_signal(&key, &session, &json!({"inbox_id":id}).to_string(), now)?;
             }
-            let action = serde_json::to_string(decision)?;
+            let mut action = serde_json::to_value(decision)?;
+            if let Some(project) = &outcome.project {
+                action["manage_project"] = json!(project);
+            }
             u.record_parent_calls(
                 &session,
                 id,
-                &action,
+                &action.to_string(),
                 &parent_turns(&outcome.calls, id),
                 now,
             )?;
@@ -491,7 +519,7 @@ pub(super) async fn commit(
             u.record(
                 "actor_commit",
                 now,
-                &json!({"inbox_id":id,"request":request,"decision":decision,
+                &json!({"inbox_id":id,"request":request,"decision":action,
                     "workers":work.workers,"jobs":work.jobs,"reply_repeat":repeat})
                 .to_string(),
                 true,

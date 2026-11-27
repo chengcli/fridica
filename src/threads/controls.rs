@@ -253,6 +253,7 @@ fn apply_tx(
         // Retain IDs and history, but never execute work using wiped input or a
         // context snapshot captured before cleaning. New intake remains visible.
         u.wipe(&session, now)?;
+        u.patch_context(&session, r#"{"projects":null}"#)?;
     }
     let mut instruction = None;
     match &action {

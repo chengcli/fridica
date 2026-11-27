@@ -827,3 +827,28 @@ fn native_store_round_trip() -> anyhow::Result<()> {
     anyhow::ensure!(NativeStore.get(&user)?.is_none());
     Ok(())
 }
+
+#[test]
+fn project_review_interval_is_a_positive_configured_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    setup(root);
+    let load = |value: &str| {
+        loader::parse(
+            &(basic(root) + value),
+            &root.join("config.toml"),
+            &context(root),
+        )
+    };
+    assert_eq!(load("").unwrap().state.project_review_interval_seconds, 900);
+    assert_eq!(
+        load("project_review_interval_seconds=37")
+            .unwrap()
+            .state
+            .project_review_interval_seconds,
+        37
+    );
+    for invalid in ["0", "-1", "1.5", "4294967296", "'1'"] {
+        assert!(load(&format!("project_review_interval_seconds={invalid}")).is_err());
+    }
+}

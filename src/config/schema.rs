@@ -89,6 +89,11 @@ impl Egress {
 pub struct State {
     pub path: PathBuf,
     pub control_socket: PathBuf,
+    #[serde(
+        default = "default_review_interval",
+        skip_serializing_if = "is_default_review_interval"
+    )]
+    pub project_review_interval_seconds: u32,
     /// Days a finished thread stays quiet before it moves to its weekly
     /// archive (#114); completed replay events older than this move too.
     /// 0 keeps everything in the live database.
@@ -115,6 +120,12 @@ impl State {
     pub const RECORD: &str = "summary";
     pub const ARCHIVE_EVENTS_AFTER_HOURS: f64 = 24.;
     pub const ARCHIVE_AFTER_DAYS: f64 = 7.;
+}
+pub const fn default_review_interval() -> u32 {
+    900
+}
+fn is_default_review_interval(seconds: &u32) -> bool {
+    *seconds == default_review_interval()
 }
 fn record_mode() -> String {
     State::RECORD.into()
