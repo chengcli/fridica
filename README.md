@@ -14,7 +14,7 @@ Install Fridica in a Python 3.11+ virtual environment with `python -m pip instal
 | GitHub worker MCP | `fridica secret set github/mcp-token` | `GH_TOKEN` or `GITHUB_TOKEN` |
 | alphaXiv MCP | `fridica secret set alphaxiv/token` | `ALPHAXIV_TOKEN` |
 | NASA ADS (SciX) MCP | `fridica secret set ads/token` | `ADS_TOKEN` |
-| Overleaf MCP | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
+| Overleaf Git mode | `fridica secret set overleaf/git-token` | `OVERLEAF_GIT_TOKEN` |
 
 Native Overleaf comments and pending Track Changes use one account login:
 
@@ -22,27 +22,27 @@ Native Overleaf comments and pending Track Changes use one account login:
 fridica overleaf-auth login --expected-email alice@example.com
 ```
 
-Enter your credentials/MFA in the dedicated browser window. Later, `fridica
-overleaf-auth login` reuses the saved account and valid session. Login needs no
-project, channel, worker UUID or model client. Wheels built with this integration
-include the native resources; Node >=20, Chrome/Chromium and an OS credential
-store are still needed on the desktop. Install the same wheel and Node on each
-registered worker. Fridica attaches native tools automatically to eligible
-workers in allowed channels; no adapter path, manual recipient binding or Git
-token is needed for native comments. Git/compile keeps its existing workflow.
-Login enables Overleaf in the selected config; it does not start or reload a listener.
+Enter passwords/MFA yourself in the isolated Chrome/Chromium window. Later,
+`fridica overleaf-auth login` reuses the saved account and valid session from the
+same OS credential store. A browser is needed only for first sign-in or confirmed
+expiry during this owner command; `--browser` optionally selects its executable.
+Login needs no project, channel, worker UUID or model client and does not reload
+or start a listener.
 
-Supply the Overleaf editor link in the requesting Slack thread. Each admitted
-manuscript job receives a grant for the confirmed project, and every native tool
-call must name that same 24-character project ID. A later job can select a
-different project using the same account login. Existing project, channel and
-recipient restrictions still apply.
+Native tools are bundled Rust through fridica-agent and Interleaf. Install a
+matching Fridica build on registered workers; no Node, npm, Python adapter,
+worker browser or Git token is needed for native comments and Track Changes.
+Fridica attaches native tools only to admitted eligible jobs, retaining workspace,
+channel, task-project and tool-approval guards. Supply the editor URL in the
+requesting Slack thread; every call requires that task's explicit project ID.
+Native mode exposes the seven collaboration tools and `native_compile`, with
+no Git-write tools. Compilation needs TeX Live/`latexmk` on the worker. Separate
+Git mode keeps its existing token-based workflow.
 
-See [setup and optional source installation](docs/overleaf-native-source-install.md)
-and [native operations and restrictions](integrations/overleaf/README.md).
-Source installs require explicit resource preparation; built wheels need no
-npm, Rust or manual resource copying. These instructions describe this source
-version, not a claim that a new PyPI release has been published.
+Existing account/project/channel/recipient restrictions remain effective. See
+[installation](docs/overleaf-native-source-install.md) and
+[native operations](src/overleaf/README.md). These instructions describe
+this source version; they do not imply a published release or runtime switch.
 
 Slack automatically checks the standard environment variables first and then their keyring entries. You can delete the four standard Slack token assignments from an existing `[slack]` table. Keep any overrides that point to custom names.
 
@@ -320,7 +320,6 @@ Build a wheel with `maturin build --release --locked --out dist`. The wheel smok
 
 [MIT](LICENSE)
 
-The optional [scoped native Overleaf adapter](integrations/overleaf/README.md)
-uses a separate pinned AGPL MCP process alongside Interleaf, with upstream login
-and a narrow correction preventing ambiguous OT replay. See the integration
-notes for owner setup, native comments, pending Track Changes and readiness limits.
+The [native Overleaf backend](src/overleaf/README.md) is bundled Rust
+through fridica-agent and MIT-licensed Interleaf. It preserves pending suggestions,
+strict versions, scoped authorization and durable no-replay receipts.

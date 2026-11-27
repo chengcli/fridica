@@ -46,16 +46,49 @@ enum Command {
         #[arg(long, hide = true)]
         thread_project: Option<String>,
         /// Trusted launcher context for native tools (no owner login on workers).
-        #[arg(long, hide = true, requires_all = ["native_channel", "workspace_write", "thread_project"], conflicts_with = "probe")]
+        #[arg(long, hide = true, requires_all = ["native_channel", "thread_project"], conflicts_with = "probe")]
         native_worker: Option<String>,
         #[arg(long, hide = true, requires = "native_worker")]
         native_channel: Option<String>,
+        /// Inner sandbox entry, never an owner login.
+        #[arg(long, hide = true, requires_all = ["native_worker", "native_channel", "thread_project"])]
+        native_serve: bool,
+        #[arg(long, hide = true)]
+        native_discovery: bool,
+        #[arg(long, hide = true, requires = "native_worker")]
+        native_session_stdin: bool,
         /// Discover native and built-in tools without reading or forwarding a session.
         #[arg(long, hide = true, requires_all = ["probe", "workspace_write"], conflicts_with = "native_worker")]
         native_probe: bool,
         /// Check bundled tools and verify project read access when OVERLEAF_PROJECT_ID is set.
         #[arg(long)]
         probe: bool,
+    },
+    #[command(hide = true)]
+    OverleafRun {
+        #[arg(long)]
+        workspace: PathBuf,
+        #[arg(long)]
+        worker: String,
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        project: String,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    #[command(hide = true)]
+    OverleafBrokerServe {
+        #[arg(long)]
+        socket: PathBuf,
+        #[arg(long)]
+        workspace: PathBuf,
+        #[arg(long)]
+        worker: String,
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        project: String,
     },
     /// Print the version, source fingerprint and native target.
     BuildInfo,
@@ -220,7 +253,24 @@ async fn run(cli: Cli) -> Result<()> {
             native_worker,
             native_channel,
             native_probe,
+            native_serve,
+            native_discovery,
+            native_session_stdin,
         } => {
+            if native_discovery {
+                return fridica::exec::overleaf::discover_native();
+            }
+            if native_serve {
+                anyhow::ensure!(
+                    native_session_stdin,
+                    "native session must use the memory pipe"
+                );
+                return fridica::exec::overleaf::serve_native(
+                    native_worker.as_deref().expect("native worker"),
+                    native_channel.as_deref().expect("native channel"),
+                    thread_project.as_deref().expect("native project"),
+                );
+            }
             if native_probe {
                 return fridica::exec::overleaf::probe_native(
                     workspace_write.as_deref().expect("probe workspace"),
@@ -234,8 +284,13 @@ async fn run(cli: Cli) -> Result<()> {
                     worker,
                     channel,
                     thread_project.as_deref().expect("native project"),
+                    native_session_stdin,
                 );
             }
+            anyhow::ensure!(
+                native_worker.is_none(),
+                "native tools require the workspace sandbox"
+            );
             if let Some(root) = workspace_write {
                 return fridica::exec::overleaf::launch(&root, probe, thread_project.as_deref());
             }
@@ -251,6 +306,28 @@ async fn run(cli: Cli) -> Result<()> {
             } else {
                 tokio::task::spawn_blocking(fridica_agent::overleaf::run).await??;
             }
+        }
+        Command::OverleafRun {
+            workspace,
+            worker,
+            channel,
+            project,
+            command,
+        } => {
+            return fridica::exec::overleaf_broker::run(
+                &workspace, &worker, &channel, &project, &command,
+            )
+        }
+        Command::OverleafBrokerServe {
+            socket,
+            workspace,
+            worker,
+            channel,
+            project,
+        } => {
+            return fridica::exec::overleaf_broker::serve(
+                &socket, &workspace, &worker, &channel, &project,
+            )
         }
         Command::GithubMcp(options) => {
             fridica_agent::github::run(fridica_agent::github::Options {

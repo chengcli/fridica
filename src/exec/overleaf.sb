@@ -10,5 +10,5 @@
     (global-name "com.apple.SystemConfiguration.DNSConfiguration")
     (global-name "com.apple.system.opendirectoryd.libinfo")
     (global-name "com.apple.trustd.agent"))
-(allow file-write* (subpath (param "WORKSPACE")))
+(allow file-write* (subpath (param "WORKSPACE")) (subpath (param "STATE")))
 (allow file-write-data (literal "/dev/null"))

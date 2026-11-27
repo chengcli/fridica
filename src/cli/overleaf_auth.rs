@@ -10,15 +10,21 @@ const ENTRY: &str = "fridica/overleaf/native-session";
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Sign in with the dedicated Overleaf browser; no model backend or worker required.
+    /// Reuse the saved Overleaf login, or sign in with an isolated browser when expired.
     Login(login::Options),
     /// Describe the scoped sign-in flow without reading credentials or contacting Overleaf.
     Plan,
+    /// Allow the full native tool set on the saved login without signing in again.
+    /// Keeps all existing account, origin, channel, project, recipient and expiry limits.
+    Grant {
+        #[arg(long, required = true)]
+        all: bool,
+    },
     /// Report configured saved native-session status without performing a network request.
     Status,
     /// Remove the dedicated store entry; already running workers require separate revocation.
     Revoke,
-    /// Receive the owner helper's verified session over stdin and save to the OS store.
+    /// Receive a verified session over stdin and save to the OS store.
     /// Never pass a cookie in argv or invoke from an MCP worker.
     ImportVerifiedSession {
         #[arg(long)]
@@ -46,16 +52,27 @@ pub enum Command {
 pub fn run(command: Command) -> Result<()> {
     match command {
         Command::Login(options) => login::run(options)?,
+        Command::Grant { all } => {
+            anyhow::ensure!(all, "specify --all to authorize the full native tool set");
+            let previous = NativeStore
+                .get(ENTRY)?
+                .ok_or_else(|| anyhow::anyhow!("no saved Overleaf login"))?;
+            let raw = std::str::from_utf8(&previous)
+                .map_err(|_| anyhow::anyhow!("invalid native session encoding"))?;
+            let updated = crate::config::overleaf::upgrade_operations(raw)?;
+            NativeStore.set(ENTRY, updated.as_bytes())?;
+            println!("Full native tools authorized on the existing login. Account, origin, project, channel and expiry limits retained. New admitted tasks receive the updated grant.");
+        }
         Command::Plan => println!(
             "{}",
             serde_json::json!({
                 "live_validated":false,"scope":"one verified account; optional project/channel/recipient restrictions",
-                "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,
-                "login":"fridica overleaf-auth login reuses upstream dedicated-profile login and saved session",
+                "operations":fridica_agent::overleaf::native_operations(),"entry":ENTRY,
+                "login":"fridica overleaf-auth login validates and reuses the saved session; Rust opens an isolated browser only for missing or expired login",
                 "lifetime":"actual cookie/server expiry or owner revocation; optional explicitly timed grant",
                 "recipient":"automatic for admitted eligible workers in allowed channels; legacy restrictions retained",
                 "transport":"OS credential store and existing encrypted SSH stdin route",
-                "platform":"owner helper needs Node >=20 and Chrome; listener needs this Fridica feature build",
+                "platform":"built-in Rust login; Chrome or Chromium only when a fresh sign-in is needed",
                 "revocation":"delete entry, stop holder workers and invalidate the dedicated Overleaf session"
             })
         ),
@@ -78,7 +95,7 @@ pub fn run(command: Command) -> Result<()> {
             };
             println!(
                 "{}",
-                serde_json::json!({"tools_verified":false,"native":status,"live_validated":false,"login_helper":"owner-login.mjs"})
+                serde_json::json!({"tools_verified":false,"native":status,"live_validated":false,"login_helper":"rust"})
             );
         }
         Command::Revoke => {

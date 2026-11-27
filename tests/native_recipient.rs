@@ -22,6 +22,8 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
     for case in [
         "automatic",
         "automatic_project",
+        "unbound",
+        "origin_mismatch",
         "missing",
         "missing_channel",
         "scope",
@@ -40,7 +42,7 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("work")).unwrap();
         std::fs::create_dir(root.join("bin")).unwrap();
-        let source = "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CEXAMPLE']\n[overleaf]\nenabled=true\nnative_adapter=['python3','/fixture/adapter.py']\n[machines.dungeon3]\ntransport='ssh'\nhost='fixture'\n[machines.dungeon3.policy]\nmode='full'\nnetwork=['*']\ngpu_confine=false\n[machines.dungeon3.workspaces]\nsnapy='work'\n";
+        let source = "[owner]\nslack_user='UOWNER'\n[slack]\nworkspace='TTEAM'\nchannels=['CEXAMPLE']\n[overleaf]\nenabled=true\nnative_adapter=['obsolete-adapter']\n[machines.dungeon3]\ntransport='ssh'\nhost='fixture'\n[machines.dungeon3.policy]\nmode='full'\nnetwork=['*']\ngpu_confine=false\n[machines.dungeon3.workspaces]\nsnapy='work'\n";
         let context = LoadContext {
             home: root.clone(),
             runtime_dir: None,
@@ -76,8 +78,17 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             workspace: "snapy".into(),
             expires_at: None,
         };
-        if !matches!(case, "missing" | "automatic" | "automatic_project") {
+        if !matches!(
+            case,
+            "missing" | "automatic" | "automatic_project" | "unbound"
+        ) {
             config.overleaf.native_recipient = Some(recipient);
+        }
+        if case == "origin_mismatch" {
+            config.overleaf.login = Some(fridica::config::overleaf::Login {
+                base_url: Some("https://papers.example.invalid".into()),
+                ..Default::default()
+            });
         }
         if case == "expired" {
             config
@@ -88,37 +99,22 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
                 .expires_at = Some(1);
         }
         let mut server = fridica_agent::overleaf::overleaf("fridica");
-        // Simulate even a stale/requested native profile: the launch gate is authoritative.
-        server.env_vars.push("OVERLEAF_NATIVE_SESSION".into());
-        server.command = "python3".into();
+        server.env_vars = vec!["OVERLEAF_NATIVE_SESSION".into()];
         server.args = vec![
-            "/fixture/adapter.py".into(),
-            "--builtin".into(),
-            "fridica".into(),
-            "--workspace".into(),
+            "overleaf-mcp".into(),
+            "--workspace-write".into(),
             root.join("work").to_string_lossy().into_owned(),
-            "--channel".into(),
+            "--native-channel".into(),
             CHANNEL.into(),
-            "--worker".into(),
+            "--native-worker".into(),
             WORKER.into(),
         ];
         if matches!(case, "automatic" | "automatic_project") {
-            config.overleaf.native_adapter.clear();
             let scope = config.overleaf.native_scope.as_mut().unwrap();
             if case == "automatic" {
                 scope.project = None;
             }
             scope.channel = None;
-            server.command = "fridica".into();
-            server.args = vec![
-                "overleaf-mcp".into(),
-                "--workspace-write".into(),
-                root.join("work").to_string_lossy().into_owned(),
-                "--native-channel".into(),
-                CHANNEL.into(),
-                "--native-worker".into(),
-                WORKER.into(),
-            ];
         }
         server
             .args
@@ -131,10 +127,14 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             "worker" => spec.worker_id = "worker-22222222-2222-4222-8222-222222222222".into(),
             "machine" => spec.machine.name = "different".into(),
             "workspace" => spec.workspace.name = "different".into(),
+            "unbound" => {
+                spec.thread_project = None;
+                *spec.mcp_servers[0].args.last_mut().unwrap() = "unbound".into();
+            }
             _ => {}
         }
         let fake = root.join("bin/ssh");
-        std::fs::write(&fake,"#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nshift\nexec /usr/bin/env -i PATH=/usr/bin:/bin OVERLEAF_NATIVE_SESSION=fixture-target-ambient /bin/sh -c \"$1\"\n").unwrap();
+        std::fs::write(&fake,format!("#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nshift\nexec /usr/bin/env -i PATH={target_path}:/usr/bin:/bin OVERLEAF_NATIVE_SESSION=fixture-target-ambient /bin/sh -c \"$1\"\n", target_path=std::path::Path::new(env!("CARGO_BIN_EXE_fridica")).parent().unwrap().display())).unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut saved: serde_json::Value = serde_json::from_str(&envelope()).unwrap();
         if matches!(case, "automatic" | "automatic_project") {
@@ -142,6 +142,10 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             if case == "automatic" {
                 saved.as_object_mut().unwrap().remove("projects");
             }
+        }
+        if case == "unbound" {
+            saved["schema"] = 4.into();
+            saved["operations"] = json!(["ping", "list_projects", "read_file"]);
         }
         if case == "saved_project" {
             saved["projects"] = json!(["4".repeat(24)]);
@@ -158,9 +162,9 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let launcher =
             SystemLauncher::from_config(&config, root.clone(), environment, root.clone()).unwrap();
         let launch_result = launcher.launch(&spec,vec!["/usr/bin/python3".into(),"-c".into(),
-            "import os,json; print(json.dumps({'native': 'OVERLEAF_NATIVE_SESSION' in os.environ, 'git':os.environ.get('OVERLEAF_GIT_TOKEN')}))".into()]);
+            "import os,json; print(json.dumps({'native': 'OVERLEAF_NATIVE_SESSION' in os.environ, 'git':os.environ.get('OVERLEAF_GIT_TOKEN'), 'cookie_exposed': 'overleaf_session2=' in os.environ.get('OVERLEAF_NATIVE_SESSION',''), 'broker':os.environ.get('OVERLEAF_NATIVE_SESSION','').startswith('unix:')}))".into()]);
 
-        if case == "saved_project" {
+        if matches!(case, "saved_project" | "origin_mismatch") {
             assert!(launch_result.is_err());
             continue;
         }
@@ -175,7 +179,10 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             launch
                 .env
                 .contains_key(OsStr::new("OVERLEAF_NATIVE_SESSION")),
-            matches!(case, "allowed" | "automatic" | "automatic_project")
+            matches!(
+                case,
+                "allowed" | "automatic" | "automatic_project" | "unbound"
+            )
         );
         assert!(!launch.argv.iter().any(|a| a.contains("fixture-native")));
         if let Some(raw) = launch.env.get(OsStr::new("OVERLEAF_NATIVE_SESSION")) {
@@ -197,10 +204,21 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
             result["native"],
-            matches!(case, "allowed" | "automatic" | "automatic_project"),
+            matches!(
+                case,
+                "allowed" | "automatic" | "automatic_project" | "unbound"
+            ),
             "{case}"
         );
         assert_eq!(result["git"], "fixture-git");
+        assert_eq!(result["cookie_exposed"], false, "{case}");
+        assert_eq!(
+            result["broker"],
+            matches!(
+                case,
+                "allowed" | "automatic" | "automatic_project" | "unbound"
+            )
+        );
     }
     assert!(
         legacy_refusals_missing.is_empty(),
@@ -209,7 +227,7 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
 }
 
 #[test]
-fn standalone_login_prepares_scope_and_resources_without_backend_or_worker() {
+fn standalone_login_prepares_without_node_backend_store_or_browser() {
     let root = tempfile::tempdir().unwrap();
     let config = root.path().join("config.toml");
     std::fs::write(
@@ -217,29 +235,13 @@ fn standalone_login_prepares_scope_and_resources_without_backend_or_worker() {
         "# keep owner comments\n[overleaf]\nenabled=false\n",
     )
     .unwrap();
-    let resources = root.path().join("bundle");
-    let upstream = resources.join("node_modules/@netique/overleaf-mcp/dist/auth");
-    std::fs::create_dir_all(&upstream).unwrap();
-    std::fs::write(upstream.join("browserLogin.js"), "fixture").unwrap();
-    let node = root.path().join("node");
-    // Resource check itself is exercised by the real Node helper smoke. This
-    // fixture proves CLI dispatch/config preparation without a backend on PATH.
-    std::fs::write(
-        &node,
-        "#!/bin/sh\ncase \"$*\" in *--check*) exit 0;; *) exit 1;; esac\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o700)).unwrap();
     let binary = env!("CARGO_BIN_EXE_fridica");
     let invoke = || {
         let mut cmd = std::process::Command::new(binary);
         cmd.env("PATH", root.path())
             .args(["overleaf-auth", "login", "--prepare-only", "--config"])
             .arg(&config)
-            .args(["--expected-email", "Owner@example.invalid", "--resources"])
-            .arg(&resources)
-            .arg("--node")
-            .arg(&node);
+            .args(["--expected-email", "Owner@example.invalid"]);
         cmd
     };
     assert!(invoke().status().unwrap().success());
@@ -249,6 +251,9 @@ fn standalone_login_prepares_scope_and_resources_without_backend_or_worker() {
     assert!(!source.contains("native_recipient"));
     assert!(!source.contains("project ="));
     assert!(!source.contains("channel ="));
+    assert!(!source.contains("resources"));
+    assert!(!source.contains("node"));
+    assert!(!root.path().join("overleaf-login").exists());
     assert_eq!(
         std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
         0o600

@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, sync::LazyLock};
 
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"(?i)(?:https://(?:www\.)?overleaf\.com/project/|",
+        r"(?i)(?:https?://[^\s/<>]+/project/|",
         r"https://(?:git@)?git\.overleaf\.com/|\boverleaf:)([0-9a-f]{24})\b"
     ))
     .expect("Overleaf project reference")
@@ -132,6 +132,15 @@ pub(super) fn check(decision: &mut Decision, request: &ParentRequest) -> Result<
         {
             continue;
         }
+        // An account-navigation job can run before a target is selected. Its
+        // native grant permits reads only; project writes still need this binding.
+        if bound.is_none()
+            && repo.is_empty()
+            && job.fetch_repo.is_empty()
+            && !LINK.is_match(&job.brief)
+        {
+            continue;
+        }
         let id = bound.ok_or("Which Overleaf project should I use? Please send its project link or 24-character ID in this thread.")?;
         if [repo, &job.brief]
             .iter()
@@ -172,6 +181,10 @@ mod tests {
         assert_eq!(
             binding(messages.into_iter()).unwrap()["projects"],
             json!([a, b])
+        );
+        assert_eq!(
+            owner_projects(&format!("https://papers.example.invalid/project/{a}")),
+            BTreeSet::from([a.to_owned()])
         );
         let confirm = format!("!f use {b}");
         let selected = std::iter::once((confirm.as_str(), "3")).chain(messages);
