@@ -1062,7 +1062,7 @@ dependencies = [
 [[package]]
 name = "fridica-agent"
 version = "0.4.8"
-source = "git+https://github.com/happysky19/fridica-agent?rev=945a79756b01a7bda4f88126bdff009f631889eb#945a79756b01a7bda4f88126bdff009f631889eb"
+source = "git+https://github.com/happysky19/fridica-agent?rev=a72f77cc3c6fa9e451f06a3c489cfbdd494a43b7#a72f77cc3c6fa9e451f06a3c489cfbdd494a43b7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2340,7 +2340,8 @@ dependencies = [
 [[package]]
 name = "interleaf"
 version = "0.5.0"
-source = "git+https://github.com/happysky19/interleaf?rev=d23d45db49667e430a6282151b4041b05c104679#d23d45db49667e430a6282151b4041b05c104679"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "277b606ea61c71f5c77d6122889389c02e7708948489276018d7f806ffb58d3f"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
