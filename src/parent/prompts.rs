@@ -12,7 +12,7 @@ pub fn build(
     request: &ParentRequest,
 ) -> Result<(String, serde_json::Value, String)> {
     let rules = contract::load(config.owner.contract.as_deref())?;
-    let (instructions, schema, model) = match request.call.as_str() {
+    let (mut instructions, mut schema, model) = match request.call.as_str() {
         "triage" => (
             format!("{}\n{TRIAGE}", rules.participation),
             super::schema::triage(),
@@ -32,6 +32,12 @@ pub fn build(
         ),
         _ => bail!("unsupported parent call"),
     };
+    if matches!(request.call.as_str(), "decide" | "repair")
+        && request.session["driver"] != "external"
+    {
+        instructions.push_str(crate::threads::projects::INSTRUCTIONS);
+        crate::threads::projects::extend_schema(&mut schema);
+    }
     let (mut history, trigger) = super::context::prepare(
         &request.history,
         &request.trigger,

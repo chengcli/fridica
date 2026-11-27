@@ -39,6 +39,11 @@ pub(super) async fn handle<P: Parent>(actor: &Actor<P>, request: ParentRequest) 
         } else {
             None
         };
+        if let (Some(note), Some(project)) = (&note, request.trigger["project_id"].as_str()) {
+            u.patch_context(&session, &json!({"projects":{project:{"progress":{&job:{
+                "text":note.text,"observed_at":now,"attempt":attempt
+            }}}}}).to_string())?;
+        }
         let note = if note.is_some() {
             let record = u.job_record(&job)?;
             if crate::workers::progress::may_post(u, &record)? {

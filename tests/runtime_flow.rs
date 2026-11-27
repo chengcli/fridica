@@ -6171,3 +6171,187 @@ async fn legacy_debrief_posts_are_rejected_before_delivery_even_when_retried() {
         );
     }
 }
+
+impl Harness {
+    async fn open_project_thread(&self) {
+        use fridica::core::store::Store as _;
+        self.store
+            .transact(|u| u.open_thread(SESSION, "TTEAM", "CROOM", "100.1", 20.))
+            .await
+            .unwrap();
+    }
+
+    async fn project_instruction(&self, instruction: &str) {
+        self.runtime
+            .control(
+                SESSION.into(),
+                Control::Instruct {
+                    text: instruction.into(),
+                },
+                Authority::Owner,
+            )
+            .await
+            .unwrap();
+        self.runtime.pass().await.unwrap();
+    }
+
+    async fn projects(&self) -> Value {
+        serde_json::from_str(
+            &self
+                .scalar("SELECT json_extract(context_json,'$.projects') FROM threads")
+                .await,
+        )
+        .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn project_review_survives_restart_and_closes_once_with_evidence() {
+    let h = Harness::new(vec![json!({"manage_project":{"op":"start","goal":"Validate the outcome","criteria":"Independent confirmation"}})], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Own this outcome through independent confirmation")
+        .await;
+    let projects = h.projects().await;
+    let (id, p) = projects.as_object().unwrap().iter().next().unwrap();
+    assert_eq!(p["next_review_at"], 920.);
+    assert_eq!(
+        p["instruction"],
+        "Own this outcome through independent confirmation"
+    );
+    h.clock.set(100.);
+    h.parent.responses.lock().unwrap().push_back(json!({"manage_project":{"op":"update","project_id":id,"assignments":[{"id":"check","owner":"assignee","status":"working","dependencies":[],"evidence":"started","next_action":"verify"}]}}));
+    h.project_instruction("Track the assignment").await;
+    assert_eq!(h.projects().await[id]["next_review_at"], 920.);
+    let h = h.restart().await;
+    h.clock.set(919.);
+    let before = h.parent.calls.lock().unwrap().len();
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), before);
+    h.clock.set(921.);
+    h.parent.responses.lock().unwrap().extend([
+        json!({"manage_project":{"op":"close","project_id":id}}),
+        json!({"manage_project":{"op":"close","project_id":id,"evidence":"Receipt 437 verified"}}),
+    ]);
+    h.runtime.pass().await.unwrap();
+    let projects = h.projects().await;
+    assert_eq!(
+        projects[id]["status"],
+        "completed",
+        "inbox {} calls {:?}",
+        h.scalar("SELECT group_concat(kind || char(58) || state) FROM thread_inbox")
+            .await,
+        h.parent
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| (&r.trigger, &r.errors))
+            .collect::<Vec<_>>()
+    );
+    assert!(projects[id]["next_review_at"].is_null());
+    let last = h.parent.calls.lock().unwrap().last().unwrap().clone();
+    assert_eq!(last.trigger["kind"], "project_review");
+    assert_eq!(last.trigger["project_id"], *id);
+    assert_eq!(last.call, "repair");
+    assert!(last
+        .obligations
+        .iter()
+        .all(|o| !o["id"].as_str().unwrap().starts_with("project-review:")));
+    h.clock.set(3000.);
+    h.runtime.pass().await.unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), before + 2);
+}
+
+#[tokio::test]
+async fn project_worker_result_wakes_parent_before_deadline() {
+    let mut start = delegate();
+    start["manage_project"] = json!({"op":"start","goal":"Verify work","criteria":"Review result"});
+    let h = Harness::new(vec![start, json!({})], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Coordinate workers and verify their result")
+        .await;
+    h.finish(1, 1).await;
+    h.clock.set(60.);
+    h.runtime.pass().await.unwrap();
+    let request = h.parent.calls.lock().unwrap().last().unwrap().clone();
+    let id = request.trigger["project_id"].as_str().unwrap();
+    assert_eq!(request.trigger["kind"], "worker_result");
+    assert!(!request.session["projects"][id]["workers"]
+        .as_object()
+        .unwrap()
+        .is_empty());
+    assert_eq!(h.projects().await[id]["next_review_at"], 960.);
+}
+
+#[tokio::test]
+async fn project_review_yields_to_a_result_arriving_during_the_parent_call() {
+    let mut start = delegate();
+    start["manage_project"] = json!({"op":"start","goal":"Coordinate","criteria":"Verified"});
+    let h = Harness::new(vec![start, delegate(), json!({})], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Track the job through verification")
+        .await;
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    h.clock.set(921.);
+    let runtime = h.runtime.clone();
+    let pass = tokio::spawn(async move { runtime.pass().await.unwrap() });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while h.parent.calls.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    h.finish(1, 1).await;
+    *h.parent.gate.lock().unwrap() = None;
+    gate.add_permits(1);
+    pass.await.unwrap();
+    h.runtime.pass().await.unwrap();
+    h.clock.set(923.);
+    h.runtime.pass().await.unwrap();
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM jobs").await,
+        "1"
+    );
+    let calls = h.parent.calls.lock().unwrap();
+    let trace: Vec<_> = calls
+        .iter()
+        .map(|r| (&r.trigger["kind"], &r.call, &r.errors))
+        .collect();
+    assert_eq!(trace.len(), 3, "{trace:?}");
+    assert_eq!(calls[2].trigger["kind"], "worker_result");
+}
+
+#[tokio::test]
+async fn project_pause_and_resume_only_change_the_named_project() {
+    let start = json!({"manage_project":{"op":"start","goal":"Verify","criteria":"Receipt"}});
+    let h = Harness::new(vec![start.clone(), start], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Track the first outcome").await;
+    h.project_instruction("Track a separate outcome").await;
+    let projects = h.projects().await;
+    let keys: Vec<_> = projects.as_object().unwrap().keys().collect();
+    let [first, second] = keys.as_slice() else {
+        panic!("expected two projects")
+    };
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(json!({"manage_project":{"op":"pause","project_id":first}}));
+    h.project_instruction("Pause the first project").await;
+    let paused = h.projects().await;
+    assert!(paused[first]["next_review_at"].is_null());
+    assert_eq!(paused[second], projects[second]);
+    h.clock.set(100.);
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(json!({"manage_project":{"op":"resume","project_id":first}}));
+    h.project_instruction("Resume the first project").await;
+    let resumed = h.projects().await;
+    assert_eq!(resumed[first]["next_review_at"], 1000.);
+    assert_eq!(resumed[second], projects[second]);
+}

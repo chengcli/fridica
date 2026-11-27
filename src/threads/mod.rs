@@ -17,6 +17,7 @@ use fridica_core::failure;
 mod replies;
 mod results;
 
+pub(crate) mod projects;
 pub mod runtime;
 pub mod service;
 pub mod verdict;

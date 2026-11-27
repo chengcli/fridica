@@ -39,6 +39,8 @@ enum Quiet {
     },
     /// A worker's progress note goes to the thread as a notice.
     Progress,
+    /// A linked job finished while its joined group is still running.
+    ProjectChange,
     /// The thread's external driver acts on it.
     External,
     /// A kind this daemon does not know: kept, and looked at again later.
@@ -76,6 +78,7 @@ fn respond_without_gate(kind: &str, request: &ParentRequest) -> Option<Respond> 
                 .unwrap_or("human"),
             turns,
         ),
+        "project_review" => ("human", turns),
         "owner_instruction" => ("owner", turns.saturating_add(1)),
         // The class of the turn that handed off or whose post was refused,
         // so reply limits still hold.
@@ -301,9 +304,26 @@ impl<P: Parent> Actor<P> {
             // parent-driven thread's recorded requests stay as they were.
             request.session["driver"] = json!("external");
         }
+        let timer = request.trigger["kind"] == "project_review";
+        let kind = if timer { "project_review" } else { kind };
         match self.quiet(kind, external, &request) {
             Quiet::Settle { verdict, until } => {
                 return settle(&self.store, id, &request, verdict.into(), until).await
+            }
+            Quiet::ProjectChange => {
+                let settled =
+                    settlement(id, &request, "observe: project job changed".into(), None)?;
+                let now = self.clock.now();
+                return self
+                    .store
+                    .transact(move |u| {
+                        if !u.settle_turn(&settled)? {
+                            return Ok(Step::Stale);
+                        }
+                        super::projects::wake_pending(u, &request, now)?;
+                        Ok(Step::Observed)
+                    })
+                    .await;
             }
             Quiet::Progress => return super::progress::handle(self, request).await,
             Quiet::External => return settle_external(&self.store, id, &request).await,
@@ -353,7 +373,8 @@ impl<P: Parent> Actor<P> {
         }
         let reply_limit = self.config.as_ref().map_or(7000, |c| c.limits.reply_chars);
         let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
-        let mut result = if worker_result {
+        let project_review = request.trigger["project_id"].is_string();
+        let mut result = if worker_result && !project_review {
             super::results::direct(
                 &request,
                 self.config
@@ -364,15 +385,15 @@ impl<P: Parent> Actor<P> {
         } else {
             None
         };
-        if result.is_none() && worker_result {
+        if result.is_none() && worker_result && !project_review {
             if let Some(scope) =
                 delegation_scope(self.config.as_deref(), &request).filter(|s| s.allowed)
             {
                 result = super::results::recover_local(&self.store, scope, &mut request).await?;
             }
         }
-        let decision = match result {
-            Some(decision) => decision,
+        let (decision, project) = match result {
+            Some(decision) => (decision, None),
             None => {
                 self.attach_load(&mut request).await?;
                 match self.decide(&mut request, &mut calls).await? {
@@ -398,6 +419,7 @@ impl<P: Parent> Actor<P> {
             Outcome {
                 request,
                 decision,
+                project,
                 work,
                 calls,
                 verdict: respond.verdict,
@@ -412,6 +434,12 @@ impl<P: Parent> Actor<P> {
                 owner: self.owner.clone(),
                 now: self.clock.now(),
                 signal: self.limits.streak_signal,
+                review_interval: self
+                    .config
+                    .as_ref()
+                    .map_or_else(crate::config::schema::default_review_interval, |c| {
+                        c.state.project_review_interval_seconds
+                    }),
                 reply_limit,
             },
         )
@@ -422,6 +450,24 @@ impl<P: Parent> Actor<P> {
     fn quiet(&self, kind: &str, external: bool, request: &ParentRequest) -> Quiet {
         let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
         let now = self.clock.now();
+        if kind == "project_review" {
+            if request.trigger["project_id"].is_null() {
+                return Quiet::Settle {
+                    verdict: "observe: superseded project review",
+                    until: None,
+                };
+            }
+            if external
+                || self.observe_only
+                || request.session["control"] != "active"
+                || request.session["parent_review_required"] == true
+            {
+                return Quiet::Settle {
+                    verdict: "observe: project review on hold",
+                    until: Some(now + 60.),
+                };
+            }
+        }
         if self.observe_only || request.session["control"] != "active" {
             return Quiet::Settle {
                 verdict: if self.observe_only {
@@ -457,6 +503,12 @@ impl<P: Parent> Actor<P> {
             return Quiet::External;
         }
         if worker_result
+            && request.trigger["project_id"].is_string()
+            && request.trigger["pending"] == true
+        {
+            return Quiet::ProjectChange;
+        }
+        if worker_result
             && (request.trigger["pending"] == true
                 || request.trigger["results"]
                     .as_array()
@@ -472,6 +524,7 @@ impl<P: Parent> Actor<P> {
             "message"
                 | "owner_instruction"
                 | "obligation_due"
+                | "project_review"
                 | "worker_result"
                 | "worker_interrupted"
                 | "handoff"
@@ -593,7 +646,9 @@ impl<P: Parent> Actor<P> {
         &self,
         request: &mut ParentRequest,
         calls: &mut Vec<Call>,
-    ) -> Result<std::result::Result<Decision, (&'static str, f64)>> {
+    ) -> Result<
+        std::result::Result<(Decision, Option<super::projects::Command>), (&'static str, f64)>,
+    > {
         for round in 0..2 {
             request.call = if round == 0 { "decide" } else { "repair" }.into();
             let (raw, mut call) = self.call(request).await?;
@@ -605,11 +660,16 @@ impl<P: Parent> Actor<P> {
             let Some(raw) = raw else {
                 call.settlement_error = Some("parent_unavailable");
                 calls.push(call);
-                return Ok(Ok(super::failure::blocked(false)));
+                return Ok(Ok((super::failure::blocked(false), None)));
             };
-            match validate(&raw, request, now).and_then(|mut d| {
+            let mut action = raw.clone();
+            if let Some(fields) = action.as_object_mut() {
+                fields.remove("manage_project");
+            }
+            match validate(&action, request, now).and_then(|mut d| {
+                let project = super::projects::command(&raw, request, &self.owner)?;
                 if let Err(question) = super::overleaf::check(&mut d, request) {
-                    return Ok(super::overleaf::clarify(question));
+                    return Ok((super::overleaf::clarify(question), None));
                 }
                 super::delegation::prepare(
                     &d,
@@ -617,7 +677,7 @@ impl<P: Parent> Actor<P> {
                     delegation_scope(self.config.as_deref(), request),
                     None,
                 )?;
-                Ok(d)
+                Ok((d, project))
             }) {
                 Ok(decision) => {
                     calls.push(call);
@@ -636,7 +696,7 @@ impl<P: Parent> Actor<P> {
                 }
             }
         }
-        Ok(Ok(super::failure::blocked(true)))
+        Ok(Ok((super::failure::blocked(true), None)))
     }
     /// The parent hit its backend's usage limit (#107). That is temporary:
     /// the item stays pending and is retried after `failure::RATE_LIMIT_RETRY`, the
@@ -803,6 +863,7 @@ async fn load(
         let mut result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
+        super::projects::attach(u, &mut result)?;
         super::overleaf::attach(u, &mut result, &owner, &origin)?;
         Ok(result)
     }).await

@@ -248,6 +248,12 @@ The parent reads thread history, selected text attachments and worker summaries.
 
 Customize the owner's voice and delegation rules in `contract.md` beside the configuration. Keep the required `## Participation` and `## Replies` headings. Use `## Delegation` for parent instructions and `## Worker reports` for instructions given to workers. [Default contract](assets/contract.md)
 
+### Project follow-through
+
+When you delegate an outcome that needs follow-through, the parent can start a project in the thread. It records the original instruction, completion criteria, assignments, dependencies, and evidence. Ask in the thread for status or to pause, resume, or cancel a project. Completing a project requires recorded evidence.
+
+The daemon reviews a project when a linked job finishes, a reported assignment changes status or dependencies, or the next review is due. Routine updates keep the existing deadline. Set `project_review_interval_seconds` in `[state]` to change the default interval of 900 seconds. Review deadlines survive a daemon restart.
+
 ## GitHub links
 
 When a thread links a GitHub issue or pull request, the daemon reads up to three links per call through `gh api`. The parent receives the title, state and selected status lines. Pull requests also include the head commit, checks and reviews. Replies may repeat private repository information, so give the reader access only to repositories those channels may see.
