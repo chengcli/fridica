@@ -67,33 +67,17 @@ pub(crate) fn server(config: &Config, spec: &WorkerSpec) -> Option<McpServer> {
         Some(&spec.workspace.path),
     )?;
     let channel = spec.native_channel.as_ref()?;
-    if let Some(command) = config.overleaf.native_adapter.first() {
-        // Explicit source/legacy deployments keep their exact target-side argv.
-        let builtin = server.command;
-        server.command = command.clone();
-        server.args = config.overleaf.native_adapter[1..].to_vec();
-        server.args.extend([
-            "--builtin".into(),
-            builtin,
-            "--workspace".into(),
-            spec.workspace.path.to_string_lossy().into_owned(),
-            "--channel".into(),
-            channel.clone(),
-            "--worker".into(),
-            spec.worker_id.clone(),
-        ]);
-    } else {
-        // Resolve resources on the execution target, never reuse owner-side paths.
-        server.args = vec![
-            "overleaf-mcp".into(),
-            "--workspace-write".into(),
-            spec.workspace.path.to_string_lossy().into_owned(),
-            "--native-channel".into(),
-            channel.clone(),
-            "--native-worker".into(),
-            spec.worker_id.clone(),
-        ];
-    }
+    server.args = vec![
+        "overleaf-mcp".into(),
+        "--workspace-write".into(),
+        spec.workspace.path.to_string_lossy().into_owned(),
+        "--native-channel".into(),
+        channel.clone(),
+        "--native-worker".into(),
+        spec.worker_id.clone(),
+    ];
+    // Native tools need only the scoped owner session; never pass Git/ADS credentials.
+    server.env_vars.clear();
     server
         .args
         .extend(["--thread-project".into(), spec.thread_project.clone()?]);

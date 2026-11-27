@@ -10,6 +10,7 @@ use crate::{
         ssh::{LaunchOptions, SshTransport},
     },
 };
+use anyhow::Context;
 use serde_json::json;
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
@@ -254,6 +255,20 @@ impl Launcher for SystemLauncher {
                     spec.native_channel.as_deref().expect("admitted channel"),
                 )
                 .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+                let mut raw: serde_json::Value = serde_json::from_str(&raw)
+                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+                raw["legacy_workspaces"] = serde_json::json!(self
+                    .native_config
+                    .machines
+                    .get(&spec.machine.name)
+                    .expect("registered machine")
+                    .workspaces
+                    .iter()
+                    .map(|w| &w.path)
+                    .collect::<Vec<_>>());
+                let raw = raw.to_string();
+                crate::config::overleaf::validate_session(&raw)
+                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
                 environment.insert(NATIVE_ENV.into(), raw.into());
             }
         }
@@ -370,7 +385,35 @@ impl Launcher for SystemLauncher {
             _ => return Err(failure(Failure::Refusal, "transport_unavailable")),
         };
         launch
-            .and_then(|launch| {
+            .and_then(|mut launch| {
+                if native_available {
+                    // Outside the existing startup/isolation helper, after Python activation:
+                    // the Rust broker consumes the grant, then execs that same guarded launch.
+                    let executable = super::overleaf::server(&self.native_config, &spec)
+                        .expect("authorized native server")
+                        .command;
+                    let mut prefix = vec![
+                        executable,
+                        "overleaf-run".into(),
+                        "--workspace".into(),
+                        spec.workspace.path.to_string_lossy().into_owned(),
+                        "--worker".into(),
+                        spec.worker_id.clone(),
+                        "--channel".into(),
+                        spec.native_channel.clone().expect("admitted channel"),
+                        "--project".into(),
+                        spec.thread_project.clone().expect("thread project"),
+                        "--".into(),
+                    ];
+                    if spec.machine.transport == "local" {
+                        prefix.extend(launch.argv);
+                        launch.argv = prefix;
+                    } else {
+                        let script = launch.argv.last_mut().context("missing SSH command")?;
+                        prefix.extend(["/bin/sh".into(), "-c".into(), script.clone()]);
+                        *script = crate::exec::shell::join(&prefix);
+                    }
+                }
                 let launch = crate::exec::python::activate(
                     launch,
                     &spec.machine.transport,

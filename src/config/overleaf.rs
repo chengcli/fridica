@@ -25,7 +25,7 @@ pub fn now() -> u64 {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub enabled: bool,
-    /// Installed thin adapter argv, e.g. ["python3", "/.../adapter.py", "--node", "/.../node"].
+    /// Deprecated, retained only so existing configurations remain readable. Never executed.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub native_adapter: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,7 +44,9 @@ impl Settings {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Login {
+    /// Deprecated; native collaboration is bundled Rust.
     pub resources: Option<std::path::PathBuf>,
+    /// Deprecated; no Node executable is used.
     pub node: Option<std::path::PathBuf>,
     pub browser: Option<std::path::PathBuf>,
 }
@@ -159,7 +161,7 @@ pub fn validate(config: &super::Config) -> Result<()> {
     Ok(())
 }
 
-/// Credential envelope only; Overleaf's protocol remains in the separate AGPL subprocess.
+/// Fridica account and task grant; Rust Interleaf handles the native protocol.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Session {
@@ -172,6 +174,8 @@ struct Session {
     expires_at: Option<u64>,
     recipient: Option<Recipient>,
     channel: Option<String>,
+    #[serde(default)]
+    legacy_workspaces: Vec<std::path::PathBuf>,
 }
 pub(crate) fn validate_session(raw: &str) -> Result<()> {
     ensure!(raw.len() <= 16384, "native session too large");
@@ -188,6 +192,15 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
             && valid_email(&s.expected_email)
             && s.expires_at.is_none_or(|t| t > now()),
         "native session outside scope or expired"
+    );
+    ensure!(
+        s.legacy_workspaces.len() <= 128
+            && s.legacy_workspaces
+                .iter()
+                .all(|p| (p.is_absolute() || p.starts_with("~"))
+                    && !p.components().any(|c| c == std::path::Component::ParentDir)
+                    && !p.to_string_lossy().chars().any(char::is_control)),
+        "invalid legacy receipt workspace"
     );
     let mut names = std::collections::BTreeSet::new();
     for pair in s.cookie.split("; ") {
@@ -242,6 +255,10 @@ pub(crate) fn renew_session(previous: &[u8], raw: &str) -> Result<String> {
     validate_session(raw)?;
     let old: Session = serde_json::from_slice(previous)
         .map_err(|_| anyhow::anyhow!("invalid saved session; explicit revocation required"))?;
+    ensure!(
+        old.schema != 2 || (old.channel.is_some() && old.recipient.is_some()),
+        "legacy native session requires explicit channel and recipient grants"
+    );
     let mut new: serde_json::Value = serde_json::from_str(raw)?;
     ensure!(
         old.account_id == new["account_id"] && old.expected_email == new["expected_email"],
@@ -343,6 +360,64 @@ pub(crate) fn bound_session(
     Ok(raw)
 }
 
+/// Validate the exact target context at startup and again before each native call.
+pub(crate) fn task_session(
+    raw: &str,
+    worker: &str,
+    channel: &str,
+    project: &str,
+) -> Result<(String, String, String)> {
+    validate_session(raw)?;
+    let session: Session = serde_json::from_str(raw)?;
+    ensure!(
+        valid_id(project)
+            && session
+                .projects
+                .as_ref()
+                .is_some_and(|ids| ids.len() == 1 && ids[0] == project)
+            && session.channel.as_deref() == Some(channel)
+            && session
+                .recipient
+                .as_ref()
+                .is_some_and(|r| r.worker_id == worker && r.expires_at.is_none_or(|t| t > now())),
+        "native session does not permit this worker/channel/project"
+    );
+    Ok((session.cookie, session.account_id, session.expected_email))
+}
+
+pub(crate) fn legacy_workspaces(raw: &str) -> Result<Vec<std::path::PathBuf>> {
+    validate_session(raw)?;
+    Ok(serde_json::from_str::<Session>(raw)?.legacy_workspaces)
+}
+
+pub(crate) fn permit_tool(
+    raw: &str,
+    worker: &str,
+    channel: &str,
+    project: &str,
+    name: &str,
+    args: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    task_session(raw, worker, channel, project)?;
+    let operation = match name {
+        "native_list_comments" => "list_comments",
+        "native_read_comment_thread" => "read_comment_thread",
+        "native_add_comment" => "add_comment",
+        "native_reply_comment" => "reply_comment",
+        "native_read_file" | "native_compile" => "read_file",
+        "native_list_tracked_changes" => "list_tracked_changes",
+        "native_suggest_edit" => "find_and_replace",
+        _ => anyhow::bail!("tool is unavailable in native mode"),
+    };
+    let session: Session = serde_json::from_str(raw)?;
+    ensure!(
+        session.operations.iter().any(|op| op == operation)
+            && args.get("project_id").and_then(|p| p.as_str()) == Some(project),
+        "native tool is outside this task's grant"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +451,49 @@ mod tests {
         assert!(validate_session_scope(
             &s.to_string().replace(PROJECT, "222222222222222222222222"),
             &scope
+        )
+        .is_err());
+        let mut bound = b.clone();
+        let raw = bound.to_string();
+        assert!(task_session(&raw, &r.worker_id, CHANNEL, PROJECT).is_ok());
+        for (worker, channel, project) in [
+            (
+                "worker-22222222-2222-4222-8222-222222222222",
+                CHANNEL,
+                PROJECT,
+            ),
+            (&r.worker_id, "COTHER", PROJECT),
+            (&r.worker_id, CHANNEL, "444444444444444444444444"),
+        ] {
+            assert!(task_session(&raw, worker, channel, project).is_err());
+        }
+        let args = serde_json::json!({"project_id":PROJECT});
+        assert!(permit_tool(
+            &raw,
+            &r.worker_id,
+            CHANNEL,
+            PROJECT,
+            "native_read_file",
+            args.as_object().unwrap()
+        )
+        .is_ok());
+        assert!(permit_tool(
+            &raw,
+            &r.worker_id,
+            CHANNEL,
+            PROJECT,
+            "push",
+            args.as_object().unwrap()
+        )
+        .is_err());
+        bound["expires_at"] = 1.into();
+        assert!(permit_tool(
+            &bound.to_string(),
+            &r.worker_id,
+            CHANNEL,
+            PROJECT,
+            "native_read_file",
+            args.as_object().unwrap()
         )
         .is_err());
         let mut timed = r;

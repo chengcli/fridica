@@ -1,23 +1,20 @@
-//! Standalone owner setup. Only config, bundled resources and a child Node process;
-//! no listener, worker inventory, model client or credential read during preparation.
+//! Standalone owner login using the built-in Rust backend. Preparation never reads credentials.
 use crate::config::{
     editor, loader,
     overleaf::{Scope, Settings},
     setup, LoadContext,
 };
-use crate::research::overleaf::{node, resources};
+use crate::core::secret::SecretStore;
+use crate::secrets::NativeStore;
 use anyhow::{ensure, Context, Result};
 use clap::Args;
-use sha2::{Digest, Sha256};
+use fridica_agent::overleaf::login::{capture_session, validate_cookie, Identity, ValidationError};
+use serde::Deserialize;
 use std::{
-    fs,
-    os::unix::fs::{symlink, DirBuilderExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::Command,
+    time::Duration,
 };
 use toml_edit::{value, DocumentMut, Item, Table};
-
-const HELPER: &str = include_str!("../../../integrations/overleaf/owner-login.mjs");
 
 #[derive(Args)]
 pub struct Options {
@@ -32,21 +29,29 @@ pub struct Options {
     /// Optional restriction to one allowed job channel.
     #[arg(long)]
     channel: Option<String>,
-    /// Extracted portable bundle directory containing pinned node_modules. No npm needed.
-    #[arg(long)]
-    resources: Option<PathBuf>,
-    /// System Node >=20 executable; otherwise discover node on PATH/usual install locations.
-    #[arg(long)]
-    node: Option<PathBuf>,
-    /// Optional Chrome/Chromium executable; otherwise use upstream system discovery.
+    /// Deprecated: Rust login needs no separate resource bundle.
+    #[arg(long = "resources", hide = true)]
+    _resources: Option<PathBuf>,
+    /// Deprecated: Rust login needs no Node executable.
+    #[arg(long = "node", hide = true)]
+    _node: Option<PathBuf>,
+    /// Optional Chrome/Chromium executable; otherwise discover an installed browser.
     #[arg(long)]
     browser: Option<PathBuf>,
-    /// Save scope/resources and verify preparation without login, network or OS-store access.
+    /// Save scope/browser preferences and verify Rust readiness without login or credential access.
     #[arg(long)]
     prepare_only: bool,
     /// Optional Unix timestamp, only for an explicitly timed owner grant.
     #[arg(long)]
     expires_at: Option<u64>,
+}
+
+// Never derive Debug: this is a credential envelope already checked by the config boundary.
+#[derive(Deserialize)]
+struct Saved {
+    cookie: String,
+    account_id: String,
+    expected_email: String,
 }
 
 pub fn run(o: Options) -> Result<()> {
@@ -78,62 +83,106 @@ pub fn run(o: Options) -> Result<()> {
         ensure!(old_scope.is_none_or(|s| s == &scope),
             "bound native scope cannot change during login; remove/reconfigure the recipient explicitly first");
     }
-    let mut login = settings.login.clone().unwrap_or_default();
-    let absolute = |p: PathBuf| loader::resolve_path(&p, &std::env::current_dir()?, &context.home);
-    if let Some(p) = o.resources {
-        login.resources = Some(absolute(p)?);
+    let browser = match o.browser {
+        Some(browser) => Some(loader::resolve_path(
+            &browser,
+            &std::env::current_dir()?,
+            &context.home,
+        )?),
+        None => settings
+            .login
+            .as_ref()
+            .and_then(|login| login.browser.as_ref())
+            .map(|browser| {
+                loader::resolve_path(
+                    browser,
+                    path.parent().context("config directory missing")?,
+                    &context.home,
+                )
+            })
+            .transpose()?,
+    };
+    if o.prepare_only {
+        save_config(&path, &source, &mut document, &scope, browser.as_deref())?;
+        println!("Overleaf login is ready in Rust. Scope and browser preferences saved; existing restrictions are retained.");
+        return Ok(());
     }
-    if let Some(p) = o.node {
-        login.node = Some(absolute(p)?);
-    }
-    if let Some(p) = o.browser {
-        login.browser = Some(absolute(p)?);
-    }
-    let resources = resources(&login, Some(&path), &context.home)?;
-    let node = node(&login)?;
-    let helper = prepare(
-        &resources,
-        path.parent().context("config directory missing")?,
-    )?;
-    let mut command = Command::new(node);
-    // Do this before Node starts: NODE_OPTIONS can execute code before the helper.
-    for (name, _) in std::env::vars_os() {
-        let key = name.to_string_lossy().to_ascii_uppercase();
-        if key.starts_with("NODE_")
-            || key.starts_with("OL_")
-            || key.starts_with("OVERLEAF_")
-            || key.ends_with("PROXY")
-            || matches!(key.as_str(), "SSL_CERT_FILE" | "SSL_CERT_DIR")
-        {
-            command.env_remove(name);
-        }
-    }
-    command
-        .arg(helper)
-        .arg("--fridica")
-        .arg(std::env::current_exe()?)
-        .arg("--config")
-        .arg(&path)
-        .arg("--expected-email")
-        .arg(&scope.expected_email);
-    if let Some(project) = &scope.project {
-        command.arg("--project").arg(project);
-    }
-    if let Some(browser) = &login.browser {
-        command.arg("--browser").arg(browser);
-    }
-    if let Some(expiry) = o.expires_at {
-        command.arg("--expires-at").arg(expiry.to_string());
-    }
-    // Resource validation has no browser, network, credential-store or backend side effects.
+
+    // Store failure, malformed grants and grant/account mismatch are errors, never missing login.
+    let previous = NativeStore.get(super::ENTRY)?;
+    let saved = previous
+        .as_deref()
+        .map(|previous| {
+            let raw = std::str::from_utf8(previous)
+                .map_err(|_| anyhow::anyhow!("invalid native session encoding"))?;
+            crate::config::overleaf::validate_session_scope(raw, &scope)?;
+            let saved: Saved = serde_json::from_str(raw)
+                .map_err(|_| anyhow::anyhow!("invalid saved native session"))?;
+            ensure!(
+                saved.expected_email == scope.expected_email,
+                "saved native account changed; explicit revocation required"
+            );
+            Ok::<_, anyhow::Error>(saved)
+        })
+        .transpose()?;
+    let (cookie, identity) = match &saved {
+        Some(saved) => match validate_cookie(&saved.cookie, scope.project.as_deref()) {
+            Ok(identity) => (saved.cookie.clone(), identity),
+            Err(ValidationError::Expired) => capture(&scope, browser.as_deref())?,
+            Err(error) => return Err(error.into()),
+        },
+        None => capture(&scope, browser.as_deref())?,
+    };
     ensure!(
-        command
-            .arg("--check")
-            .status()
-            .context("could not start Node >=20")?
-            .success(),
-        "Overleaf resources are not ready; supply the pinned portable bundle and Node >=20"
+        identity.email == scope.expected_email,
+        "verified Overleaf account does not match the expected email"
     );
+    if let Some(saved) = &saved {
+        ensure!(
+            identity.user_id == saved.account_id,
+            "verified Overleaf account changed; explicit revocation required"
+        );
+    }
+    let mut raw = serde_json::json!({
+        "schema":3,
+        "cookie":cookie,
+        "account_id":identity.user_id,
+        "expected_email":scope.expected_email,
+        "projects":scope.project.as_ref().map(|project| vec![project]),
+        "operations":crate::config::overleaf::OPERATIONS,
+        "expires_at":o.expires_at,
+        "recipient":null,
+        "channel":scope.channel,
+    })
+    .to_string();
+    if let Some(previous) = &previous {
+        raw = crate::config::overleaf::renew_session(previous, &raw)?;
+    }
+    crate::config::overleaf::validate_session_scope(&raw, &scope)?;
+    save_config(&path, &source, &mut document, &scope, browser.as_deref())?;
+    NativeStore.set(super::ENTRY, raw.as_bytes())?;
+    println!("Verified Overleaf session saved. Existing grants retained; no listener activated.");
+    Ok(())
+}
+
+fn capture(scope: &Scope, browser: Option<&Path>) -> Result<(String, Identity)> {
+    println!("Complete Overleaf sign-in in the isolated Chrome or Chromium window.");
+    let session = capture_session(
+        &scope.expected_email,
+        scope.project.as_deref(),
+        browser,
+        Duration::from_secs(300),
+    )?;
+    Ok((session.cookie, session.identity))
+}
+
+fn save_config(
+    path: &Path,
+    source: &str,
+    document: &mut DocumentMut,
+    scope: &Scope,
+    browser: Option<&Path>,
+) -> Result<()> {
     if document.get("overleaf").is_none() {
         document["overleaf"] = Item::Table(Table::new());
     }
@@ -147,80 +196,14 @@ pub fn run(o: Options) -> Result<()> {
     }
     document["overleaf"]["native_scope"] = Item::Table(scope_table);
     document["overleaf"]["enabled"] = value(true);
-    login.resources = Some(resources);
     let mut login_table = Table::new();
-    for (key, path) in [
-        ("resources", &login.resources),
-        ("node", &login.node),
-        ("browser", &login.browser),
-    ] {
-        if let Some(path) = path {
-            login_table[key] = value(path.to_string_lossy().as_ref());
-        }
+    if let Some(browser) = browser {
+        login_table["browser"] = value(browser.to_string_lossy().as_ref());
     }
     document["overleaf"]["login"] = Item::Table(login_table);
     let updated = document.to_string();
     if updated != source {
-        editor::replace(&path, &editor::fingerprint(&source), &updated)?;
+        editor::replace(path, &editor::fingerprint(source), &updated)?;
     }
-    if o.prepare_only {
-        println!("Overleaf account login prepared. Eligible workers attach native tools automatically; existing restrictions are retained.");
-        return Ok(());
-    }
-    // std::process::Command has no remove_arg; use the same sanitized child configuration.
-    let args: Vec<_> = command
-        .get_args()
-        .filter(|a| *a != "--check")
-        .map(|a| a.to_owned())
-        .collect();
-    let mut login_command = Command::new(command.get_program());
-    for (key, val) in command.get_envs() {
-        match val {
-            Some(v) => {
-                login_command.env(key, v);
-            }
-            None => {
-                login_command.env_remove(key);
-            }
-        }
-    }
-    ensure!(
-        login_command.args(args).status()?.success(),
-        "Overleaf login did not complete; no listener activation performed"
-    );
     Ok(())
-}
-
-fn prepare(resources: &Path, parent: &Path) -> Result<PathBuf> {
-    let id = format!(
-        "{:x}",
-        Sha256::digest(format!("{HELPER}\n{}", resources.display()))
-    );
-    let cache = parent.join("overleaf-login");
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&cache)?;
-    let target = cache.join(id);
-    if !target.exists() {
-        let staged = tempfile::Builder::new()
-            .prefix(".prepare-")
-            .tempdir_in(&cache)?;
-        fs::write(staged.path().join("owner-login.mjs"), HELPER)?;
-        fs::set_permissions(
-            staged.path().join("owner-login.mjs"),
-            fs::Permissions::from_mode(0o600),
-        )?;
-        symlink(
-            resources.join("node_modules"),
-            staged.path().join("node_modules"),
-        )?;
-        fs::rename(staged.path(), &target)?;
-    }
-    ensure!(
-        fs::read_to_string(target.join("owner-login.mjs"))? == HELPER
-            && fs::read_link(target.join("node_modules"))? == resources.join("node_modules"),
-        "prepared login resource mismatch"
-    );
-    Ok(target.join("owner-login.mjs"))
 }

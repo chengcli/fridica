@@ -19,7 +19,7 @@ pub fn launch(workspace: &Path, probe: bool, thread_project: Option<&str>) -> Re
             && !root.components().any(|c| c == Component::ParentDir),
         "expected an absolute worker workspace"
     );
-    let mut command = sandbox(&root)?;
+    let mut command = sandbox(&root, None)?;
     command
         .arg(std::env::current_exe()?)
         .arg("overleaf-mcp")
@@ -72,61 +72,233 @@ pub fn serve_project(project: &str) -> Result<()> {
     Ok(())
 }
 
-/// Installed-wheel worker entry. Resolve the companion package on this machine,
-/// not on the owner desktop; the adapter retains the built-in Git/compile server.
-pub fn launch_native(workspace: &Path, worker: &str, channel: &str, project: &str) -> Result<()> {
+/// The native MCP is bundled Rust. Grant transport remains the scoped launcher environment.
+pub fn launch_native(
+    workspace: &Path,
+    worker: &str,
+    channel: &str,
+    project: &str,
+    session_stdin: bool,
+) -> Result<()> {
+    if !session_stdin {
+        let endpoint = std::env::var(crate::config::overleaf::NATIVE_ENV)
+            .context("native endpoint missing; launch through Fridica")?;
+        let path = endpoint
+            .strip_prefix("unix:")
+            .context("native tools require the Fridica session broker")?;
+        return super::overleaf_broker::proxy(Path::new(path));
+    }
+    let raw = native_grant()?;
+    let (_, account, _) = crate::config::overleaf::task_session(&raw, worker, channel, project)?;
+    let root = workspace_root(workspace)?;
+    let state = native_state(&account, project)?;
+    let mut command = sandbox(&root, Some(&state))?;
+    command
+        .arg(std::env::current_exe()?)
+        .arg("overleaf-mcp")
+        .args([
+            "--native-worker",
+            worker,
+            "--native-channel",
+            channel,
+            "--thread-project",
+            project,
+        ])
+        .arg("--native-serve")
+        .arg("--native-session-stdin")
+        .env_remove(crate::config::overleaf::NATIVE_ENV)
+        .env("INTERLEAF_WORKSPACE", &root)
+        .env("TMPDIR", &root)
+        .current_dir(&root);
+    for name in [
+        "OVERLEAF_GIT_TOKEN",
+        "ADS_TOKEN",
+        "OVERLEAF_PROJECT_ID",
+        "INTERLEAF_CONFIG",
+    ] {
+        command.env_remove(name);
+    }
+    // Forward the grant in memory before MCP input, never in a child environment.
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("could not start native Overleaf sandbox")?;
+    let mut input = child.stdin.take().context("native sandbox input missing")?;
+    input.write_all(raw.as_bytes())?;
+    input.write_all(b"\n")?;
+    input.flush()?;
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut input);
+    });
+    let status = child.wait()?;
     ensure!(
-        crate::config::overleaf::valid_id(project),
-        "invalid native project"
+        status.success(),
+        "native Overleaf sandbox exited unsuccessfully"
     );
-    Err(native_command(workspace)?
-        .args(["--thread-project", project])
-        .arg("--worker")
-        .arg(worker)
-        .arg("--channel")
-        .arg(channel)
-        .exec())
-    .context("could not start installed native Overleaf adapter")
+    Ok(())
 }
 
 pub fn probe_native(workspace: &Path) -> Result<()> {
-    Err(native_command(workspace)?.arg("--probe").exec())
-        .context("could not probe installed native Overleaf resources")
+    let root = workspace_root(workspace)?;
+    let mut command = sandbox(&root, None)?;
+    command
+        .arg(std::env::current_exe()?)
+        .arg("overleaf-mcp")
+        .arg("--native-discovery")
+        .env("TMPDIR", &root)
+        .current_dir(&root);
+    for name in [
+        crate::config::overleaf::NATIVE_ENV,
+        "OVERLEAF_GIT_TOKEN",
+        "ADS_TOKEN",
+    ] {
+        command.env_remove(name);
+    }
+    Err(command.exec()).context("could not probe bundled Rust Overleaf tools")
 }
 
-fn native_command(workspace: &Path) -> Result<Command> {
-    let home = std::env::home_dir().context("missing worker home")?;
-    let login = crate::config::overleaf::Login::default();
-    let resources = crate::research::overleaf::resources(&login, None, &home)?;
-    let node = crate::research::overleaf::node(&login)?;
-    let adapter = resources.join("adapter.py");
-    ensure!(adapter.is_file(), "installed Overleaf adapter missing");
-    let root = workspace
-        .strip_prefix("~")
-        .map_or_else(|_| workspace.to_owned(), |rest| home.join(rest));
+pub fn discover_native() -> Result<()> {
+    ensure!(
+        fridica_agent::overleaf::probe_native()? == 8,
+        "native tools unavailable"
+    );
+    println!("fridica-overleaf-mcp:native-ready");
+    Ok(())
+}
+
+pub fn serve_native(worker: &str, channel: &str, project: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let raw = native_grant()?;
+    let (cookie, account, email) =
+        crate::config::overleaf::task_session(&raw, worker, channel, project)?;
+    let state = native_state(&account, project)?;
+    let workspace = std::env::current_dir()?;
+    let mut legacy = crate::config::overleaf::legacy_workspaces(&raw)?;
+    legacy.push(workspace);
+    let legacy = legacy_receipt_dirs(&legacy)?;
+    let session = fridica_agent::overleaf::NativeSession::from_reader(
+        serde_json::json!({"baseUrl":"https://www.overleaf.com","cookie":cookie})
+            .to_string()
+            .as_bytes(),
+        state,
+    )?
+    .with_identity(&account, &email)?;
+    fridica_agent::overleaf::run_native(session, |name, args| {
+        crate::config::overleaf::permit_tool(&raw, worker, channel, project, name, args)?;
+        // Older adapter receipts are authoritative too. Never replay one during migration.
+        if let Some(operation) = args.get("operation_id").and_then(|v| v.as_str()) {
+            let filename = format!("{:x}.json", Sha256::digest(operation.as_bytes()));
+            for directory in &legacy {
+                ensure!(
+                    !directory.join(&filename).try_exists()?,
+                    "legacy operation receipt exists; reconcile it read-only before continuing"
+                );
+            }
+        }
+        Ok(())
+    })
+}
+
+fn legacy_receipt_dirs(workspaces: &[std::path::PathBuf]) -> Result<Vec<std::path::PathBuf>> {
+    let mut result = std::collections::BTreeSet::new();
+    for workspace in workspaces {
+        let root = workspace_root(workspace)?;
+        result.insert(root.join(".fridica-overleaf-receipts"));
+        let entries = match std::fs::read_dir(&root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).context("cannot inspect legacy receipt workspace"),
+        };
+        for (index, entry) in entries.enumerate() {
+            ensure!(index < 16384, "legacy workspace entry limit exceeded");
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.strip_prefix("worker"))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            {
+                ensure!(
+                    !entry.file_type()?.is_symlink(),
+                    "legacy worker directory must not be a symlink"
+                );
+                if entry.file_type()?.is_dir() {
+                    result.insert(entry.path().join(".fridica-overleaf-receipts"));
+                }
+            }
+        }
+    }
+    Ok(result.into_iter().collect())
+}
+
+fn native_grant() -> Result<String> {
+    use std::io::{BufRead, Read};
+    let mut raw = String::new();
+    std::io::stdin()
+        .lock()
+        .take(16385)
+        .read_line(&mut raw)
+        .map_err(|_| anyhow::anyhow!("cannot read scoped native session"))?;
+    ensure!(
+        !raw.is_empty() && raw.len() <= 16384 && raw.ends_with('\n'),
+        "invalid scoped native session transport"
+    );
+    raw.pop();
+    Ok(raw)
+}
+
+fn workspace_root(workspace: &Path) -> Result<std::path::PathBuf> {
+    let root = match workspace.strip_prefix("~") {
+        Ok(rest) => std::env::home_dir()
+            .context("missing worker home")?
+            .join(rest),
+        Err(_) => workspace.to_owned(),
+    };
     ensure!(
         root.is_absolute()
             && root.parent().is_some()
             && !root.components().any(|c| c == Component::ParentDir),
         "expected an absolute worker workspace"
     );
-    // Worker launch/probes already activate the execution target's configured
-    // Python environment; MCP subprocesses must inherit that PATH selection.
-    let mut command = Command::new("python3");
-    command
-        .arg("-B")
-        .arg(adapter)
-        .arg("--node")
-        .arg(node)
-        .arg("--builtin")
-        .arg(std::env::current_exe()?)
-        .arg("--workspace")
-        .arg(root);
-    Ok(command)
+    Ok(root)
+}
+
+/// A project journal survives worker/slot changes on the same execution machine.
+fn native_state(account: &str, project: &str) -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    ensure!(
+        crate::config::overleaf::valid_id(account) && crate::config::overleaf::valid_id(project),
+        "invalid native state identity"
+    );
+    let home = std::env::home_dir()
+        .context("missing worker home")?
+        .canonicalize()?;
+    let mut path = home;
+    for component in [".local", "state", "fridica", "overleaf", account, project] {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) => ensure!(
+                meta.is_dir() && !meta.file_type().is_symlink(),
+                "native state directory must not be a symlink"
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let mode = std::fs::metadata(&path)?.permissions().mode();
+    ensure!(
+        mode & 0o077 == 0,
+        "native project state must be private (0700)"
+    );
+    Ok(path)
 }
 
 #[cfg(target_os = "linux")]
-fn sandbox(root: &Path) -> Result<Command> {
+fn sandbox(root: &Path, state: Option<&Path>) -> Result<Command> {
     use rustix::fs::{openat2, Mode, OFlags, ResolveFlags, CWD};
     use std::os::fd::IntoRawFd;
     // Pin the exact directory across exec. A slot symlink must never select a
@@ -158,15 +330,27 @@ fn sandbox(root: &Path) -> Result<Command> {
             "--bind-fd",
         ])
         .arg(fd.into_raw_fd().to_string())
-        .arg(root)
-        .arg("--chdir")
-        .arg(root)
-        .arg("--");
+        .arg(root);
+    if let Some(state) = state {
+        let fd = openat2(
+            CWD,
+            state,
+            OFlags::PATH | OFlags::DIRECTORY,
+            Mode::empty(),
+            ResolveFlags::NO_SYMLINKS,
+        )
+        .context("cannot pin native state")?;
+        command
+            .arg("--bind-fd")
+            .arg(fd.into_raw_fd().to_string())
+            .arg(state);
+    }
+    command.arg("--chdir").arg(root).arg("--");
     Ok(command)
 }
 
 #[cfg(target_os = "macos")]
-fn sandbox(root: &Path) -> Result<Command> {
+fn sandbox(root: &Path, state: Option<&Path>) -> Result<Command> {
     let canonical = root
         .canonicalize()
         .context("cannot resolve Overleaf workspace")?;
@@ -178,11 +362,31 @@ fn sandbox(root: &Path) -> Result<Command> {
     command
         .arg("-D")
         .arg(format!("WORKSPACE={}", root.display()))
+        .arg("-D")
+        .arg(format!("STATE={}", state.unwrap_or(root).display()))
         .args(["-p", include_str!("overleaf.sb")]);
     Ok(command)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn sandbox(_: &Path) -> Result<Command> {
+fn sandbox(_: &Path, _: Option<&Path>) -> Result<Command> {
     anyhow::bail!("Overleaf workspace confinement requires Linux or macOS")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn legacy_receipts_remain_visible_after_slot_change() {
+        let root = tempfile::tempdir().unwrap();
+        let prior = root.path().join("worker9/.fridica-overleaf-receipts");
+        std::fs::create_dir_all(&prior).unwrap();
+        let current = root.path().join("worker2");
+        std::fs::create_dir(&current).unwrap();
+        let dirs = legacy_receipt_dirs(&[root.path().to_owned(), current]).unwrap();
+        assert!(dirs.contains(&prior));
+        let name = "retained-operation.json";
+        std::fs::write(prior.join(name), b"{}").unwrap();
+        assert!(dirs.iter().any(|dir| dir.join(name).try_exists().unwrap()));
+    }
 }

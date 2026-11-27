@@ -10,7 +10,7 @@ const ENTRY: &str = "fridica/overleaf/native-session";
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Sign in with the dedicated Overleaf browser; no model backend or worker required.
+    /// Reuse the saved Overleaf login, or sign in with an isolated browser when expired.
     Login(login::Options),
     /// Describe the scoped sign-in flow without reading credentials or contacting Overleaf.
     Plan,
@@ -18,7 +18,7 @@ pub enum Command {
     Status,
     /// Remove the dedicated store entry; already running workers require separate revocation.
     Revoke,
-    /// Receive the owner helper's verified session over stdin and save to the OS store.
+    /// Receive a verified session over stdin and save to the OS store.
     /// Never pass a cookie in argv or invoke from an MCP worker.
     ImportVerifiedSession {
         #[arg(long)]
@@ -51,11 +51,11 @@ pub fn run(command: Command) -> Result<()> {
             serde_json::json!({
                 "live_validated":false,"scope":"one verified account; optional project/channel/recipient restrictions",
                 "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,
-                "login":"fridica overleaf-auth login reuses upstream dedicated-profile login and saved session",
+                "login":"fridica overleaf-auth login validates and reuses the saved session; Rust opens an isolated browser only for missing or expired login",
                 "lifetime":"actual cookie/server expiry or owner revocation; optional explicitly timed grant",
                 "recipient":"automatic for admitted eligible workers in allowed channels; legacy restrictions retained",
                 "transport":"OS credential store and existing encrypted SSH stdin route",
-                "platform":"owner helper needs Node >=20 and Chrome; listener needs this Fridica feature build",
+                "platform":"built-in Rust login; Chrome or Chromium only when a fresh sign-in is needed",
                 "revocation":"delete entry, stop holder workers and invalidate the dedicated Overleaf session"
             })
         ),
@@ -78,7 +78,7 @@ pub fn run(command: Command) -> Result<()> {
             };
             println!(
                 "{}",
-                serde_json::json!({"tools_verified":false,"native":status,"live_validated":false,"login_helper":"owner-login.mjs"})
+                serde_json::json!({"tools_verified":false,"native":status,"live_validated":false,"login_helper":"rust"})
             );
         }
         Command::Revoke => {
