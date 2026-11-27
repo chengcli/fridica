@@ -1585,10 +1585,27 @@ async fn native_account_capability_follows_admitted_worker_and_legacy_limits() {
             .mcp_servers
             .iter()
             .find(|s| s.env_vars.iter().any(|v| v == "OVERLEAF_NATIVE_SESSION"));
-        assert_eq!(native.is_some(), case == "automatic", "{case}");
+        assert_eq!(
+            native.is_some(),
+            matches!(case, "automatic" | "unbound"),
+            "{case}"
+        );
         if let Some(server) = native {
             assert_eq!(server.name, "overleaf");
             assert!(!server.auto_approve);
+            let project = if case == "unbound" {
+                "unbound"
+            } else {
+                "333333333333333333333333"
+            };
+            assert_eq!(
+                f.spec.thread_project.as_deref(),
+                (case != "unbound").then_some(project)
+            );
+            assert!(server
+                .args
+                .windows(2)
+                .any(|a| a[0] == "--thread-project" && a[1] == project));
             assert!(server
                 .args
                 .windows(2)

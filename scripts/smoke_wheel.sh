@@ -76,30 +76,59 @@ operations = ["list_comments", "read_comment_thread", "add_comment", "reply_comm
 grant = dict(schema=3, cookie="overleaf_session2=synthetic-wheel-fixture", account_id="1" * 24,
              expected_email="owner@example.invalid", operations=operations, channel=channel, projects=["3" * 24],
              recipient=dict(worker_id=worker, machine="fixture", workspace="paper"))
-requests = [
-    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-        "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "wheel-smoke", "version": "1"}}},
-    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-    {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "native_list_comments", "arguments": {}}},
-]
-result = subprocess.run([str(prefix / "bin/fridica"), "overleaf-mcp", "--workspace-write", str(workspace),
-                         "--native-worker", worker, "--native-channel", channel, "--thread-project", "3" * 24,
-                         "--native-session-stdin"],
-                        input=json.dumps(grant) + "\n" + "".join(json.dumps(r) + "\n" for r in requests),
-                        env=env, cwd=workspace,
-                        text=True, stdout=subprocess.PIPE, timeout=30, check=True)
-replies = [json.loads(line) for line in result.stdout.splitlines()]
-listed = replies[1]["result"]["tools"]
-names = {t["name"] for t in listed}
-assert names == {"native_list_comments", "native_read_comment_thread", "native_add_comment", "native_reply_comment",
-                 "native_read_file", "native_list_tracked_changes", "native_suggest_edit", "native_compile"}, names
-for tool in listed:
-    assert "project_id" in tool["inputSchema"]["required"]
-    assert "default" not in tool["inputSchema"]["properties"]["project_id"]
-refusal = replies[2]
-assert refusal.get("error") or refusal.get("result", {}).get("isError") is True, refusal
-assert "project" in json.dumps(refusal).lower() or "grant" in json.dumps(refusal).lower(), refusal
+def call(name, arguments):
+    return {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+
+def invoke(grant, target, request):
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "wheel-smoke", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        request,
+    ]
+    result = subprocess.run([str(prefix / "bin/fridica"), "overleaf-mcp", "--workspace-write", str(workspace),
+                            "--native-worker", worker, "--native-channel", channel, "--thread-project", target,
+                            "--native-session-stdin"],
+                           input=json.dumps(grant) + "\n" + "".join(json.dumps(r) + "\n" for r in requests),
+                           env=env, cwd=workspace, text=True, stdout=subprocess.PIPE, timeout=30, check=True)
+    assert grant["cookie"] not in result.stdout
+    replies = {reply["id"]: reply for line in result.stdout.splitlines() if (reply := json.loads(line)).get("id")}
+    listed = replies[2]["result"]["tools"]
+    for tool in listed:
+        if tool["name"] not in {"native_ping", "native_list_projects", "native_create_project"}:
+            assert "project_id" in tool["inputSchema"]["required"]
+            assert "default" not in tool["inputSchema"]["properties"]["project_id"]
+    return {t["name"] for t in listed}, replies[3]
+
+def refused(reply):
+    assert reply.get("error") or reply.get("result", {}).get("isError") is True, reply
+
+helpers = {"native_suggest_edit", "native_compile_local"}
+names, reply = invoke(grant, "3" * 24, call("native_list_comments", {}))
+assert names == {"native_" + op for op in operations} | helpers, names
+refused(reply)
+assert "project" in json.dumps(reply).lower() or "grant" in json.dumps(reply).lower(), reply
+
+canonical = set("""ping create_project list_projects open_project list_files read_file
+edit_file find_and_replace create_doc create_folder upload_file rename_entity move_entity delete_entity
+list_history diff_file list_tracked_changes accept_changes set_track_changes reject_changes
+compile label_pages read_log list_comments read_comment_thread add_comment reply_comment
+resolve_comment reopen_comment delete_comment edit_comment_message delete_comment_message search_project""".split())
+assert len(canonical) == 33
+full = {**grant, "schema": 4, "base_url": "http://127.0.0.1:9", "operations": sorted(canonical | {"direct_edit"})}
+expected_tools = {"native_" + op for op in canonical} | helpers
+names, reply = invoke(full, "3" * 24, call("native_ping", {}))
+assert names == expected_tools, names ^ expected_tools
+assert reply["result"]["structuredContent"]["pong"] is True, reply
+_, reply = invoke(full, "3" * 24, call("native_read_file", {"project_id": "4" * 24}))
+refused(reply)
+assert "host-confirmed task project" in json.dumps(reply), reply
+_, reply = invoke(full, "unbound", call("native_reply_comment", {
+    "project_id": "3" * 24, "thread_id": "4" * 24, "content": "synthetic guard check",
+    "operation_id": "11111111-1111-4111-8111-111111111111"}))
+refused(reply)
+assert "unbound native tasks may only read" in json.dumps(reply), reply
 assert not list(workspace.glob(".overleaf-mcp-*")), "obsolete adapter scratch created"
-print("installed Rust native preparation and launch passed without Node, Python helpers or a Git token; missing project refused")
+print("installed Rust native legacy/full catalogs passed without Node, Python helpers or a Git token; missing/wrong project and unbound writes refused")
 PYCODE
 echo "wheel smoke test passed"

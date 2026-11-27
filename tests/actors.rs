@@ -1375,7 +1375,5 @@ async fn overleaf_dispatch_uses_only_the_target_from_this_thread() {
         "SELECT brief FROM jobs WHERE session_id='TTEAM:CROOM:101.1'"
     )
     .await
-    .starts_with(&format!(
-        "Thread-confirmed Overleaf project: https://www.overleaf.com/project/{moist}\n"
-    )));
+    .starts_with(&format!("Thread-confirmed Overleaf project ID: {moist}\n")));
 }
