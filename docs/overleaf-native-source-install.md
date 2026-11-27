@@ -1,54 +1,42 @@
-# Overleaf account login and worker setup
+# Native Overleaf development setup
 
-## Installed wheel
+## Install and sign in
 
-Install a matching Fridica wheel in the owner's Python 3.11+ environment and on
-each registered worker. Native Overleaf is bundled Rust through fridica-agent
-and Interleaf; it requires no Node, npm, Python adapter or worker browser.
-Chrome/Chromium is needed on the owner's desktop only for a fresh sign-in.
-Use Keychain on macOS or an unlocked Secret Service in a Linux user D-Bus session.
+Use matching reviewed development revisions of Fridica, fridica-agent and
+Interleaf on the owner machine and registered workers. A matching Fridica wheel
+bundles the Rust native backend; no Node, npm, Python adapter or worker browser is
+needed. Python 3.11+ may be used to install the wheel. Chrome/Chromium is needed
+only for an owner-driven fresh sign-in. macOS uses Keychain; Linux needs an
+unlocked Secret Service in the owner's D-Bus session.
 
 ```sh
 fridica overleaf-auth login --expected-email owner@example.com
+# For self-hosted Overleaf / Community Edition:
+fridica overleaf-auth login --base-url https://overleaf.example.org --expected-email owner@example.com
 ```
 
-Enter passwords/MFA yourself in the isolated browser window. An optional
-`--browser /absolute/chrome` selects Chrome/Chromium explicitly. Subsequent
-`fridica overleaf-auth login` calls reuse the same saved account and valid OS-store
-session. Only a missing session or confirmed expiry opens a browser during this
-owner command; account mismatch and transient errors do not trigger a new login.
-Use `--config /absolute/config.toml` consistently for a nondefault configuration.
-`--prepare-only` saves preferences and checks readiness without credential,
-browser or network access. Login does not start/reload the daemon or change
-workspace/channel permissions.
+Enter passwords/MFA yourself. Later login calls reuse the same verified account
+and valid saved session; only a missing session or confirmed expiry opens the
+browser. Account mismatch, malformed saved data and transient failures stop.
+The configured origin is explicit, and credentials are never silently moved to
+another host. Use `--browser /absolute/chrome` for explicit browser selection and
+`--config /absolute/config.toml` consistently for a nondefault configuration.
+`--prepare-only` checks readiness without credentials, a browser or network access.
+Neither login nor grant installs a build, starts or reloads a listener.
 
-## Tasks and tools
+## Existing sessions
 
-Give each manuscript task its authorized Overleaf editor URL. Extract the
-24-character ID after `/project/`; never guess. Several projects may share a
-channel, with a separate project grant for each admitted task. Every native call
-requires that task's `project_id`:
+Upgrading source does not widen a saved grant. Existing sessions keep their seven
+previously authorized operations until the owner opts into expanded tools:
 
-```json
-{"name":"native_list_comments","arguments":{"project_id":"0123456789abcdef01234567"}}
+```sh
+fridica overleaf-auth grant --all
 ```
 
-Fridica's local Rust broker checks the admitted worker, channel and project,
-then passes the native session through memory pipes. The environment carries a
-broker socket locator, never the raw cookie. Workers run the bundled Rust server;
-no cookie files, browser fallback or adapter paths are needed. Native mode exposes the seven
-comment/file/Track Changes tools and `native_compile`, with no Git-write tools,
-native accept/reject or untracked native edits. Suggestions require the exact
-native version and stay pending. Mutations use stable UUIDs and durable receipts;
-uncertain outcomes require read-only reconciliation without replay. Compilation
-requires worker TeX Live/`latexmk` and supplies native snapshot/build evidence.
-Git mode retains its separate token credentials and local Git workflow.
-
-## Existing restrictions
-
-Upgrade and renewal retain existing account/project/channel/recipient limits,
-including saved schema-2 restrictions. Normal setup needs no worker UUID binding.
-For an intentionally narrow configuration, keep its existing optional scope:
+No relogin is needed. The schema-4 grant expands tool capabilities only; saved
+account, project, channel, recipient and expiry restrictions stay in force. It
+cannot unlock another paper or channel. Keep any intentionally narrow existing
+scope, for example:
 
 ```toml
 [overleaf.native_scope]
@@ -58,31 +46,77 @@ channel = "C012ABCDEF0"
 ```
 
 The channel must already be allowed. Use `fridica overleaf-auth bind-recipient
---help` only for an explicit binding to a registered worker. Changing the saved
-account requires revocation. Removing the OS entry alone does not revoke running
-copies; stop holders and invalidate the corresponding Overleaf session.
+--help` only when an explicit worker binding is intended. Changing the saved
+account requires revocation. To revoke running access, stop holders and invalidate
+the Overleaf session as well as removing the OS-store entry.
 
-## Source installation
+## Use in a task
+
+Give the requesting thread the authorized Overleaf editor URL. Unbound tasks may
+discover, search and read within their saved scope. Each project operation names
+its exact `project_id`; never guess the ID. Before a project mutation, Fridica
+must confirm that project for the requesting thread. Changing tool arguments
+cannot rebind the task. Project creation requires an unbound task with
+unrestricted account/project scope.
+
+```json
+{"name":"native_list_comments","arguments":{"project_id":"0123456789abcdef01234567"}}
+```
+
+The broker checks the admitted worker, account, channel, task project and expiry.
+It supplies credentials only through Rust memory pipes; model processes get a
+socket locator. Worker browser/cookie files are unnecessary. Tool approvals and
+workspace confinement still apply.
+
+The [capability matrix](../integrations/overleaf/README.md#capabilities) lists all
+33 canonical tools plus `native_suggest_edit` and `native_compile_local`.
+`native_compile` runs on Overleaf's cloud compiler; `native_compile_local` builds
+a verified live-text snapshot locally and requires TeX Live/`latexmk`. Local
+packages/fonts and exported asset consistency can differ from the cloud build.
+Git mode remains a separate token-based checkout workflow.
+
+Read a file's current version before editing. Canonical edits support complete
+`new_content` or exact replacements and tracking `on`, `off` or `auto`; existing
+pending suggestions must be preserved. Server-forced tracking is reported even
+if `off` was requested. The legacy suggestion alias remains pending-only.
+Accept/reject requires precise selection and exact versions per document.
+Message edit/delete verifies original content and author. Edits target only your
+own messages; deleting another author's content requires an explicit project-owner
+request. The review switch changes only you.
+
+Every mutation needs a stable `operation_id` UUID. Reusing the same ID and
+arguments reads its durable receipt instead of writing again. Unknown/partial
+outcomes require read-only reconciliation, never a new UUID, automatic replay
+or destructive rollback. Preserve receipts when migrating execution hosts.
+
+## Source builds and release gates
 
 Source builds need Rust >=1.91, Cargo, a platform compiler/SDK, Git and Python
->=3.11. Preserve existing source/runtime state, check out the intended revision,
-and record `git rev-parse HEAD`:
+>=3.11. Record the intended reviewed heads with `git rev-parse HEAD`; use matching
+dependency revisions across the three repositories. Once dependency requirements
+are satisfied, install through the standard build path:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
-fridica overleaf-auth login --expected-email owner@example.com
 ```
 
-The normal wheel build includes the Rust native backend. No npm step, resource
-archive, `--resources` override or separate native executable is required. See
-[build and verification](../integrations/overleaf/README.md#build-and-verification).
+There is no npm/resource preparation step or separate native executable. See
+[build and validation](../integrations/overleaf/README.md#build-and-validation).
+Registry publication requires matching released dependency APIs and maintainer
+approval. Keep package/publish dry-run and normal CI gates; an unavailable
+registry dependency is a gate to resolve, not a reason to skip verification.
 
-## Deployment limits
+## Acceptance and activation
 
-Preserve the previous binary/configuration and a consistent state backup when
-changing an existing installation. Follow the owner's idle activation process;
-do not start a second listener. Source changes and synthetic wheel tests do not
-certify publication, live login, authenticated manuscript operations or runtime
-activation. Historical tests of the retired adapter do not certify this backend.
+Source/protocol tests and synthetic wheel smoke tests do not prove live-account
+behavior, all 33 tools on a real server, Mac wheel acceptance or release readiness.
+Expanded live-account and Mac acceptance remain pending. Historical adapter tests
+do not certify this Rust backend. These source instructions do not update the
+running service.
+
+Before an authorized deployment, preserve the prior binary/configuration and a
+consistent state backup. Follow the owner's idle activation process and keep one
+listener. Publication, account acceptance and runtime activation are separate
+steps subject to their existing maintainer/owner approvals.

@@ -245,7 +245,26 @@ impl Launcher for SystemLauncher {
                     .native_scope
                     .clone()
                     .expect("authorized scope");
-                scope.project.clone_from(&spec.thread_project);
+                if let Some(project) = &spec.thread_project {
+                    scope.project = Some(project.clone());
+                }
+                let (saved_origin, _, _) = crate::config::overleaf::session_policy(raw)
+                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+                let configured_origin = fridica_agent::overleaf::login::normalize_base_url(
+                    self.native_config
+                        .overleaf
+                        .login
+                        .as_ref()
+                        .and_then(|login| login.base_url.as_deref())
+                        .unwrap_or("https://www.overleaf.com"),
+                )
+                .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+                if saved_origin != configured_origin {
+                    return Err(failure(
+                        Failure::Refusal,
+                        "worker_mcp_credential_unavailable",
+                    ));
+                }
                 let raw = crate::config::overleaf::bound_session(
                     raw,
                     &super::overleaf::recipient(&self.native_config, &spec)
@@ -257,15 +276,20 @@ impl Launcher for SystemLauncher {
                 .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
                 let mut raw: serde_json::Value = serde_json::from_str(&raw)
                     .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
-                raw["legacy_workspaces"] = serde_json::json!(self
-                    .native_config
-                    .machines
-                    .get(&spec.machine.name)
-                    .expect("registered machine")
-                    .workspaces
-                    .iter()
-                    .map(|w| &w.path)
-                    .collect::<Vec<_>>());
+                let mut legacy = crate::config::overleaf::legacy_workspaces(&raw.to_string())
+                    .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
+                legacy.extend(
+                    self.native_config
+                        .machines
+                        .get(&spec.machine.name)
+                        .expect("registered machine")
+                        .workspaces
+                        .iter()
+                        .map(|w| w.path.clone()),
+                );
+                legacy.sort();
+                legacy.dedup();
+                raw["legacy_workspaces"] = serde_json::json!(legacy);
                 let raw = raw.to_string();
                 crate::config::overleaf::validate_session(&raw)
                     .map_err(|_| failure(Failure::Refusal, "worker_mcp_credential_unavailable"))?;
@@ -402,7 +426,9 @@ impl Launcher for SystemLauncher {
                         "--channel".into(),
                         spec.native_channel.clone().expect("admitted channel"),
                         "--project".into(),
-                        spec.thread_project.clone().expect("thread project"),
+                        spec.thread_project
+                            .clone()
+                            .unwrap_or_else(|| "unbound".into()),
                         "--".into(),
                     ];
                     if spec.machine.transport == "local" {

@@ -10,10 +10,15 @@ use crate::{
 };
 use fridica_agent::McpServer;
 
-const JOB_PROJECT: &str = "Thread-confirmed Overleaf project: https://www.overleaf.com/project/";
+const JOB_PROJECT: &str = "Thread-confirmed Overleaf project ID: ";
+const LEGACY_JOB_PROJECT: &str =
+    "Thread-confirmed Overleaf project: https://www.overleaf.com/project/";
 
 pub(crate) fn job_project(brief: &str) -> Option<&str> {
-    let id = brief.lines().next()?.strip_prefix(JOB_PROJECT)?;
+    let first = brief.lines().next()?;
+    let id = first
+        .strip_prefix(JOB_PROJECT)
+        .or_else(|| first.strip_prefix(LEGACY_JOB_PROJECT))?;
     crate::config::overleaf::valid_id(id).then_some(id)
 }
 
@@ -24,11 +29,12 @@ pub(crate) fn project_brief(project: &str, brief: &str) -> String {
 pub(crate) fn recipient(config: &Config, spec: &WorkerSpec) -> Option<Recipient> {
     let channel = spec.native_channel.as_deref()?;
     let scope = config.overleaf.native_scope.as_ref()?;
-    let project = spec.thread_project.as_deref()?;
-    if !crate::config::overleaf::valid_id(project)
-        || scope.project.as_deref().is_some_and(|p| p != project)
-    {
-        return None;
+    if let Some(project) = spec.thread_project.as_deref() {
+        if !crate::config::overleaf::valid_id(project)
+            || scope.project.as_deref().is_some_and(|p| p != project)
+        {
+            return None;
+        }
     }
     let machine = config.machines.get(&spec.machine.name)?;
     let workspace = machine.workspace(&spec.workspace.name)?;
@@ -78,9 +84,12 @@ pub(crate) fn server(config: &Config, spec: &WorkerSpec) -> Option<McpServer> {
     ];
     // Native tools need only the scoped owner session; never pass Git/ADS credentials.
     server.env_vars.clear();
-    server
-        .args
-        .extend(["--thread-project".into(), spec.thread_project.clone()?]);
+    server.args.extend([
+        "--thread-project".into(),
+        spec.thread_project
+            .clone()
+            .unwrap_or_else(|| "unbound".into()),
+    ]);
     server.env_vars.push(NATIVE_ENV.into());
     Some(server)
 }

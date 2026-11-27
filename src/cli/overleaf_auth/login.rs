@@ -8,7 +8,9 @@ use crate::core::secret::SecretStore;
 use crate::secrets::NativeStore;
 use anyhow::{ensure, Context, Result};
 use clap::Args;
-use fridica_agent::overleaf::login::{capture_session, validate_cookie, Identity, ValidationError};
+use fridica_agent::overleaf::login::{
+    capture_session_at, normalize_base_url, validate_cookie_at, Identity, ValidationError,
+};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -38,6 +40,9 @@ pub struct Options {
     /// Optional Chrome/Chromium executable; otherwise discover an installed browser.
     #[arg(long)]
     browser: Option<PathBuf>,
+    /// Overleaf origin, including self-hosted CE (HTTPS; HTTP only for loopback).
+    #[arg(long)]
+    base_url: Option<String>,
     /// Save scope/browser preferences and verify Rust readiness without login or credential access.
     #[arg(long)]
     prepare_only: bool,
@@ -52,6 +57,12 @@ struct Saved {
     cookie: String,
     account_id: String,
     expected_email: String,
+    #[serde(default = "default_origin")]
+    base_url: String,
+}
+
+fn default_origin() -> String {
+    "https://www.overleaf.com".into()
 }
 
 pub fn run(o: Options) -> Result<()> {
@@ -64,6 +75,17 @@ pub fn run(o: Options) -> Result<()> {
     let source = editor::read(&path)?;
     let mut document = source.parse::<DocumentMut>()?;
     let settings: Settings = loader::decode(document.get("overleaf"))?;
+    let base_url = normalize_base_url(
+        o.base_url
+            .as_deref()
+            .or_else(|| {
+                settings
+                    .login
+                    .as_ref()
+                    .and_then(|login| login.base_url.as_deref())
+            })
+            .unwrap_or("https://www.overleaf.com"),
+    )?;
     let old_scope = settings.native_scope.as_ref();
     let scope = Scope {
         expected_email: o
@@ -103,7 +125,14 @@ pub fn run(o: Options) -> Result<()> {
             .transpose()?,
     };
     if o.prepare_only {
-        save_config(&path, &source, &mut document, &scope, browser.as_deref())?;
+        save_config(
+            &path,
+            &source,
+            &mut document,
+            &scope,
+            browser.as_deref(),
+            &base_url,
+        )?;
         println!("Overleaf login is ready in Rust. Scope and browser preferences saved; existing restrictions are retained.");
         return Ok(());
     }
@@ -119,19 +148,42 @@ pub fn run(o: Options) -> Result<()> {
             let saved: Saved = serde_json::from_str(raw)
                 .map_err(|_| anyhow::anyhow!("invalid saved native session"))?;
             ensure!(
+                normalize_base_url(&saved.base_url)? == base_url,
+                "saved Overleaf origin changed; explicit revocation required"
+            );
+            ensure!(
                 saved.expected_email == scope.expected_email,
                 "saved native account changed; explicit revocation required"
             );
             Ok::<_, anyhow::Error>(saved)
         })
         .transpose()?;
+    // A restricted saved login must not probe the account dashboard on renewal.
+    let mut verification_scope = scope.clone();
+    if verification_scope.project.is_none() {
+        if let Some(previous) = &previous {
+            let raw = std::str::from_utf8(previous)
+                .map_err(|_| anyhow::anyhow!("invalid saved session encoding"))?;
+            let (_, projects, _) = crate::config::overleaf::session_policy(raw)?;
+            if let Some(projects) = projects {
+                verification_scope.project = Some(projects.first()
+                    .context("saved session has an empty project grant; explicit revocation required")?.clone());
+            }
+        }
+    }
     let (cookie, identity) = match &saved {
-        Some(saved) => match validate_cookie(&saved.cookie, scope.project.as_deref()) {
+        Some(saved) => match validate_cookie_at(
+            &base_url,
+            &saved.cookie,
+            verification_scope.project.as_deref(),
+        ) {
             Ok(identity) => (saved.cookie.clone(), identity),
-            Err(ValidationError::Expired) => capture(&scope, browser.as_deref())?,
+            Err(ValidationError::Expired) => {
+                capture(&verification_scope, browser.as_deref(), &base_url)?
+            }
             Err(error) => return Err(error.into()),
         },
-        None => capture(&scope, browser.as_deref())?,
+        None => capture(&verification_scope, browser.as_deref(), &base_url)?,
     };
     ensure!(
         identity.email == scope.expected_email,
@@ -144,12 +196,13 @@ pub fn run(o: Options) -> Result<()> {
         );
     }
     let mut raw = serde_json::json!({
-        "schema":3,
+        "schema":4,
+        "base_url":base_url,
         "cookie":cookie,
         "account_id":identity.user_id,
         "expected_email":scope.expected_email,
         "projects":scope.project.as_ref().map(|project| vec![project]),
-        "operations":crate::config::overleaf::OPERATIONS,
+        "operations":full_operations(),
         "expires_at":o.expires_at,
         "recipient":null,
         "channel":scope.channel,
@@ -159,15 +212,23 @@ pub fn run(o: Options) -> Result<()> {
         raw = crate::config::overleaf::renew_session(previous, &raw)?;
     }
     crate::config::overleaf::validate_session_scope(&raw, &scope)?;
-    save_config(&path, &source, &mut document, &scope, browser.as_deref())?;
+    save_config(
+        &path,
+        &source,
+        &mut document,
+        &scope,
+        browser.as_deref(),
+        &base_url,
+    )?;
     NativeStore.set(super::ENTRY, raw.as_bytes())?;
     println!("Verified Overleaf session saved. Existing grants retained; no listener activated.");
     Ok(())
 }
 
-fn capture(scope: &Scope, browser: Option<&Path>) -> Result<(String, Identity)> {
+fn capture(scope: &Scope, browser: Option<&Path>, base_url: &str) -> Result<(String, Identity)> {
     println!("Complete Overleaf sign-in in the isolated Chrome or Chromium window.");
-    let session = capture_session(
+    let session = capture_session_at(
+        base_url,
         &scope.expected_email,
         scope.project.as_deref(),
         browser,
@@ -182,6 +243,7 @@ fn save_config(
     document: &mut DocumentMut,
     scope: &Scope,
     browser: Option<&Path>,
+    base_url: &str,
 ) -> Result<()> {
     if document.get("overleaf").is_none() {
         document["overleaf"] = Item::Table(Table::new());
@@ -197,6 +259,7 @@ fn save_config(
     document["overleaf"]["native_scope"] = Item::Table(scope_table);
     document["overleaf"]["enabled"] = value(true);
     let mut login_table = Table::new();
+    login_table["base_url"] = value(base_url);
     if let Some(browser) = browser {
         login_table["browser"] = value(browser.to_string_lossy().as_ref());
     }
@@ -206,4 +269,10 @@ fn save_config(
         editor::replace(path, &editor::fingerprint(source), &updated)?;
     }
     Ok(())
+}
+
+fn full_operations() -> Vec<String> {
+    let mut ops = fridica_agent::overleaf::native_operations();
+    ops.push("direct_edit".into());
+    ops
 }

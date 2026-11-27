@@ -18,7 +18,7 @@ path = "src/bin/fridica.rs"
 [dependencies]
 fridica-core = { version = "0.6.2", features = ["native-secrets"] }
 fridica-store-sqlite = "0.4.0"
-fridica-agent = { version = "0.4.7", git = "https://github.com/happysky19/fridica-agent", rev = "a4fb143b3dc764ddb02605d27105a0010b051428", features = ["github", "alphaxiv", "scix", "overleaf"] }
+fridica-agent = { version = "0.4.8", git = "https://github.com/happysky19/fridica-agent", rev = "945a79756b01a7bda4f88126bdff009f631889eb", features = ["github", "alphaxiv", "scix", "overleaf"] }
 fridica-slack = "0.2.3"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

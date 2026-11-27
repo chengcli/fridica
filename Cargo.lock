@@ -1061,8 +1061,8 @@ dependencies = [
 
 [[package]]
 name = "fridica-agent"
-version = "0.4.7"
-source = "git+https://github.com/happysky19/fridica-agent?rev=a4fb143b3dc764ddb02605d27105a0010b051428#a4fb143b3dc764ddb02605d27105a0010b051428"
+version = "0.4.8"
+source = "git+https://github.com/happysky19/fridica-agent?rev=945a79756b01a7bda4f88126bdff009f631889eb#945a79756b01a7bda4f88126bdff009f631889eb"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2339,12 +2339,14 @@ dependencies = [
 
 [[package]]
 name = "interleaf"
-version = "0.4.0"
-source = "git+https://github.com/happysky19/interleaf?rev=eadab9a629b5210bc270a90cd475248ef66d539c#eadab9a629b5210bc270a90cd475248ef66d539c"
+version = "0.5.0"
+source = "git+https://github.com/happysky19/interleaf?rev=d23d45db49667e430a6282151b4041b05c104679#d23d45db49667e430a6282151b4041b05c104679"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "html-escape",
  "nix",
+ "percent-encoding",
  "regex",
  "serde",
  "serde_json",
@@ -3959,7 +3961,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

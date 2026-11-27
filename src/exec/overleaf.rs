@@ -91,7 +91,8 @@ pub fn launch_native(
     let raw = native_grant()?;
     let (_, account, _) = crate::config::overleaf::task_session(&raw, worker, channel, project)?;
     let root = workspace_root(workspace)?;
-    let state = native_state(&account, project)?;
+    let (origin, _, _) = crate::config::overleaf::session_policy(&raw)?;
+    let state = native_state(&account, project, &origin)?;
     let mut command = sandbox(&root, Some(&state))?;
     command
         .arg(std::env::current_exe()?)
@@ -161,7 +162,8 @@ pub fn probe_native(workspace: &Path) -> Result<()> {
 
 pub fn discover_native() -> Result<()> {
     ensure!(
-        fridica_agent::overleaf::probe_native()? == 8,
+        fridica_agent::overleaf::probe_native()?
+            == fridica_agent::overleaf::native_operations().len() + 2,
         "native tools unavailable"
     );
     println!("fridica-overleaf-mcp:native-ready");
@@ -173,18 +175,21 @@ pub fn serve_native(worker: &str, channel: &str, project: &str) -> Result<()> {
     let raw = native_grant()?;
     let (cookie, account, email) =
         crate::config::overleaf::task_session(&raw, worker, channel, project)?;
-    let state = native_state(&account, project)?;
-    let workspace = std::env::current_dir()?;
+    let (base_url, projects, operations) = crate::config::overleaf::session_policy(&raw)?;
+    let state = native_state(&account, project, &base_url)?;
+    let workspace = std::env::current_dir()?.canonicalize()?;
     let mut legacy = crate::config::overleaf::legacy_workspaces(&raw)?;
-    legacy.push(workspace);
+    legacy.push(workspace.clone());
     let legacy = legacy_receipt_dirs(&legacy)?;
     let session = fridica_agent::overleaf::NativeSession::from_reader(
-        serde_json::json!({"baseUrl":"https://www.overleaf.com","cookie":cookie})
+        serde_json::json!({"baseUrl":base_url,"cookie":cookie})
             .to_string()
             .as_bytes(),
         state,
     )?
-    .with_identity(&account, &email)?;
+    .with_identity(&account, &email)?
+    .with_capabilities(projects, operations)?
+    .with_upload_roots(vec![workspace])?;
     fridica_agent::overleaf::run_native(session, |name, args| {
         crate::config::overleaf::permit_tool(&raw, worker, channel, project, name, args)?;
         // Older adapter receipts are authoritative too. Never replay one during migration.
@@ -266,17 +271,31 @@ fn workspace_root(workspace: &Path) -> Result<std::path::PathBuf> {
 }
 
 /// A project journal survives worker/slot changes on the same execution machine.
-fn native_state(account: &str, project: &str) -> Result<std::path::PathBuf> {
+fn native_state(account: &str, project: &str, origin: &str) -> Result<std::path::PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     ensure!(
-        crate::config::overleaf::valid_id(account) && crate::config::overleaf::valid_id(project),
+        crate::config::overleaf::valid_id(account)
+            && (project == "unbound" || crate::config::overleaf::valid_id(project)),
         "invalid native state identity"
     );
     let home = std::env::home_dir()
         .context("missing worker home")?
         .canonicalize()?;
     let mut path = home;
-    for component in [".local", "state", "fridica", "overleaf", account, project] {
+    let origin_key = if origin == "https://www.overleaf.com" {
+        account.to_owned()
+    } else {
+        use sha2::{Digest, Sha256};
+        format!("{account}-{:x}", Sha256::digest(origin.as_bytes()))
+    };
+    for component in [
+        ".local",
+        "state",
+        "fridica",
+        "overleaf",
+        &origin_key,
+        project,
+    ] {
         path.push(component);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) => ensure!(

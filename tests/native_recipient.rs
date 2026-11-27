@@ -22,6 +22,8 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
     for case in [
         "automatic",
         "automatic_project",
+        "unbound",
+        "origin_mismatch",
         "missing",
         "missing_channel",
         "scope",
@@ -76,8 +78,17 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             workspace: "snapy".into(),
             expires_at: None,
         };
-        if !matches!(case, "missing" | "automatic" | "automatic_project") {
+        if !matches!(
+            case,
+            "missing" | "automatic" | "automatic_project" | "unbound"
+        ) {
             config.overleaf.native_recipient = Some(recipient);
+        }
+        if case == "origin_mismatch" {
+            config.overleaf.login = Some(fridica::config::overleaf::Login {
+                base_url: Some("https://papers.example.invalid".into()),
+                ..Default::default()
+            });
         }
         if case == "expired" {
             config
@@ -116,6 +127,10 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             "worker" => spec.worker_id = "worker-22222222-2222-4222-8222-222222222222".into(),
             "machine" => spec.machine.name = "different".into(),
             "workspace" => spec.workspace.name = "different".into(),
+            "unbound" => {
+                spec.thread_project = None;
+                *spec.mcp_servers[0].args.last_mut().unwrap() = "unbound".into();
+            }
             _ => {}
         }
         let fake = root.join("bin/ssh");
@@ -127,6 +142,10 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             if case == "automatic" {
                 saved.as_object_mut().unwrap().remove("projects");
             }
+        }
+        if case == "unbound" {
+            saved["schema"] = 4.into();
+            saved["operations"] = json!(["ping", "list_projects", "read_file"]);
         }
         if case == "saved_project" {
             saved["projects"] = json!(["4".repeat(24)]);
@@ -145,7 +164,7 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let launch_result = launcher.launch(&spec,vec!["/usr/bin/python3".into(),"-c".into(),
             "import os,json; print(json.dumps({'native': 'OVERLEAF_NATIVE_SESSION' in os.environ, 'git':os.environ.get('OVERLEAF_GIT_TOKEN'), 'cookie_exposed': 'overleaf_session2=' in os.environ.get('OVERLEAF_NATIVE_SESSION',''), 'broker':os.environ.get('OVERLEAF_NATIVE_SESSION','').startswith('unix:')}))".into()]);
 
-        if case == "saved_project" {
+        if matches!(case, "saved_project" | "origin_mismatch") {
             assert!(launch_result.is_err());
             continue;
         }
@@ -160,7 +179,10 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
             launch
                 .env
                 .contains_key(OsStr::new("OVERLEAF_NATIVE_SESSION")),
-            matches!(case, "allowed" | "automatic" | "automatic_project")
+            matches!(
+                case,
+                "allowed" | "automatic" | "automatic_project" | "unbound"
+            )
         );
         assert!(!launch.argv.iter().any(|a| a.contains("fixture-native")));
         if let Some(raw) = launch.env.get(OsStr::new("OVERLEAF_NATIVE_SESSION")) {
@@ -182,14 +204,20 @@ async fn native_recipient_launch_gate_matches_actual_identity_and_strips_remote_
         let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(
             result["native"],
-            matches!(case, "allowed" | "automatic" | "automatic_project"),
+            matches!(
+                case,
+                "allowed" | "automatic" | "automatic_project" | "unbound"
+            ),
             "{case}"
         );
         assert_eq!(result["git"], "fixture-git");
         assert_eq!(result["cookie_exposed"], false, "{case}");
         assert_eq!(
             result["broker"],
-            matches!(case, "allowed" | "automatic" | "automatic_project")
+            matches!(
+                case,
+                "allowed" | "automatic" | "automatic_project" | "unbound"
+            )
         );
     }
     assert!(

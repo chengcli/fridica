@@ -14,6 +14,12 @@ pub enum Command {
     Login(login::Options),
     /// Describe the scoped sign-in flow without reading credentials or contacting Overleaf.
     Plan,
+    /// Allow the full native tool set on the saved login without signing in again.
+    /// Keeps all existing account, origin, channel, project, recipient and expiry limits.
+    Grant {
+        #[arg(long, required = true)]
+        all: bool,
+    },
     /// Report configured saved native-session status without performing a network request.
     Status,
     /// Remove the dedicated store entry; already running workers require separate revocation.
@@ -46,11 +52,22 @@ pub enum Command {
 pub fn run(command: Command) -> Result<()> {
     match command {
         Command::Login(options) => login::run(options)?,
+        Command::Grant { all } => {
+            anyhow::ensure!(all, "specify --all to authorize the full native tool set");
+            let previous = NativeStore
+                .get(ENTRY)?
+                .ok_or_else(|| anyhow::anyhow!("no saved Overleaf login"))?;
+            let raw = std::str::from_utf8(&previous)
+                .map_err(|_| anyhow::anyhow!("invalid native session encoding"))?;
+            let updated = crate::config::overleaf::upgrade_operations(raw)?;
+            NativeStore.set(ENTRY, updated.as_bytes())?;
+            println!("Full native tools authorized on the existing login. Account, origin, project, channel and expiry limits retained. New admitted tasks receive the updated grant.");
+        }
         Command::Plan => println!(
             "{}",
             serde_json::json!({
                 "live_validated":false,"scope":"one verified account; optional project/channel/recipient restrictions",
-                "operations":crate::config::overleaf::OPERATIONS,"entry":ENTRY,
+                "operations":fridica_agent::overleaf::native_operations(),"entry":ENTRY,
                 "login":"fridica overleaf-auth login validates and reuses the saved session; Rust opens an isolated browser only for missing or expired login",
                 "lifetime":"actual cookie/server expiry or owner revocation; optional explicitly timed grant",
                 "recipient":"automatic for admitted eligible workers in allowed channels; legacy restrictions retained",

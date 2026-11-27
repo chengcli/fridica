@@ -1,10 +1,17 @@
 //! Host-owned native MCP binding. No secrets or project protocol in configuration.
 use anyhow::{ensure, Result};
+use fridica_agent::overleaf::{
+    login::normalize_base_url, native_operation, native_operations, native_tool_is_mutation,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const NATIVE_ENV: &str = "OVERLEAF_NATIVE_SESSION";
 pub const NATIVE_ENTRY: &str = "fridica/overleaf/native-session";
+fn default_base_url() -> String {
+    "https://www.overleaf.com".into()
+}
 pub const OPERATIONS: [&str; 7] = [
     "list_comments",
     "read_comment_thread",
@@ -49,6 +56,9 @@ pub struct Login {
     /// Deprecated; no Node executable is used.
     pub node: Option<std::path::PathBuf>,
     pub browser: Option<std::path::PathBuf>,
+    /// Explicit Overleaf origin; absent retains the cloud service.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +138,14 @@ impl Recipient {
     }
 }
 pub fn validate(config: &super::Config) -> Result<()> {
+    if let Some(base_url) = config
+        .overleaf
+        .login
+        .as_ref()
+        .and_then(|login| login.base_url.as_deref())
+    {
+        normalize_base_url(base_url)?;
+    }
     ensure!(
         config
             .overleaf
@@ -166,6 +184,8 @@ pub fn validate(config: &super::Config) -> Result<()> {
 #[serde(deny_unknown_fields)]
 struct Session {
     schema: u8,
+    #[serde(default = "default_base_url")]
+    base_url: String,
     cookie: String,
     account_id: String,
     expected_email: String,
@@ -181,13 +201,26 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
     ensure!(raw.len() <= 16384, "native session too large");
     let s: Session =
         serde_json::from_str(raw).map_err(|_| anyhow::anyhow!("invalid native session"))?;
+    let origin = normalize_base_url(&s.base_url)?;
+    let catalog = native_operations();
+    let operations: BTreeSet<_> = s.operations.iter().collect();
     ensure!(
-        matches!(s.schema, 2 | 3)
+        matches!(s.schema, 2..=4)
             && (s.schema != 2 || s.projects.as_ref().is_some_and(|p| p.len() == 1))
-            && s.projects
-                .as_ref()
-                .is_none_or(|p| !p.is_empty() && p.iter().all(|id| valid_id(id)))
-            && s.operations == OPERATIONS
+            && s.projects.as_ref().is_none_or(|projects| {
+                projects.len() <= 500
+                    && (s.schema >= 4 || !projects.is_empty())
+                    && projects.iter().all(|p| valid_id(p))
+                    && projects.iter().collect::<BTreeSet<_>>().len() == projects.len()
+            })
+            && (if s.schema >= 4 {
+                operations.len() == s.operations.len()
+                    && s.operations
+                        .iter()
+                        .all(|op| op == "direct_edit" || catalog.contains(op))
+            } else {
+                s.operations == OPERATIONS && origin == default_base_url()
+            })
             && valid_id(&s.account_id)
             && valid_email(&s.expected_email)
             && s.expires_at.is_none_or(|t| t > now()),
@@ -233,6 +266,35 @@ pub(crate) fn validate_session(raw: &str) -> Result<()> {
     );
     Ok(())
 }
+/// Read validated origin, project limits and capabilities without touching a store.
+pub(crate) fn session_policy(raw: &str) -> Result<(String, Option<Vec<String>>, Vec<String>)> {
+    validate_session(raw)?;
+    let session: Session = serde_json::from_str(raw)?;
+    Ok((
+        normalize_base_url(&session.base_url)?,
+        session.projects,
+        session.operations,
+    ))
+}
+
+/// Explicit owner action: expand operations while retaining every other saved limit.
+pub(crate) fn upgrade_operations(raw: &str) -> Result<String> {
+    validate_session(raw)?;
+    let saved: Session = serde_json::from_str(raw)?;
+    ensure!(
+        saved.schema >= 3 || (saved.channel.is_some() && saved.recipient.is_some()),
+        "legacy native session requires explicit channel and recipient grants before an operation upgrade"
+    );
+    let mut value: serde_json::Value = serde_json::from_str(raw)?;
+    let mut operations = native_operations();
+    operations.push("direct_edit".into());
+    value["schema"] = 4.into();
+    value["operations"] = serde_json::json!(operations);
+    let raw = value.to_string();
+    validate_session(&raw)?;
+    Ok(raw)
+}
+
 pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<()> {
     validate_session(raw)?;
     scope.validate()?;
@@ -253,13 +315,36 @@ pub(crate) fn validate_session_scope(raw: &str, scope: &Scope) -> Result<()> {
 /// A new account-wide login cannot erase a legacy grant stored with the session.
 pub(crate) fn renew_session(previous: &[u8], raw: &str) -> Result<String> {
     validate_session(raw)?;
+    let previous_raw = std::str::from_utf8(previous)
+        .map_err(|_| anyhow::anyhow!("invalid saved session; explicit revocation required"))?;
+    validate_session(previous_raw)?;
     let old: Session = serde_json::from_slice(previous)
         .map_err(|_| anyhow::anyhow!("invalid saved session; explicit revocation required"))?;
     ensure!(
         old.schema != 2 || (old.channel.is_some() && old.recipient.is_some()),
         "legacy native session requires explicit channel and recipient grants"
     );
+    let incoming: Session = serde_json::from_str(raw)?;
     let mut new: serde_json::Value = serde_json::from_str(raw)?;
+    ensure!(
+        normalize_base_url(&old.base_url)? == normalize_base_url(&incoming.base_url)?,
+        "native origin changed; explicit revocation required"
+    );
+    new["base_url"] = normalize_base_url(&old.base_url)?.into();
+    new["schema"] = old.schema.max(incoming.schema).into();
+    new["operations"] = serde_json::json!(old
+        .operations
+        .iter()
+        .filter(|op| incoming.operations.contains(op))
+        .collect::<Vec<_>>());
+    let legacy: BTreeSet<_> = old
+        .legacy_workspaces
+        .iter()
+        .chain(incoming.legacy_workspaces.iter())
+        .collect();
+    if !legacy.is_empty() {
+        new["legacy_workspaces"] = serde_json::json!(legacy);
+    }
     ensure!(
         old.account_id == new["account_id"] && old.expected_email == new["expected_email"],
         "native account changed; explicit revocation required"
@@ -276,7 +361,7 @@ pub(crate) fn renew_session(previous: &[u8], raw: &str) -> Result<String> {
         new["projects"] = serde_json::json!(permitted);
     } else {
         ensure!(
-            old.schema == 3,
+            old.schema >= 3,
             "invalid legacy grant; explicit revocation required"
         );
     }
@@ -318,7 +403,7 @@ pub(crate) fn bound_session(
     // Schema2 predates automatic admission. An absent legacy grant was a denial,
     // not permission to bind the saved login to any newly admitted worker.
     ensure!(
-        saved.schema == 3
+        saved.schema >= 3
             || (scope.channel.is_some()
                 && configured_recipient.is_some_and(|r| r.permits(
                     &recipient.worker_id,
@@ -370,11 +455,12 @@ pub(crate) fn task_session(
     validate_session(raw)?;
     let session: Session = serde_json::from_str(raw)?;
     ensure!(
-        valid_id(project)
-            && session
-                .projects
-                .as_ref()
-                .is_some_and(|ids| ids.len() == 1 && ids[0] == project)
+        (project == "unbound"
+            || (valid_id(project)
+                && session
+                    .projects
+                    .as_ref()
+                    .is_some_and(|ids| ids.len() == 1 && ids[0] == project)))
             && session.channel.as_deref() == Some(channel)
             && session
                 .recipient
@@ -399,22 +485,68 @@ pub(crate) fn permit_tool(
     args: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
     task_session(raw, worker, channel, project)?;
-    let operation = match name {
-        "native_list_comments" => "list_comments",
-        "native_read_comment_thread" => "read_comment_thread",
-        "native_add_comment" => "add_comment",
-        "native_reply_comment" => "reply_comment",
-        "native_read_file" | "native_compile" => "read_file",
-        "native_list_tracked_changes" => "list_tracked_changes",
-        "native_suggest_edit" => "find_and_replace",
-        _ => anyhow::bail!("tool is unavailable in native mode"),
-    };
+    let operation = native_operation(name)
+        .ok_or_else(|| anyhow::anyhow!("tool is unavailable in native mode"))?;
     let session: Session = serde_json::from_str(raw)?;
     ensure!(
-        session.operations.iter().any(|op| op == operation)
-            && args.get("project_id").and_then(|p| p.as_str()) == Some(project),
-        "native tool is outside this task's grant"
+        session.operations.contains(&operation),
+        "native tool is outside this task's capability grant"
     );
+    if matches!(
+        name,
+        "native_edit_file" | "native_find_and_replace" | "native_suggest_edit"
+    ) {
+        let track = args
+            .get("track")
+            .map(|v| {
+                v.as_str()
+                    .ok_or_else(|| anyhow::anyhow!("native track must be a string"))
+            })
+            .transpose()?
+            .unwrap_or("on");
+        ensure!(
+            matches!(track, "on" | "off" | "auto"),
+            "invalid native tracking mode"
+        );
+        ensure!(
+            track == "on" || session.operations.iter().any(|op| op == "direct_edit"),
+            "direct editing requires its separate capability"
+        );
+    }
+    match operation.as_str() {
+        "ping" | "list_projects" => ensure!(
+            !args.contains_key("project_id"),
+            "native account reads do not take a project target"
+        ),
+        "create_project" => ensure!(
+            project == "unbound" && session.projects.is_none() && !args.contains_key("project_id"),
+            "project creation requires an unbound unrestricted account grant"
+        ),
+        _ => {
+            let target = args
+                .get("project_id")
+                .and_then(|p| p.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("native project call needs an explicit project_id")
+                })?;
+            ensure!(valid_id(target), "invalid native project target");
+            if project == "unbound" {
+                ensure!(
+                    !native_tool_is_mutation(name)
+                        && session
+                            .projects
+                            .as_ref()
+                            .is_none_or(|ids| ids.iter().any(|id| id == target)),
+                    "unbound native tasks may only read permitted projects; bind the host thread before writes"
+                );
+            } else {
+                ensure!(
+                    target == project,
+                    "native project call differs from the host-confirmed task project"
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -560,5 +692,161 @@ mod tests {
         assert!(
             validate_session(&raw.to_string().replace("\"schema\":3", "\"schema\":2")).is_err()
         );
+    }
+    #[test]
+    fn schema4_upgrade_and_renewal_preserve_capabilities_origin_and_limits() {
+        let recipient = Recipient {
+            worker_id: "worker-11111111-1111-4111-8111-111111111111".into(),
+            machine: "test".into(),
+            workspace: "paper".into(),
+            expires_at: None,
+        };
+        let legacy = serde_json::json!({"schema":3,"cookie":"overleaf_session2=fixture","account_id":"111111111111111111111111","expected_email":"owner@example.invalid","projects":[PROJECT],"channel":CHANNEL,"recipient":recipient,"operations":OPERATIONS,"legacy_workspaces":["/tmp/legacy-paper"]});
+        let mut unbound_legacy = legacy.clone();
+        unbound_legacy["schema"] = 2.into();
+        unbound_legacy["channel"] = serde_json::Value::Null;
+        unbound_legacy["recipient"] = serde_json::Value::Null;
+        assert!(upgrade_operations(&unbound_legacy.to_string()).is_err());
+        let upgraded = upgrade_operations(&legacy.to_string()).unwrap();
+        let mut restored: serde_json::Value = serde_json::from_str(&upgraded).unwrap();
+        assert_eq!(restored["schema"], 4);
+        assert!(restored["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "direct_edit"));
+        restored["schema"] = legacy["schema"].clone();
+        restored["operations"] = legacy["operations"].clone();
+        assert_eq!(restored, legacy);
+        let renewed = renew_session(legacy.to_string().as_bytes(), &upgraded).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&renewed).unwrap();
+        assert_eq!(saved["operations"], legacy["operations"]);
+        assert_eq!(saved["projects"], legacy["projects"]);
+        assert_eq!(saved["legacy_workspaces"], legacy["legacy_workspaces"]);
+        let mut other: serde_json::Value = serde_json::from_str(&upgraded).unwrap();
+        other["base_url"] = "https://ce.example.invalid".into();
+        assert!(renew_session(legacy.to_string().as_bytes(), &other.to_string()).is_err());
+        other["base_url"] = "http://127.0.0.1:3000/".into();
+        let (origin, projects, _) = session_policy(&other.to_string()).unwrap();
+        assert_eq!(origin, "http://127.0.0.1:3000");
+        assert_eq!(projects, Some(vec![PROJECT.into()]));
+        other["operations"] = serde_json::json!(["read_file", "read_file"]);
+        assert!(validate_session(&other.to_string()).is_err());
+        other["operations"] = serde_json::json!(["unknown_operation"]);
+        assert!(validate_session(&other.to_string()).is_err());
+        other["operations"] = serde_json::json!([]);
+        other["projects"] = serde_json::json!([]);
+        assert!(validate_session(&other.to_string()).is_ok());
+        let mut invalid_legacy = legacy.clone();
+        invalid_legacy["operations"] = serde_json::json!(["read_file"]);
+        assert!(validate_session(&invalid_legacy.to_string()).is_err());
+    }
+    #[test]
+    fn unbound_tasks_retain_saved_read_limits_and_cannot_write_projects() {
+        let worker = "worker-11111111-1111-4111-8111-111111111111";
+        let raw = serde_json::json!({"schema":4,"cookie":"overleaf_session2=fixture","account_id":"111111111111111111111111","expected_email":"owner@example.invalid","projects":[PROJECT],"channel":CHANNEL,"recipient":{"worker_id":worker,"machine":"test","workspace":"paper"},"operations":native_operations()});
+        let permit =
+            |raw: &serde_json::Value, project: &str, tool: &str, args: serde_json::Value| {
+                permit_tool(
+                    &raw.to_string(),
+                    worker,
+                    CHANNEL,
+                    project,
+                    tool,
+                    args.as_object().unwrap(),
+                )
+            };
+        assert!(task_session(&raw.to_string(), worker, CHANNEL, "unbound").is_ok());
+        assert!(permit(&raw, "unbound", "native_ping", serde_json::json!({})).is_ok());
+        assert!(permit(
+            &raw,
+            "unbound",
+            "native_list_projects",
+            serde_json::json!({})
+        )
+        .is_ok());
+        assert!(permit(
+            &raw,
+            "unbound",
+            "native_read_file",
+            serde_json::json!({"project_id":PROJECT})
+        )
+        .is_ok());
+        assert!(permit(
+            &raw,
+            "unbound",
+            "native_read_file",
+            serde_json::json!({"project_id":"444444444444444444444444"})
+        )
+        .is_err());
+        assert!(permit(
+            &raw,
+            "unbound",
+            "native_reply_comment",
+            serde_json::json!({"project_id":PROJECT})
+        )
+        .is_err());
+        assert!(permit(
+            &raw,
+            "unbound",
+            "native_create_project",
+            serde_json::json!({})
+        )
+        .is_err());
+        assert!(permit(
+            &raw,
+            PROJECT,
+            "native_reply_comment",
+            serde_json::json!({"project_id":PROJECT})
+        )
+        .is_ok());
+        assert!(permit(
+            &raw,
+            PROJECT,
+            "native_reply_comment",
+            serde_json::json!({"project_id":"444444444444444444444444"})
+        )
+        .is_err());
+        assert!(permit(
+            &raw,
+            PROJECT,
+            "native_edit_file",
+            serde_json::json!({"project_id":PROJECT,"track":"off"})
+        )
+        .is_err());
+        let full: serde_json::Value =
+            serde_json::from_str(&upgrade_operations(&raw.to_string()).unwrap()).unwrap();
+        assert!(permit(
+            &full,
+            PROJECT,
+            "native_edit_file",
+            serde_json::json!({"project_id":PROJECT,"track":"off"})
+        )
+        .is_ok());
+        let mut account = raw;
+        account["projects"] = serde_json::Value::Null;
+        assert!(permit(
+            &account,
+            "unbound",
+            "native_create_project",
+            serde_json::json!({})
+        )
+        .is_ok());
+        assert!(permit(
+            &account,
+            "unbound",
+            "native_read_file",
+            serde_json::json!({"project_id":"444444444444444444444444"})
+        )
+        .is_ok());
+        account["expires_at"] = 1.into();
+        assert!(permit(&account, "unbound", "native_ping", serde_json::json!({})).is_err());
+        assert!(permit(
+            &account,
+            "unbound",
+            "native_list_projects",
+            serde_json::json!({})
+        )
+        .is_err());
     }
 }
