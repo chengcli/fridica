@@ -78,3 +78,70 @@ pub fn launch(
     }
     Ok((launch, held))
 }
+
+/// Retry only a diagnostic SSH handshake that failed before a remote command
+/// could start. All attempts share the caller's original time budget.
+pub async fn run(
+    launch: Launch,
+    timeout: std::time::Duration,
+) -> Result<super::process::Completed> {
+    use std::time::Duration;
+    use tokio::time::{sleep, Instant};
+    let ssh = launch
+        .argv
+        .get(super::credentials::ssh_options_index(&launch) - 1)
+        .is_some_and(|program| program == "ssh");
+    let deadline = Instant::now() + timeout;
+    for delay in [Duration::from_secs(2), Duration::from_secs(5)] {
+        let result = super::process::run_with_open_stdin(
+            launch.clone(),
+            deadline.saturating_duration_since(Instant::now()),
+            4096,
+        )
+        .await?;
+        if !ssh || !handshake_reset(&result) || Instant::now() + delay >= deadline {
+            return Ok(result);
+        }
+        sleep(delay).await;
+    }
+    super::process::run_with_open_stdin(
+        launch,
+        deadline.saturating_duration_since(Instant::now()),
+        4096,
+    )
+    .await
+}
+
+pub(crate) fn handshake_reset(result: &super::process::Completed) -> bool {
+    result.returncode == 255
+        && result.stdout.is_empty()
+        && String::from_utf8_lossy(&result.stderr).lines().any(|line| {
+            line.starts_with("kex_exchange_identification:")
+                && (line.contains("Connection reset") || line.contains("Connection closed"))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{os::unix::fs::PermissionsExt, time::Duration};
+    #[tokio::test]
+    async fn retries_handshake_reset_before_remote_execution() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join("ssh");
+        std::fs::write(&ssh, "#!/bin/sh\nif [ -e attempted ]; then echo ready; exit 0; fi\ntouch attempted\necho 'kex_exchange_identification: read: Connection reset by peer' >&2\nexit 255\n").unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = Launch {
+            argv: vec!["ssh".into()],
+            cwd: Some(dir.path().to_owned()),
+            env: [(
+                OsString::from("PATH"),
+                std::env::join_paths([dir.path(), Path::new("/usr/bin")]).unwrap(),
+            )]
+            .into(),
+        };
+        let completed = run(launch, Duration::from_secs(10)).await.unwrap();
+        assert_eq!(completed.returncode, 0);
+        assert_eq!(completed.stdout, b"ready\n");
+    }
+}

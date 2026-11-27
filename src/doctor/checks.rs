@@ -1,9 +1,6 @@
 //! General non-model diagnostics. Startup readiness deliberately stays separate:
 //! these probes invoke backend help/auth/schema commands, but never a session.
-use crate::{
-    config::{self, registry::Machine, Config, LoadContext},
-    exec::process,
-};
+use crate::config::{self, registry::Machine, Config, LoadContext};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::{
@@ -330,7 +327,9 @@ async fn machine(
         report.test(
             name,
             matches!(system.as_str(), "linux" | "darwin"),
-            if system == "python_environment_unavailable" {
+            if system == "ssh_handshake_reset" {
+                "SSH connection reset during key exchange"
+            } else if system == "python_environment_unavailable" {
                 "configured Python environment is missing or failed to activate"
             } else {
                 "unsupported system or failed transport; SSH must connect without a prompt"
@@ -361,13 +360,14 @@ async fn machine(
             if crate::github::mcp::target(&probe.config, &machine.name, &workspace.policy).is_some()
                 && !*probe.stop.borrow()
             {
-                let passed = crate::github::mcp::probe(
+                let passed = crate::github::mcp::probe_with_control(
                     &probe.config,
                     &probe.context.home,
                     probe.environment.clone(),
                     machine,
                     workspace,
                     probe.timeout,
+                    Some(&probe.control),
                 )
                 .await
                 .unwrap_or(false);
@@ -431,12 +431,11 @@ async fn machine(
                     machine,
                     workspace,
                     server,
+                    Some(&probe.control),
                 ) {
                     Ok((launch, _control)) => {
                         let marker = format!("fridica-{}-mcp:ready\n", service.name());
-                        match crate::exec::process::run_with_open_stdin(launch, probe.timeout, 4096)
-                            .await
-                        {
+                        match crate::exec::probe::run(launch, probe.timeout).await {
                             Ok(r) if native => {
                                 if r.returncode == 0
                                     && r.stdout == b"fridica-overleaf-mcp:native-ready\n"
@@ -605,11 +604,12 @@ impl Probe {
             },
             Some(&self.context.home),
         )?;
-        let result =
-            process::run_with_open_stdin(launch, self.timeout + Duration::from_secs(3), 4096)
-                .await?;
+        let result = crate::exec::probe::run(launch, self.timeout + Duration::from_secs(3)).await?;
         if crate::exec::python::refused(result.returncode, &result.stderr) {
             return Ok("python_environment_unavailable".into());
+        }
+        if crate::exec::probe::handshake_reset(&result) {
+            return Ok("ssh_handshake_reset".into());
         }
         if result.returncode != 0 {
             bail!("diagnostic transport failed");

@@ -217,7 +217,14 @@ pub async fn active(
         return Ok(());
     }
     if !diagnostics.passed() {
-        bail!("active startup doctor checks did not pass; run doctor for details");
+        let failures = diagnostics
+            .checks
+            .iter()
+            .filter(|c| c.status == crate::doctor::checks::Status::Fail)
+            .map(|c| c.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!("active startup doctor checks did not pass\n{failures}");
     }
     if crate::config::load(&config.path, &context)?.fingerprint != config.fingerprint {
         bail!("configuration changed during active startup checks; restart validation");

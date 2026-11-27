@@ -117,18 +117,36 @@ pub async fn probe(
     workspace: &crate::config::registry::Workspace,
     timeout: std::time::Duration,
 ) -> anyhow::Result<bool> {
+    probe_with_control(config, home, environment, machine, workspace, timeout, None).await
+}
+pub(crate) async fn probe_with_control(
+    config: &Config,
+    home: &std::path::Path,
+    environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    machine: &crate::config::registry::Machine,
+    workspace: &crate::config::registry::Workspace,
+    timeout: std::time::Duration,
+    shared_control: Option<&std::path::Path>,
+) -> anyhow::Result<bool> {
     let Some(server) = servers(config, &machine.name, &workspace.policy).pop() else {
         return Ok(true);
     };
-    let (launch, _control) =
-        crate::workers::mcp_probe::launch(config, home, environment, machine, workspace, server)?;
+    let (launch, _control) = crate::workers::mcp_probe::launch(
+        config,
+        home,
+        environment,
+        machine,
+        workspace,
+        server,
+        shared_control,
+    )?;
     Ok(probe_launch(launch, timeout).await)
 }
 pub async fn probe_launch(
     launch: crate::exec::process::Launch,
     timeout: std::time::Duration,
 ) -> bool {
-    crate::exec::process::run_with_open_stdin(launch, timeout, 4096)
+    crate::exec::probe::run(launch, timeout)
         .await
         .is_ok_and(|r| r.returncode == 0 && r.stdout == b"fridica-github-mcp:ready\n")
 }

@@ -305,7 +305,7 @@ pub enum Check {
 /// Bounded process ownership includes cancellation cleanup and the SSH stdin
 /// watchdog. Exact markers and successful exit are both required for success.
 pub async fn run_probe(launch: Launch, timeout: Duration) -> Check {
-    probe_result(process::run_with_open_stdin(launch, timeout, 4096).await)
+    probe_result(super::probe::run(launch, timeout).await)
 }
 
 /// The cleanup owner retains probe capacity if admission is cancelled.
@@ -381,7 +381,7 @@ pub fn shared_ssh_probe(launch: &mut Launch) {
 /// Same bounded process ownership as namespace probes, with fixed diagnostics.
 /// Every refusal the helper reports, sorted; empty when the target is ready.
 pub async fn run_readiness(launch: Launch, timeout: Duration) -> Vec<Check> {
-    let Ok(result) = process::run_with_open_stdin(launch, timeout, 4096).await else {
+    let Ok(result) = super::probe::run(launch, timeout).await else {
         return vec![Check::ProbeFailed];
     };
     let lines = String::from_utf8_lossy(&result.stdout);
