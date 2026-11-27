@@ -1062,7 +1062,7 @@ dependencies = [
 [[package]]
 name = "fridica-agent"
 version = "0.4.7"
-source = "git+https://github.com/happysky19/fridica-agent?rev=04e6629bf6e19251bb1952e9df66bf65d97a7396#04e6629bf6e19251bb1952e9df66bf65d97a7396"
+source = "git+https://github.com/happysky19/fridica-agent?rev=a4fb143b3dc764ddb02605d27105a0010b051428#a4fb143b3dc764ddb02605d27105a0010b051428"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
