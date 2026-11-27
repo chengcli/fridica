@@ -1062,7 +1062,8 @@ dependencies = [
 [[package]]
 name = "fridica-agent"
 version = "0.4.8"
-source = "git+https://github.com/happysky19/fridica-agent?rev=a72f77cc3c6fa9e451f06a3c489cfbdd494a43b7#a72f77cc3c6fa9e451f06a3c489cfbdd494a43b7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f73d09d220fbcb36bbbfe70e778c42548d31800f82d452ca329f801e56692ee"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
