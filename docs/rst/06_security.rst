@@ -87,6 +87,29 @@ without it. Every automatic decision is audited, and approval details (which may
 in the database, never in the log. In the current period |approvals| approval requests reached the owner:
 under the ``auto`` default, the backends' reviewers resolved every request themselves.
 
+Exact MCP tools can use the same owner-managed lists. A selector is
+``mcp:server/tool`` (no wildcards); Overleaf also requires the project ID:
+``mcp:overleaf/native_reply_comment@0123456789abcdef01234567``.
+Add only tools already authorized by the owner's task rules. A matching
+``auto_deny`` wins, and every automatic approval is audited as ``once``;
+no server-wide or backend-session grant is created. These opt-in rules cover
+requests that reach the broker and do not override a read-only workspace.
+Unmatched tool confirmations still wait for the owner. Unsupported interactive
+forms are refused by the backend adapter before reaching the approval queue.
+
+An Overleaf selector must match the project confirmed in the job's requesting
+thread and the call's project argument. Suggestions must remain tracked with
+strict version checking and a current ``expected_version``; native writes
+retain stable operation IDs and receipt checks. A saved login or macOS
+“Always Allow” unlocks credentials; it does not add tool authorization.
+
+Public jobs post one approval-blocker notice per attempt through the normal
+outbox, without tool arguments or private approval details. Periodic milestone
+notes use ``limits.progress_interval`` (120 seconds by default, 0 disables
+polling). Automatic updates require a reply/report from the delegating turn:
+``reply=null``, ``send=false`` and external-driver jobs stay quiet. External
+drivers remain responsible for their own updates.
+
 **Machines → daemon.** Remote access goes through ``ssh -T`` with ``BatchMode`` (no password prompts)
 over an owner-only ControlMaster directory; nothing listens on a port. Files returned as artifacts are
 read only if their real path lies inside the worker's workspace, their suffix and magic bytes match the

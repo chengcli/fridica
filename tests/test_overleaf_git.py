@@ -6,7 +6,7 @@ import sys
 import pytest
 
 
-GUARD = Path(__file__).resolve().parents[1] / "src/exec/overleaf_git.py"
+GUARD = Path(__file__).resolve().parents[1] / "src/overleaf/overleaf_git.py"
 PROJECT = "1" * 24
 OTHER = "2" * 24
 

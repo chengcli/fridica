@@ -267,7 +267,20 @@ impl<P: Parent> Actor<P> {
     }
 
     async fn handle(&self, id: i64, kind: &str, session: String) -> Result<Step> {
-        let mut request = load(&self.store, id, session.clone(), self.owner.clone()).await?;
+        let origin = self
+            .config
+            .as_ref()
+            .map_or(crate::config::overleaf::DEFAULT_ORIGIN, |config| {
+                config.overleaf.origin()
+            });
+        let mut request = load(
+            &self.store,
+            id,
+            session.clone(),
+            self.owner.clone(),
+            origin.to_owned(),
+        )
+        .await?;
         if let Some(config) = &self.config {
             let busy = serde_json::from_value(request.session["work"]["busy"].clone())?;
             request.session["machines"] = json!(config.machines.payload(&busy));
@@ -742,6 +755,7 @@ async fn load(
     id: i64,
     session: String,
     owner: String,
+    origin: String,
 ) -> Result<ParentRequest> {
     store.transact(move|u| {
         let TurnInput{thread:data,kind,reference,payload,message,from_peer,history,obligations,review_required:review}=u.turn_input(&session,id)?;
@@ -789,7 +803,7 @@ async fn load(
         let mut result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
-        super::overleaf::attach(u, &mut result, &owner)?;
+        super::overleaf::attach(u, &mut result, &owner, &origin)?;
         Ok(result)
     }).await
 }
@@ -1134,9 +1148,15 @@ mod lifecycle_tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let paused = load(&store, id, session.clone(), String::new())
-                .await
-                .unwrap();
+            let paused = load(
+                &store,
+                id,
+                session.clone(),
+                String::new(),
+                crate::config::overleaf::DEFAULT_ORIGIN.into(),
+            )
+            .await
+            .unwrap();
             controls::apply(
                 &store,
                 session.clone(),
@@ -1171,9 +1191,15 @@ mod lifecycle_tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(claimed.0, id);
-            let before_clean = load(&store, id, session.clone(), String::new())
-                .await
-                .unwrap();
+            let before_clean = load(
+                &store,
+                id,
+                session.clone(),
+                String::new(),
+                crate::config::overleaf::DEFAULT_ORIGIN.into(),
+            )
+            .await
+            .unwrap();
             controls::apply(
                 &store,
                 session.clone(),

@@ -54,7 +54,7 @@ network = ["*"]
 # fetch_repos = ["chengcli/snapy", "UCzhangxi/snapy"]   # requires network = [], approvals != auto, no GPU confinement
 approvals = "auto"                # auto (the backend's AI reviewer decides) | on-request | untrusted | never
 approval_timeout = 1800
-auto_approve = []                 # command prefixes approved without asking, e.g. ["pytest", "git status"]
+auto_approve = []                 # command prefixes or exact MCP selectors, e.g. "mcp:overleaf/native_read_file@<project-id>"
 
 [machines.local]
 # python_env = "~/pyenv" # existing virtual environment; also supported on SSH machines

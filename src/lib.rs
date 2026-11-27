@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod exec;
 pub mod github;
 pub mod machines;
+pub mod overleaf;
 pub mod parent;
 pub mod secrets;
 pub mod slack;

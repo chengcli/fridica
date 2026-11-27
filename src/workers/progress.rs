@@ -1,5 +1,48 @@
-//! Interim progress notes (#105): what is new in a job attempt's progress file
-//! since the last read. Pure bookkeeping; reading and posting live elsewhere.
+//! Progress-file tracking and privacy-aware notices through the existing outbox.
+
+use crate::core::{delivery::Post, worker::Job};
+use anyhow::Result;
+use fridica_core::store::Unit;
+use serde_json::json;
+
+/// A null/unsent delegating reply is not permission for automatic Slack posts.
+/// External drivers have no delegating inbox and retain their own reporting.
+pub(crate) fn may_post(u: &mut dyn Unit, job: &Job) -> Result<bool> {
+    let Some(inbox) = job.inbox_id else {
+        return Ok(false);
+    };
+    let key = format!("{inbox}:reply");
+    Ok(u.thread_posts(&job.session_id)?.iter().any(|p| {
+        p.idem_key == key && matches!(p.kind.as_str(), "reply" | "report") && p.state != "failed"
+    }))
+}
+
+/// One safe blocker per attempt; details remain in authenticated owner controls.
+pub(crate) fn approval_notice(u: &mut dyn Unit, job: &Job, owner: &str, now: f64) -> Result<()> {
+    if !may_post(u, job)? {
+        return Ok(());
+    }
+    let Some(thread) = u.thread(&job.session_id)? else {
+        return Ok(());
+    };
+    if !u.thread_active(&job.session_id)? {
+        return Ok(());
+    }
+    u.queue_post(&Post {
+        idem_key: format!("approval:{}:{}", job.id, job.attempt),
+        session_id: job.session_id.clone(),
+        kind: "approval_notice".into(),
+        channel: thread.channel,
+        thread_ts: Some(thread.root_ts),
+        text: "This job requested owner approval for an operation outside the saved rules. Check Fridica Approvals for pending requests.".into(),
+        meta: Some(json!({"owner":owner,"session":job.session_id,"kind":"approval_notice",
+            "job":job.id,"worker":job.worker_id,"v":2})),
+        filename: String::new(),
+        blob: None,
+        after: String::new(),
+    }, now)?;
+    Ok(())
+}
 
 /// Where the next read starts. The file's length when the job started is the
 /// first offset, so notes a persistent worker wrote for an earlier job in the

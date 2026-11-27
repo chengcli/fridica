@@ -45,11 +45,7 @@ PLATFORMS = {
     "macos": {"macosx x86_64": ("macosx", "_x86_64"), "macosx arm64": ("macosx", "_arm64")},
 }
 SCRIPTS = ("fridica", "fridica-secret")
-OVERLEAF_RESOURCES = (
-    "owner-login.mjs", "adapter.py", "package-lock.json", "FRIDICA-LICENSE", "UPSTREAM-NOTICE",
-    "upstream-pin.json", "upstream-source.tar.gz", "node_modules/.package-lock.json",
-    "node_modules/@netique/overleaf-mcp/LICENSE", "node_modules/@netique/overleaf-mcp/dist/index.js",
-)
+
 
 
 def required_platforms(os_choice: str) -> dict[str, tuple[str, str]]:
@@ -95,10 +91,9 @@ def verify_artifacts(directory: Path, tag: str, os_choice: str = "Both") -> None
             for script in SCRIPTS:
                 if data + script not in names:
                     raise ValueError(f"{wheel.name} lacks the {script} executable")
-            resources = data.removesuffix("scripts/") + "data/share/fridica/overleaf-native/"
-            for resource in OVERLEAF_RESOURCES:
-                if resources + resource not in names:
-                    raise ValueError(f"{wheel.name} lacks native Overleaf resource {resource}")
+            obsolete = data.removesuffix("scripts/") + "data/share/fridica/overleaf-native/"
+            if any(name.startswith(obsolete) for name in names):
+                raise ValueError(f"{wheel.name} contains obsolete native Overleaf resources")
             tags = [line.split(":", 1)[1].strip() for line in archive.read(info[0]).decode().splitlines()
                     if line.startswith("Tag:")]
             metadata.append(archive.read(meta[0]))

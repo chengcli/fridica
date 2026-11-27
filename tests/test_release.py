@@ -52,7 +52,7 @@ PLATFORM_TAGS = ["py3-none-manylinux_2_28_x86_64", "py3-none-manylinux_2_28_aarc
 
 
 def make_wheel(directory, tag, name="fridica", version="1.2.3", scripts=("fridica", "fridica-secret"),
-               metadata=True, resources=True):
+               metadata=True, legacy_resources=False):
     wheel = directory / f"fridica-1.2.3-{tag}.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         if metadata:
@@ -60,9 +60,8 @@ def make_wheel(directory, tag, name="fridica", version="1.2.3", scripts=("fridic
             archive.writestr("fridica-1.2.3.dist-info/WHEEL", f"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: {tag}\n")
         for script in scripts:
             archive.writestr(f"fridica-1.2.3.data/scripts/{script}", "binary")
-        if resources:
-            for resource in release.OVERLEAF_RESOURCES:
-                archive.writestr(f"fridica-1.2.3.data/data/share/fridica/overleaf-native/{resource}", "fixture")
+        if legacy_resources:
+            archive.writestr("fridica-1.2.3.data/data/share/fridica/overleaf-native/adapter.py", "obsolete")
     return wheel
 
 
@@ -96,7 +95,7 @@ def test_verify_artifacts_for_one_os(tmp_path, os_choice, tags):
     ({"scripts": ()}, "fridica executable"),
     ({"scripts": ("fridica",)}, "fridica-secret executable"),
     ({"metadata": False}, "wheel metadata"),
-    ({"resources": False}, "native Overleaf resource"),
+    ({"legacy_resources": True}, "obsolete native Overleaf resources"),
     ({"source_metadata": False}, "source distribution metadata"),
     ({"name": "other"}, "name/version"),
     ({"source_name": "other"}, "name/version"),

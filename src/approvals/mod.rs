@@ -12,7 +12,7 @@ use crate::{
     workers::protocol::ApprovalHandler,
 };
 use anyhow::{bail, Result};
-pub use fridica_core::approvals as rules;
+pub mod rules;
 use fridica_core::store::{ApprovalSettlement, ApprovalStart, NewApproval, Store as _};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify, Semaphore};
@@ -108,7 +108,7 @@ impl Broker {
         {
             Some(ApprovalDecision::Deny)
         } else {
-            rules::decide(policy, &request)
+            rules::for_job(policy, &worker.backend, &job, &request)
         };
         let approval = NewApproval {
             id: id.clone(),
@@ -119,9 +119,16 @@ impl Broker {
             now,
             expires_at: now + policy.approval_timeout,
         };
+        let owner = config.owner.slack_user.clone();
         let started = self
             .store
-            .transact(move |u| u.begin_approval(&approval))
+            .transact(move |u| {
+                let started = u.begin_approval(&approval)?;
+                if !matches!(started, ApprovalStart::Immediate(_)) {
+                    crate::workers::progress::approval_notice(u, &approval.job, &owner, now)?;
+                }
+                Ok(started)
+            })
             .await?;
         drop(config);
         if let ApprovalStart::Immediate(decision) = started {

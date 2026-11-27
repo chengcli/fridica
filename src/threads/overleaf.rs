@@ -8,17 +8,26 @@ use std::{collections::BTreeSet, sync::LazyLock};
 
 static LINK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"(?i)(?:https://(?:www\.)?overleaf\.com/project/|",
-        r"https://(?:git@)?git\.overleaf\.com/|\boverleaf:)([0-9a-f]{24})\b"
+        r"(?i)(?:(?P<origin>https?://[^\s/<>]+)/project/|",
+        r"(?P<git>https://(?:git@)?git\.overleaf\.com/)|\boverleaf:)(?P<id>[0-9a-f]{24})\b"
     ))
     .expect("Overleaf project reference")
 });
 static ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b[0-9a-f]{24}\b").unwrap());
 
-fn owner_projects(text: &str) -> BTreeSet<String> {
+fn owner_projects(text: &str, origin: &str) -> BTreeSet<String> {
     let mut ids: BTreeSet<_> = LINK
         .captures_iter(text)
-        .map(|m| m[1].to_ascii_lowercase())
+        .filter(|m| {
+            m.name("origin").is_none_or(|url| {
+                url.as_str()
+                    .eq_ignore_ascii_case(origin.trim_end_matches('/'))
+            }) && (m.name("git").is_none()
+                || origin
+                    .trim_end_matches('/')
+                    .eq_ignore_ascii_case(crate::config::overleaf::DEFAULT_ORIGIN))
+        })
+        .map(|m| m["id"].to_ascii_lowercase())
         .collect();
     let text = text.trim().trim_start_matches("!f").trim();
     let lower = text.to_ascii_lowercase();
@@ -36,11 +45,11 @@ fn owner_projects(text: &str) -> BTreeSet<String> {
 
 /// Read newest first. A deliberate selection settles earlier alternatives.
 /// A passing mention of a second manuscript keeps both candidates visible.
-fn binding<'a>(messages: impl Iterator<Item = (&'a str, &'a str)>) -> Option<Value> {
+fn binding<'a>(origin: &str, messages: impl Iterator<Item = (&'a str, &'a str)>) -> Option<Value> {
     let mut projects = BTreeSet::new();
     let mut latest = None;
     for (text, ts) in messages {
-        let ids = owner_projects(text);
+        let ids = owner_projects(text, origin);
         if ids.is_empty() {
             continue;
         }
@@ -66,6 +75,7 @@ pub(super) fn attach(
     u: &mut dyn Unit,
     request: &mut ParentRequest,
     owner: &str,
+    origin: &str,
 ) -> anyhow::Result<()> {
     let reset = request.session["reset_at"].as_f64().unwrap_or(0.);
     let until = request.trigger["message"]["ts"]
@@ -85,6 +95,7 @@ pub(super) fn attach(
     // from durable messages even for long threads created before this guard.
     let evidence = if request.history.len() < 60 {
         binding(
+            origin,
             request
                 .history
                 .iter()
@@ -96,6 +107,7 @@ pub(super) fn attach(
     } else {
         let messages = u.thread_messages(request.session["id"].as_str().unwrap_or(""), -1)?;
         binding(
+            origin,
             messages
                 .iter()
                 .rev()
@@ -123,12 +135,25 @@ pub(super) fn check(decision: &mut Decision, request: &ParentRequest) -> Result<
         if crate::workers::redelivery::requested(&job.brief).is_some() {
             continue;
         }
+        let header = crate::overleaf::worker::job_project(&job.brief);
+        if header.is_some() && header != bound {
+            return Err("Please confirm the Overleaf project link in this thread so I can bind the job to it.");
+        }
         let project_repo = repo.starts_with("overleaf:") || LINK.is_match(repo);
         if !project_repo
             && !LINK.is_match(&job.brief)
             && !(repo.is_empty()
                 && job.fetch_repo.is_empty()
                 && job.brief.to_ascii_lowercase().contains("overleaf"))
+        {
+            continue;
+        }
+        // An account-navigation job can run before a target is selected. Its
+        // native grant permits reads only; project writes still need this binding.
+        if bound.is_none()
+            && repo.is_empty()
+            && job.fetch_repo.is_empty()
+            && !LINK.is_match(&job.brief)
         {
             continue;
         }
@@ -140,7 +165,9 @@ pub(super) fn check(decision: &mut Decision, request: &ParentRequest) -> Result<
         {
             return Err("The proposed job refers to a different Overleaf project. Please confirm the target with its project link in this thread.");
         }
-        job.brief = crate::workers::overleaf::project_brief(id, &job.brief);
+        if header.is_none() {
+            job.brief = crate::overleaf::worker::project_brief(id, &job.brief);
+        }
     }
     Ok(())
 }
@@ -170,13 +197,29 @@ mod tests {
         let other = format!("Compare with https://www.overleaf.com/project/{b}");
         let messages = [(other.as_str(), "2"), (first.as_str(), "1")];
         assert_eq!(
-            binding(messages.into_iter()).unwrap()["projects"],
+            binding(
+                crate::config::overleaf::DEFAULT_ORIGIN,
+                messages.into_iter()
+            )
+            .unwrap()["projects"],
             json!([a, b])
         );
+        assert_eq!(
+            owner_projects(
+                &format!("https://papers.example.invalid/project/{a}"),
+                "https://papers.example.invalid"
+            ),
+            BTreeSet::from([a.to_owned()])
+        );
+        assert!(owner_projects(
+            &format!("https://papers.example.invalid/project/{a}"),
+            crate::config::overleaf::DEFAULT_ORIGIN
+        )
+        .is_empty());
         let confirm = format!("!f use {b}");
         let selected = std::iter::once((confirm.as_str(), "3")).chain(messages);
         assert_eq!(
-            binding(selected),
+            binding(crate::config::overleaf::DEFAULT_ORIGIN, selected),
             Some(json!({"projects":[b],"message_ts":"3"}))
         );
     }

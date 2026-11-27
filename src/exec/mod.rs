@@ -6,7 +6,7 @@ pub mod fetch;
 pub mod helper;
 pub mod isolation;
 pub mod local;
-pub mod overleaf;
+pub use crate::overleaf::{broker as overleaf_broker, runtime as overleaf};
 pub mod probe;
 pub mod process;
 pub mod python;

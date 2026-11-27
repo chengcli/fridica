@@ -404,24 +404,12 @@ async fn machine(
                 if native {
                     // No recipient exists during doctor: validate resources/tool discovery,
                     // never forward the account session or require the independent Git token.
-                    if let Some(command) = probe.config.overleaf.native_adapter.first() {
-                        let builtin = server.command;
-                        server.command = command.clone();
-                        server.args = probe.config.overleaf.native_adapter[1..].to_vec();
-                        server.args.extend([
-                            "--builtin".into(),
-                            builtin,
-                            "--workspace".into(),
-                            workspace.path.to_string_lossy().into_owned(),
-                        ]);
-                    } else {
-                        server.args = vec![
-                            "overleaf-mcp".into(),
-                            "--workspace-write".into(),
-                            workspace.path.to_string_lossy().into_owned(),
-                            "--native-probe".into(),
-                        ];
-                    }
+                    server.args = vec![
+                        "overleaf-mcp".into(),
+                        "--workspace-write".into(),
+                        workspace.path.to_string_lossy().into_owned(),
+                        "--native-probe".into(),
+                    ];
                     server.env_vars.clear();
                 }
                 let passed = match crate::workers::mcp_probe::launch(
@@ -441,7 +429,7 @@ async fn machine(
                                 if r.returncode == 0
                                     && r.stdout == b"fridica-overleaf-mcp:native-ready\n"
                                 {
-                                    report.add(Status::Warn, name, "native and built-in tools are ready; account/session validation runs only on admitted tasks, Git authentication is separate");
+                                    report.add(Status::Warn, name, "Rust native tools are ready; account/session validation runs only on admitted tasks");
                                     continue;
                                 }
                                 false
