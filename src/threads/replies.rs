@@ -48,16 +48,55 @@ pub(super) fn repeat_evidence(
 /// Details at most this long are folded into the reply instead of attached.
 const INLINE_DETAILS: usize = 1500;
 
+fn manager_reply(request: &ParentRequest, owner: &str, project_action: bool) -> bool {
+    request.session["project_manager"] == owner
+        && (project_action || request.session["projects"].is_object())
+}
+
+// Preserve literal examples and other users' tags. Verbatim worker reports
+// can describe the owner in third person, so retain the ID as plain text.
+fn self_pings<'a>(
+    text: &'a str,
+    owner: &'a str,
+) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
+    static TOKENS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"```[\s\S]*?```|`[^`]*`|<@([UW][A-Z0-9]+)(?:\|[^>\n]*)?>").unwrap()
+    });
+    TOKENS
+        .captures_iter(text)
+        .filter_map(move |tag| (tag.get(1)?.as_str() == owner).then(|| tag.get(0).unwrap().range()))
+}
+
+pub(super) fn check_manager_reply(
+    request: &ParentRequest,
+    owner: &str,
+    project_action: bool,
+    reply: Option<&crate::core::parent::Reply>,
+) -> Result<()> {
+    if let Some(reply) = reply.filter(|r| r.send && manager_reply(request, owner, project_action)) {
+        anyhow::ensure!(
+            self_pings(&reply.text, owner).next().is_none() && self_pings(&reply.details, owner).next().is_none(),
+            "Write your own part in the first person (I or me). Only tag the other people you are addressing."
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn render(
     u: &mut dyn Unit,
     request: &ParentRequest,
     owner: &str,
     reply: &mut crate::core::parent::Reply,
     limit: usize,
+    project_action: bool,
 ) -> Result<()> {
     let session = request.session["id"].as_str().unwrap_or("");
     let messages = u.latest_messages(session)?;
-    let people = crate::core::render::participants(owner, messages);
+    let manager_reply = manager_reply(request, owner, project_action);
+    let mut people = crate::core::render::participants(owner, messages);
+    if manager_reply {
+        people.remove(owner);
+    }
     let requester = if request.trigger["kind"] == "owner_instruction"
         || request.trigger["origin"]["class"] == "owner"
     {
@@ -84,11 +123,21 @@ pub(super) fn render(
     } else {
         reply.text = super::verdict::hoist(&reply.text);
     }
+    if manager_reply {
+        let tags: Vec<_> = self_pings(&reply.text, owner).collect();
+        for tag in tags.into_iter().rev() {
+            reply.text.replace_range(tag, owner);
+        }
+    }
     (reply.text, reply.details) = crate::core::render::reply(
         &reply.text,
         &reply.details,
         matches!(reply.status, crate::core::parent::ReplyStatus::Waiting),
-        &requester,
+        if manager_reply && requester == owner {
+            ""
+        } else {
+            &requester
+        },
         &people,
         limit,
     );

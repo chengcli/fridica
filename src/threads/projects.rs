@@ -1,6 +1,7 @@
 //! Durable project state in the owning thread's context. A private timed ask uses
 //! the store's indexed due queue and commits in the same transaction as dispatch.
 mod graph;
+mod handoffs;
 use crate::core::{parent::ParentRequest, worker::Job};
 use anyhow::{ensure, Context, Result};
 use fridica_core::store::{NewAsk, ObligationChange, Unit};
@@ -10,7 +11,7 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, time::Duration};
 
 const TIMER: &str = "project-review:";
-pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Model every prerequisite as an assignment and use its ID in dependencies. Add related assignments in the same operation. Keep prerequisite links after completion. Use dependency_graph.status for effective assignment status and blocked_by for outstanding prerequisites. Report ready for work that can start once prerequisites clear, working for ongoing work, waiting for an expected response, and blocked when intervention is needed. For legacy graph errors, correct the listed links before continuing. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Track the whole delegated outcome, including follow-through on handoffs. Keep outstanding reviews, checks, blockers and verification as assignments until resolved. Requesting work is a milestone. Report complete only when the assignment has a verified outcome, evidence and verified prerequisites. Close only when every assignment and the overall outcome are verified, or cancel when instructed. The host posts a project notice for each tool action and scheduled review. Use null for manage_project on unrelated turns.";
+pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. When writing as project manager, refer to yourself as I or me and mention only the people you are addressing. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Model every prerequisite as an assignment and use its ID in dependencies. Add related assignments in the same operation. Keep prerequisite links after completion. Use dependency_graph.status for effective assignment status and blocked_by for outstanding prerequisites. For a Slack assignee, use their member ID as owner and put the requested work and expected response in next_action. The host mentions the owner in the project thread when the assignment is ready. Report ready when assigning work that can start once prerequisites clear, working for ongoing work, waiting for an expected response, and blocked when intervention is needed. For legacy graph errors, correct the listed links before continuing. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Track the whole delegated outcome, including follow-through on handoffs. Keep outstanding reviews, checks, blockers and verification as assignments until resolved. Requesting work is a milestone. Report complete only when the assignment has a verified outcome, evidence and verified prerequisites. Close only when every assignment and the overall outcome are verified, or cancel when instructed. The host posts a project notice for each tool action and scheduled review. Use null for manage_project on unrelated turns.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -468,6 +469,12 @@ pub fn commit(
                         != (a.finished == Some(true));
             }
             let mut record = json!(a);
+            record["handoff_to"] = p
+                .assignments
+                .get(&a.id)
+                .and_then(|v| v.get("handoff_to"))
+                .cloned()
+                .unwrap_or(Value::Null);
             record["reported_at"] = json!(now);
             p.assignments.insert(a.id.clone(), record);
         }
@@ -606,6 +613,9 @@ pub fn commit(
             })
             .unwrap_or_default();
         notice(u, r, &p, action, &detail, owner, now)?;
+    }
+    if p.status == "active" {
+        handoffs::queue(u, r, &mut p, owner, now)?;
     }
     u.patch_context(session, &json!({"projects":{id:p}}).to_string())
 }

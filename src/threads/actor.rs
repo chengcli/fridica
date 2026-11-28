@@ -645,7 +645,13 @@ impl<P: Parent> Actor<P> {
         };
         // Addressed messages in a blocked thread reach the parent so it can
         // decide whether the new instruction actually resolves the blocker.
-        let outcome = attention_gate(&gate, gate.text.contains(&format!("<@{}>", self.owner)));
+        let mentioned = gate.text.contains(&format!("<@{}>", self.owner));
+        if gate.generated && gate.meta_kind == "project_assignment" && !mentioned {
+            return Ok(Gate::Settle(
+                "observe: assignment addressed to another member".into(),
+            ));
+        }
+        let outcome = attention_gate(&gate, mentioned);
         let mut verdict = format!("{}: {}", outcome.kind, outcome.reason);
         if matches!(outcome.kind.as_str(), "ignore" | "observe") {
             return Ok(Gate::Settle(verdict));
@@ -721,6 +727,12 @@ impl<P: Parent> Actor<P> {
             }
             match validate(&action, request, now).and_then(|mut d| {
                 let project = super::projects::command(&raw, request, &self.owner)?;
+                super::replies::check_manager_reply(
+                    request,
+                    &self.owner,
+                    project.is_some(),
+                    d.reply.as_ref(),
+                )?;
                 if let Err(question) = super::overleaf::check(&mut d, request) {
                     return Ok((super::overleaf::clarify(question), None));
                 }

@@ -6622,3 +6622,102 @@ async fn parent_quota_gates_queued_messages_and_retries_once_after_restart() {
     first.await.unwrap().unwrap();
     assert_eq!(h.parent.calls.lock().unwrap().len(), 3);
 }
+
+#[tokio::test]
+async fn project_assignment_mentions_its_owner_once_when_ready_and_on_reassignment() {
+    let node = |id: &str, owner: &str, status: &str, deps: &[&str]| {
+        json!({"id":id,"owner":owner,"status":status,"dependencies":deps,
+               "evidence":"checked","next_action":"Review the changes <@UOTHER>"})
+    };
+    let prep = node("prepare", "UOWNER", "working", &[]);
+    let review = node("review", "UREVIEWER", "ready", &["prepare"]);
+    let h = Harness::new(vec![json!({"manage_project":{"op":"start","goal":"Review PR","criteria":"Submitted","assignments":[prep,review]}})],false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Manage the review").await;
+    let count = "SELECT CAST(count(*) AS TEXT) FROM outbox WHERE json_extract(meta_json,'$.kind')='project_assignment'";
+    assert_eq!(h.scalar(count).await, "0");
+    let projects = h.projects().await;
+    let id = projects.as_object().unwrap().keys().next().unwrap();
+    let update = |assignment| json!({"manage_project":{"op":"update","project_id":id,"assignments":[assignment]}});
+    h.parent.responses.lock().unwrap().push_back(update(node(
+        "prepare",
+        "UOWNER",
+        "complete",
+        &[],
+    )));
+    h.project_instruction("Preparation is verified").await;
+    assert_eq!(h.scalar(count).await, "1");
+    let text=h.scalar("SELECT text FROM outbox WHERE state='sent' AND thread_ts='100.1' AND json_extract(meta_json,'$.kind')='project_assignment'").await;
+    assert!(
+        text.starts_with("<@UREVIEWER>") && text.contains("Review the changes &lt;@UOTHER&gt;")
+    );
+    let h = h.restart().await;
+    h.parent.responses.lock().unwrap().push_back(update(review));
+    h.project_instruction("Record the same assignment").await;
+    assert_eq!(h.scalar(count).await, "1");
+    h.parent.responses.lock().unwrap().push_back(update(node(
+        "review",
+        "UPEER",
+        "ready",
+        &["prepare"],
+    )));
+    h.project_instruction("Reassign the reviewer").await;
+    assert_eq!(h.scalar(count).await, "2");
+    assert!(h.scalar("SELECT text FROM outbox WHERE json_extract(meta_json,'$.kind')='project_assignment' ORDER BY id DESC LIMIT 1").await.starts_with("<@UPEER>"));
+
+    // Drive the actual emitted message through a recipient daemon's attention gate.
+    let peer = Harness::new(
+        vec![json!({"reply":{"text":"Review started","status":"complete"}})],
+        false,
+    )
+    .await;
+    let mut actor = control_actor(&peer);
+    actor.owner = "UREVIEWER".into();
+    let session = fridica::attention::intake(
+        &peer.store,
+        Message {
+            event_id: "handoff".into(),
+            workspace: "TTEAM".into(),
+            channel: "CROOM".into(),
+            ts: "101.1".into(),
+            thread_ts: Some("100.1".into()),
+            sender: "UMANAGER".into(),
+            text,
+            source: "socket".into(),
+            meta: Some(json!({"kind":"project_assignment","owner":"UMANAGER","v":2})),
+            attachments: vec![],
+            files: vec![],
+        },
+        actor.owner.clone(),
+        20.,
+        900.,
+        "obligation-handoff".into(),
+    )
+    .await
+    .unwrap();
+    assert!(session.is_some());
+    assert_eq!(
+        actor.step(SESSION.into()).await.unwrap(),
+        fridica::threads::actor::Step::Committed
+    );
+    assert_eq!(peer.parent.calls.lock().unwrap()[0].call, "decide");
+}
+
+#[tokio::test]
+async fn project_manager_waits_for_reviewers_without_mentioning_self() {
+    let mut action = json!({
+        "manage_project":{"op":"start","goal":"Review the change","criteria":"Reviews received"},
+        "reply":{"text":"<@UREVIEWER> please review. <@UOWNER> will track it. Send findings to <@UOWNER|manager>.","status":"waiting"}
+    });
+    let original = action.clone();
+    action["reply"]["text"] =
+        json!("<@UREVIEWER> please review. I will track it. Send findings to me.");
+    let h = Harness::new(vec![original, action], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Manage the review and ask the reviewer")
+        .await;
+    assert_eq!(
+        h.scalar("SELECT text FROM outbox WHERE kind='reply'").await,
+        "<@UREVIEWER> please review. I will track it. Send findings to me."
+    );
+}
