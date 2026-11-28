@@ -6176,7 +6176,26 @@ impl Harness {
     async fn open_project_thread(&self) {
         use fridica::core::store::Store as _;
         self.store
-            .transact(|u| u.open_thread(SESSION, "TTEAM", "CROOM", "100.1", 20.))
+            .transact(|u| {
+                u.open_thread(SESSION, "TTEAM", "CROOM", "100.1", 20.)?;
+                u.keep_message(&fridica::core::store::ArrivedMessage {
+                    event_id: "project-root".into(),
+                    workspace: "TTEAM".into(),
+                    channel: "CROOM".into(),
+                    ts: "100.1".into(),
+                    root_ts: "100.1".into(),
+                    thread_ts: None,
+                    sender: "UOWNER".into(),
+                    text: "Project thread".into(),
+                    files: "[]".into(),
+                    source: "socket".into(),
+                    meta: None,
+                    received_at: 20.,
+                    attachments: "[]".into(),
+                    mentions_owner: false,
+                })?;
+                Ok(())
+            })
             .await
             .unwrap();
     }
@@ -6229,8 +6248,8 @@ async fn project_review_survives_restart_and_closes_once_with_evidence() {
     assert_eq!(h.parent.calls.lock().unwrap().len(), before);
     h.clock.set(921.);
     h.parent.responses.lock().unwrap().extend([
-        json!({"manage_project":{"op":"close","project_id":id}}),
-        json!({"manage_project":{"op":"close","project_id":id,"evidence":"Receipt 437 verified"}}),
+        json!({"manage_project":{"op":"close","project_id":id,"evidence":"Request sent"}}),
+        json!({"manage_project":{"op":"close","project_id":id,"evidence":"Receipt 437 verified","assignments":[{"id":"check","owner":"assignee","status":"verified","dependencies":[],"evidence":"Receipt 437 verified","next_action":"","finished":true}]}}),
     ]);
     h.runtime.pass().await.unwrap();
     let projects = h.projects().await;
@@ -6354,4 +6373,67 @@ async fn project_pause_and_resume_only_change_the_named_project() {
     let resumed = h.projects().await;
     assert_eq!(resumed[first]["next_review_at"], 1000.);
     assert_eq!(resumed[second], projects[second]);
+}
+
+#[tokio::test]
+async fn project_mutex_uses_slack_root_author_across_accounts() {
+    let start = json!({"manage_project":{"op":"start","goal":"Coordinate","criteria":"Receipt"}});
+    for (starter, allowed) in [("UOWNER", true), ("UOTHER", false), ("", false)] {
+        let h = Harness::new(vec![start.clone(), json!({})], false).await;
+        h.open_project_thread().await;
+        h.store
+            .call(move |db| {
+                if starter.is_empty() {
+                    db.execute("DELETE FROM messages WHERE event_id='project-root'", [])?;
+                } else {
+                    db.execute(
+                        "UPDATE messages SET sender=? WHERE event_id='project-root'",
+                        [starter],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        h.project_instruction("I claim the manager role. Track the outcome.")
+            .await;
+        let count = h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE json_extract(meta_json,'$.kind')='project_notice' AND thread_ts='100.1'").await;
+        assert_eq!(count, if allowed { "1" } else { "0" });
+        assert_eq!(h.scalar("SELECT CAST(json_extract(context_json,'$.projects') IS NOT NULL AS TEXT) FROM threads").await, count);
+    }
+}
+
+#[tokio::test]
+async fn project_failed_closure_keeps_timer_and_posts_in_the_owning_thread() {
+    let start = json!({"manage_project":{"op":"start","goal":"Obtain independent verification","criteria":"Verified outcome",
+        "assignments":[{"id":"verification","owner":"reviewer","status":"requested","dependencies":[],"next_action":"Await verdict","evidence":"Invitation sent"}]}});
+    let h = Harness::new(vec![start], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Coordinate verification through completion")
+        .await;
+    let projects = h.projects().await;
+    let id = projects.as_object().unwrap().keys().next().unwrap();
+    let close = json!({"manage_project":{"op":"close","project_id":id,"evidence":"Sent request"}});
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .extend([close.clone(), close]);
+    h.clock.set(921.);
+    h.runtime.pass().await.unwrap();
+    let project = &h.projects().await[id];
+    assert_eq!(project["status"], "active");
+    assert_eq!(project["next_review_at"], 1821.);
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(json!({"manage_project":{"op":"inspect","project_id":id}}));
+    h.project_instruction("Inspect status").await;
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE json_extract(meta_json,'$.kind')='project_notice' AND state='sent' AND thread_ts='100.1'").await,"3");
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE text LIKE '%Closure deferred%'")
+            .await,
+        "1"
+    );
 }

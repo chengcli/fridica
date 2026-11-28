@@ -34,6 +34,7 @@ pub fn build(
     };
     if matches!(request.call.as_str(), "decide" | "repair")
         && request.session["driver"] != "external"
+        && request.session["project_manager"] == config.owner.slack_user
     {
         instructions.push_str(crate::threads::projects::INSTRUCTIONS);
         crate::threads::projects::extend_schema(&mut schema);

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, time::Duration};
 
 const TIMER: &str = "project-review:";
-pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Close with evidence, or cancel when instructed. Use null for manage_project on unrelated turns.";
+pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Track the whole delegated outcome, including follow-through on handoffs. Keep outstanding reviews, checks, blockers and verification as assignments until resolved. Requesting work is a milestone. Set finished only when the assignment has a verified outcome, evidence and no remaining dependencies. Close only when every assignment and the overall outcome are verified, or cancel when instructed. The host posts a project notice for each tool action and scheduled review. Use null for manage_project on unrelated turns.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +19,8 @@ struct Assignment {
     dependencies: Vec<String>,
     evidence: String,
     next_action: String,
+    #[serde(default)]
+    finished: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -47,6 +49,8 @@ pub struct Command {
     evidence: String,
     #[serde(default)]
     assignments: Vec<Assignment>,
+    #[serde(skip)]
+    closure_blocker: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -78,7 +82,7 @@ pub fn extend_schema(schema: &mut Value) {
         json!({"type":"object","properties":props,"required":keys,"additionalProperties":false})
     };
     let assignment = object(
-        json!({"id":string,"owner":string,"status":string,"dependencies":strings,"evidence":string,"next_action":string}),
+        json!({"id":string,"owner":string,"status":string,"dependencies":strings,"evidence":string,"next_action":string,"finished":{"type":"boolean"}}),
     );
     let command = object(
         json!({"op":{"type":"string","enum":["start","update","inspect","pause","resume","close","cancel"]},"project_id":string,"goal":string,"criteria":string,"evidence":string,"assignments":{"type":"array","items":assignment}}),
@@ -103,6 +107,28 @@ fn owner_instruction<'a>(r: &'a ParentRequest, owner: &str) -> Option<&'a str> {
     }
 }
 
+/// Retain the project and its timer when a repair still attempts premature closure.
+#[derive(Debug)]
+pub struct Incomplete(pub String);
+impl std::fmt::Display for Incomplete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "project {} is unfinished", self.0)
+    }
+}
+impl Incomplete {
+    pub fn keep_active(&self, reason: String) -> Command {
+        Command {
+            op: Operation::Update,
+            project_id: self.0.clone(),
+            evidence: String::new(),
+            goal: String::new(),
+            criteria: String::new(),
+            assignments: vec![],
+            closure_blocker: Some(reason),
+        }
+    }
+}
+
 pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Command>> {
     let Some(value) = raw.get("manage_project").filter(|v| !v.is_null()) else {
         return Ok(None);
@@ -111,6 +137,10 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
     ensure!(
         r.session["driver"] != "external",
         "project belongs to an external driver"
+    );
+    ensure!(
+        r.session["project_manager"] == owner,
+        "only the Slack thread starter can use manage_project"
     );
     ensure!(value.to_string().len() <= 16000, "project update too large");
     let review = r.trigger["project_id"].as_str();
@@ -146,10 +176,6 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
                         && matches!(c.op, Operation::Resume | Operation::Cancel)),
                 "project is inactive"
             );
-            ensure!(
-                c.op != Operation::Close || !c.evidence.trim().is_empty(),
-                "successful closure requires evidence"
-            );
         }
     }
     ensure!(
@@ -172,15 +198,75 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
             "assignments need unique IDs, owners and status"
         );
     }
+    if c.op == Operation::Close {
+        let p = &r.session["projects"][&c.project_id];
+        verify_completion(&c, p, raw).context(Incomplete(c.project_id.clone()))?;
+    }
     Ok(Some(c))
+}
+
+fn verify_completion(c: &Command, p: &Value, raw: &Value) -> Result<()> {
+    ensure!(
+        !c.evidence.trim().is_empty(),
+        "successful closure requires evidence of the overall outcome"
+    );
+    let mut assignments = p["assignments"].as_object().cloned().unwrap_or_default();
+    for assignment in &c.assignments {
+        assignments.insert(assignment.id.clone(), json!(assignment));
+    }
+    for (id, a) in assignments {
+        ensure!(a["finished"] == true && a["evidence"].as_str().is_some_and(|e| !e.trim().is_empty())
+                && a["dependencies"].as_array().is_some_and(Vec::is_empty),
+                "assignment {id} still needs a verified outcome or has outstanding dependencies; keep the project active");
+    }
+    ensure!(
+        !p["workers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, v)| v.as_array().into_iter().flatten())
+            .any(|j| matches!(j["status"].as_str(), Some("queued" | "running"))),
+        "project jobs are outstanding"
+    );
+    ensure!(
+        raw.get("delegations")
+            .or_else(|| raw.get("delegate"))
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "cannot close while delegating more work"
+    );
+    Ok(())
 }
 
 /// Remove private timer obligations from the model's answerable obligations.
 /// The project trigger carries the same inbox identity as the claimed timer.
-pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest) -> Result<()> {
+pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest, owner: &str) -> Result<()> {
     let projects = r.session["context"]
         .as_object_mut()
         .and_then(|v| v.remove("projects"));
+    // All accounts consult the same immutable Slack root. An owner instruction,
+    // worker report or message claiming a role cannot establish its author.
+    let root = r.session["root_ts"]
+        .as_str()
+        .context("missing project thread root")?;
+    let mut starter = r
+        .history
+        .iter()
+        .find(|m| m["ts"] == root)
+        .and_then(|m| m["sender"].as_str())
+        .map(str::to_owned);
+    if starter.is_none() && (projects.is_some() || owner_instruction(r, owner).is_some()) {
+        let session = r.session["id"].as_str().context("missing project thread")?;
+        starter = u
+            .thread_messages(session, -1)?
+            .into_iter()
+            .find(|m| m.ts == root)
+            .map(|m| m.sender);
+    }
+    let manages = starter.as_deref() == Some(owner);
+    if manages || projects.is_some() {
+        r.session["project_manager"] = json!(starter);
+    }
     let reference = r.trigger["ref"].as_str().unwrap_or("").to_owned();
     let timed = r.trigger["kind"] == "obligation_due" && reference.starts_with(TIMER);
     let timer_live = timed
@@ -205,7 +291,11 @@ pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest) -> Result<()> {
         .as_object_mut()
         .context("invalid stored projects")?
     {
-        if p["status"] == "active"
+        if timer_live && p["timer"] == reference && p["status"] == "active" && starter.is_none() {
+            r.trigger["awaiting_thread_starter"] = json!(true);
+        }
+        if manages
+            && p["status"] == "active"
             && ((timer_live && p["timer"] == reference)
                 || (matches!(
                     r.trigger["kind"].as_str(),
@@ -262,6 +352,20 @@ pub fn commit(
     interval: u32,
 ) -> Result<()> {
     let review = r.trigger["project_id"].as_str();
+    if command.is_some() || review.is_some() {
+        ensure!(
+            r.session["project_manager"] == owner,
+            "project manager mismatch"
+        );
+    }
+    if let Some(c) = command.filter(|c| c.op == Operation::Inspect) {
+        let p: Project = serde_json::from_value(r.session["projects"][&c.project_id].clone())?;
+        notice(u, r, &p, "inspected", "", owner, now)?;
+        if review.is_none() {
+            return Ok(());
+        }
+    }
+    let inspected = command.is_some_and(|c| c.op == Operation::Inspect);
     let command = command.filter(|c| c.op != Operation::Inspect);
     let op = command.map(|c| &c.op);
     let session = r.session["id"].as_str().context("missing session")?;
@@ -366,7 +470,87 @@ pub fn commit(
             p.timer = Some(timer);
         }
     }
+    if !inspected {
+        let action = match op {
+            Some(Operation::Start) => "started",
+            Some(Operation::Update) => "updated",
+            Some(Operation::Pause) => "paused",
+            Some(Operation::Resume) => "resumed",
+            Some(Operation::Cancel) => "cancelled",
+            Some(Operation::Close) => "completed",
+            _ => "reviewed",
+        };
+        let detail = command
+            .map(|c| {
+                if let Some(reason) = &c.closure_blocker {
+                    return format!("Closure deferred. {reason}");
+                }
+                let mut details = c
+                    .assignments
+                    .iter()
+                    .map(|a| format!("{} ({}) — {}", a.id, a.owner, a.status))
+                    .collect::<Vec<_>>();
+                if !c.evidence.trim().is_empty() {
+                    details.push(c.evidence.clone());
+                }
+                details.join("\n")
+            })
+            .unwrap_or_default();
+        notice(u, r, &p, action, &detail, owner, now)?;
+    }
     u.patch_context(session, &json!({"projects":{id:p}}).to_string())
+}
+
+fn notice(
+    u: &mut dyn Unit,
+    r: &ParentRequest,
+    p: &Project,
+    action: &str,
+    detail: &str,
+    owner: &str,
+    now: f64,
+) -> Result<()> {
+    let session = r.session["id"].as_str().context("missing session")?;
+    let mut post = super::posts::post(
+        format!("{}:project-notice", r.inbox_id),
+        session,
+        "notice",
+        r.session["channel"]
+            .as_str()
+            .context("missing project channel")?,
+        Some(
+            r.session["root_ts"]
+                .as_str()
+                .context("missing project root")?
+                .to_owned(),
+        ),
+    );
+    let pending = p
+        .assignments
+        .values()
+        .filter(|a| a["finished"] != true)
+        .count();
+    post.text = format!(
+        "Project {} {} · {}. {} open assignments. {}",
+        p.id,
+        action,
+        p.status,
+        pending,
+        p.goal.chars().take(250).collect::<String>()
+    );
+    if !detail.is_empty() {
+        post.text.push('\n');
+        post.text.extend(detail.chars().take(750));
+    }
+    post.text = post
+        .text
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    post.meta =
+        Some(json!({"kind":"project_notice","owner":owner,"session":session,"project":p.id,"v":2}));
+    u.queue_post(&post, now)?;
+    Ok(())
 }
 
 /// A member of a joined job group finished. Keep the normal joined report and

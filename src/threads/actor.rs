@@ -451,6 +451,12 @@ impl<P: Parent> Actor<P> {
         let worker_result = matches!(kind, "worker_result" | "worker_interrupted");
         let now = self.clock.now();
         if kind == "project_review" {
+            if request.trigger["awaiting_thread_starter"] == true {
+                return Quiet::Settle {
+                    verdict: "observe: missing Slack thread starter",
+                    until: Some(now + 60.),
+                };
+            }
             if request.trigger["project_id"].is_null() {
                 return Quiet::Settle {
                     verdict: "observe: superseded project review",
@@ -686,9 +692,19 @@ impl<P: Parent> Actor<P> {
                 Err(error) => {
                     // Kept with the call, so both the decide and the repair
                     // errors are in parent_turns.
-                    call.validation_error = Some(error.to_string());
+                    let incomplete = error.downcast_ref::<super::projects::Incomplete>();
+                    let reason = if incomplete.is_some() {
+                        format!("{error:#}")
+                    } else {
+                        error.to_string()
+                    };
+                    call.validation_error = Some(reason.clone());
+                    if let Some(project) = incomplete.filter(|_| round == 1) {
+                        calls.push(call);
+                        return Ok(Ok((Decision::default(), Some(project.keep_active(reason)))));
+                    }
                     request.previous = Some(raw);
-                    request.errors = vec![error.to_string()];
+                    request.errors = vec![reason];
                     if round == 1 {
                         call.settlement_error = Some("parent_invalid_after_repair");
                     }
@@ -863,7 +879,7 @@ async fn load(
         let mut result=ParentRequest{github_state:vec![],linked:vec![],inbox_id:id,call:"decide".into(),session:session_data,trigger,
             history:history.iter().rev().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,
             obligations:obligations.iter().map(|s|serde_json::from_str(s)).collect::<std::result::Result<_,_>>()?,previous:None,errors:vec![]};
-        super::projects::attach(u, &mut result)?;
+        super::projects::attach(u, &mut result, &owner)?;
         super::overleaf::attach(u, &mut result, &owner, &origin)?;
         Ok(result)
     }).await
