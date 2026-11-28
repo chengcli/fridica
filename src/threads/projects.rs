@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, time::Duration};
 
 const TIMER: &str = "project-review:";
-pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Model every prerequisite as an assignment and use its ID in dependencies. Add related assignments in the same operation. Keep prerequisite links after completion. Use dependency_graph.ready, blocked_by, and verified to select work. For legacy graph errors, correct the listed links before continuing. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Track the whole delegated outcome, including follow-through on handoffs. Keep outstanding reviews, checks, blockers and verification as assignments until resolved. Requesting work is a milestone. Set finished only when the assignment has a verified outcome, evidence and verified prerequisites. Close only when every assignment and the overall outcome are verified, or cancel when instructed. The host posts a project notice for each tool action and scheduled review. Use null for manage_project on unrelated turns.";
+pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Model every prerequisite as an assignment and use its ID in dependencies. Add related assignments in the same operation. Keep prerequisite links after completion. Use dependency_graph.status for effective assignment status and blocked_by for outstanding prerequisites. Report ready for work that can start once prerequisites clear, working for ongoing work, waiting for an expected response, and blocked when intervention is needed. For legacy graph errors, correct the listed links before continuing. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Track the whole delegated outcome, including follow-through on handoffs. Keep outstanding reviews, checks, blockers and verification as assignments until resolved. Requesting work is a milestone. Report complete only when the assignment has a verified outcome, evidence and verified prerequisites. Close only when every assignment and the overall outcome are verified, or cancel when instructed. The host posts a project notice for each tool action and scheduled review. Use null for manage_project on unrelated turns.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -22,7 +22,7 @@ struct Assignment {
     evidence: String,
     next_action: String,
     #[serde(default)]
-    finished: bool,
+    finished: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -84,7 +84,7 @@ pub fn extend_schema(schema: &mut Value) {
         json!({"type":"object","properties":props,"required":keys,"additionalProperties":false})
     };
     let assignment = object(
-        json!({"id":string,"owner":string,"status":string,"dependencies":strings,"evidence":string,"next_action":string,"finished":{"type":"boolean"}}),
+        json!({"id":string,"owner":string,"status":{"type":"string","enum":graph::statuses()},"dependencies":strings,"evidence":string,"next_action":string}),
     );
     let command = object(
         json!({"op":{"type":"string","enum":["start","update","inspect","pause","resume","close","cancel"]},"project_id":string,"goal":string,"criteria":string,"evidence":string,"assignments":{"type":"array","items":assignment}}),
@@ -135,7 +135,7 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
     let Some(value) = raw.get("manage_project").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
-    let c: Command = serde_json::from_value(value.clone())?;
+    let mut c: Command = serde_json::from_value(value.clone())?;
     ensure!(
         r.session["driver"] != "external",
         "project belongs to an external driver"
@@ -191,7 +191,7 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
         );
     }
     let mut ids = std::collections::HashSet::new();
-    for a in &c.assignments {
+    for a in &mut c.assignments {
         ensure!(
             !a.id.trim().is_empty()
                 && !a.owner.trim().is_empty()
@@ -199,6 +199,12 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
                 && ids.insert(&a.id),
             "assignments need unique IDs, owners and status"
         );
+        // Old callers may send descriptive status text and a completion flag.
+        let state = graph::reported(&a.status, a.finished);
+        if state == "blocked" && a.status.trim().eq_ignore_ascii_case("complete") {
+            a.status = state.to_owned();
+        }
+        a.finished = Some(state == "complete");
     }
     let p = &r.session["projects"][&c.project_id];
     if c.op == Operation::Close {
@@ -219,7 +225,7 @@ fn validate_graph(c: &Command, p: &Value) -> Result<()> {
     let graph = Graph::build(&assignments)?;
     for a in &c.assignments {
         ensure!(
-            !a.finished || graph.verified.contains(a.id.as_str()),
+            a.finished != Some(true) || graph.verified.contains(a.id.as_str()),
             "assignment {} needs evidence and verified prerequisites before it can finish",
             a.id
         );
@@ -227,9 +233,12 @@ fn validate_graph(c: &Command, p: &Value) -> Result<()> {
     if c.op == Operation::Close {
         ensure!(
             graph.verified.len() == assignments.len(),
-            "assignments remain open or blocked: {:?} {:?}",
-            graph.ready,
-            graph.blocked_by
+            "assignments remain open or blocked: {:?}",
+            graph
+                .status
+                .iter()
+                .filter(|(_, s)| **s != "complete")
+                .collect::<BTreeMap<_, _>>()
         );
     }
     Ok(())
@@ -398,6 +407,12 @@ pub fn commit(
                         graph.ready.into_iter().collect::<Vec<_>>().join(", ")
                     ));
                 }
+                for (id, state) in &graph.status {
+                    if !matches!(*state, "ready" | "complete") && !graph.blocked_by.contains_key(id)
+                    {
+                        lines.push(format!("{id}: {state}"));
+                    }
+                }
                 for (id, blockers) in graph.blocked_by {
                     lines.push(format!("{id} waits for {}", blockers.join(", ")));
                 }
@@ -441,7 +456,7 @@ pub fn commit(
     } else {
         serde_json::from_value(r.session["projects"][&id].clone())?
     };
-    let previously_blocked = &r.session["projects"][&id]["dependency_graph"]["blocked_by"];
+    let previous_status = &r.session["projects"][&id]["dependency_graph"]["status"];
     let mut newly_ready = Vec::new();
     let mut material_change = false;
     if let Some(c) = command {
@@ -449,7 +464,8 @@ pub fn commit(
             if let Some(previous) = p.assignments.get(&a.id) {
                 material_change |= previous["dependencies"] != json!(a.dependencies)
                     || previous["status"] != a.status
-                    || (previous["finished"] == true) != a.finished;
+                    || previous["finished"].as_bool().unwrap_or(false)
+                        != (a.finished == Some(true));
             }
             let mut record = json!(a);
             record["reported_at"] = json!(now);
@@ -460,7 +476,11 @@ pub fn commit(
             newly_ready = graph
                 .ready
                 .iter()
-                .filter(|id| previously_blocked.get(**id).is_some())
+                .filter(|id| {
+                    previous_status
+                        .get(**id)
+                        .is_some_and(|status| status != "ready")
+                })
                 .map(|id| id.to_string())
                 .collect();
             // Reopening a prerequisite invalidates former completions down the
@@ -468,11 +488,18 @@ pub fn commit(
             let reopened: Vec<String> = graph
                 .blocked_by
                 .keys()
-                .filter(|id| p.assignments[**id]["finished"] == true)
+                .filter(|id| {
+                    let a = &p.assignments[**id];
+                    graph::reported(
+                        a["status"].as_str().unwrap_or_default(),
+                        a["finished"].as_bool(),
+                    ) == "complete"
+                })
                 .map(|id| id.to_string())
                 .collect();
             for id in reopened {
                 p.assignments[&id]["finished"] = json!(false);
+                p.assignments[&id]["status"] = json!("ready");
                 p.assignments[&id]["reported_at"] = json!(now);
             }
             material_change |= !newly_ready.is_empty() && c.op == Operation::Update;
@@ -556,10 +583,18 @@ pub fn commit(
                 if let Some(reason) = &c.closure_blocker {
                     return format!("Closure deferred. {reason}");
                 }
+                let graph = Graph::build(&p.assignments).ok();
                 let mut details = c
                     .assignments
                     .iter()
-                    .map(|a| format!("{} ({}) — {}", a.id, a.owner, a.status))
+                    .map(|a| {
+                        let state = graph
+                            .as_ref()
+                            .and_then(|g| g.status.get(a.id.as_str()))
+                            .copied()
+                            .unwrap_or(&a.status);
+                        format!("{} ({}) — {}", a.id, a.owner, state)
+                    })
                     .collect::<Vec<_>>();
                 if !newly_ready.is_empty() {
                     details.push(format!("Ready to proceed: {}", newly_ready.join(", ")));
@@ -599,11 +634,8 @@ fn notice(
                 .to_owned(),
         ),
     );
-    let pending = p
-        .assignments
-        .values()
-        .filter(|a| a["finished"] != true)
-        .count();
+    let pending =
+        p.assignments.len() - Graph::build(&p.assignments).map_or(0, |g| g.verified.len());
     post.text = format!(
         "Project {} {} · {}. {} open assignments. {}",
         p.id,
