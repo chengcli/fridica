@@ -244,8 +244,21 @@ pub fn proxy(path: &Path) -> Result<()> {
         let _ = io::copy(&mut io::stdin().lock(), &mut input);
         let _ = input.shutdown(Shutdown::Write);
     });
-    io::copy(&mut output, &mut io::stdout().lock())
-        .map_err(|_| anyhow!("native broker stream closed"))?;
+    // Avoid io::copy kernel offloading: MCP replies must arrive before socket EOF.
+    let mut stdout = io::stdout().lock();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = match output.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(anyhow!("native broker stream closed")),
+        };
+        stdout
+            .write_all(&buffer[..count])
+            .and_then(|()| stdout.flush())
+            .map_err(|_| anyhow!("native broker stream closed"))?;
+    }
     Ok(())
 }
 
