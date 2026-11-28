@@ -309,6 +309,7 @@ fn state(root: &Table, base: &Path, context: &LoadContext) -> Result<State> {
                 "control_socket",
                 "archive_after_days",
                 "project_review_interval_seconds",
+                "parent_quota_dir",
                 "archive_events_after_hours",
                 "record",
             ],
@@ -384,7 +385,14 @@ fn state(root: &Table, base: &Path, context: &LoadContext) -> Result<State> {
             .filter(|s| *s > 0)
             .context("state.project_review_interval_seconds must be a positive 32-bit integer")?,
     };
+    let parent_quota_dir = string(state_data.and_then(|t| t.get("parent_quota_dir")))?
+        .map(|s| resolve_path(Path::new(&s), base, &context.home))
+        .transpose()?;
+    if parent_quota_dir.as_ref().is_some_and(|p| !p.is_dir()) {
+        bail!("state.parent_quota_dir must name an existing directory");
+    }
     Ok(State {
+        parent_quota_dir,
         project_review_interval_seconds,
         path: state_path,
         control_socket,

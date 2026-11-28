@@ -250,7 +250,9 @@ Customize the owner's voice and delegation rules in `contract.md` beside the con
 
 ### Project follow-through
 
-When you delegate an outcome that needs follow-through, the parent can start a project in the thread. It records the original instruction, completion criteria, assignments, dependencies, and evidence. Ask in the thread for status or to pause, resume, or cancel a project. Completing a project requires recorded evidence.
+When you delegate an outcome that needs follow-through, the parent can start a project in the thread. It records the original instruction, completion criteria, assignments, dependencies, and evidence. Ask in the thread for status or to pause, resume, or cancel a project. The Slack account that started the thread holds the project manager role across participating daemons. Fridica posts each committed manager action and scheduled review to that thread. The manager keeps follow-up assignments open until each has a verified outcome and its dependencies are resolved. Closure also requires evidence for the overall outcome and all linked jobs to have stopped.
+
+Assignments form a directed acyclic graph. Each dependency is the ID of a prerequisite assignment in the same project. The manager reports each assignment as `ready`, `working`, `waiting`, `blocked`, or `complete`. An open prerequisite makes its dependent effectively `blocked`. Once all prerequisites are verified, the reported status applies again. An explicit blocker stays in effect until the manager updates it. When an assignment becomes ready, Fridica mentions its Slack assignee in the project thread with the requested next action. Reassigning ready work addresses the new owner. Routine reviews preserve the recorded handoff. Completion requires evidence. Reopening one invalidates downstream completions until they are verified again. Older free-text blockers remain visible for the manager to reconcile.
 
 The daemon reviews a project when a linked job finishes, a reported assignment changes status or dependencies, or the next review is due. Routine updates keep the existing deadline. Set `project_review_interval_seconds` in `[state]` to change the default interval of 900 seconds. Review deadlines survive a daemon restart.
 
@@ -309,6 +311,8 @@ The CLI and dashboard reach the daemon over its owner-only Unix socket. Use `fri
 Fridica stores messages, thread state, jobs and outgoing posts in SQLite. It records incoming Slack events before acknowledging them and commits each thread turn's effects together. After a restart, catch-up recovers missed messages and interrupted jobs are reported to their threads. Set `[limits].auto_resume = true` to rerun interrupted jobs once.
 
 If delivery to Slack is uncertain, the post becomes `ambiguous`. Check the Slack thread before using `fridica outbox ID` to retry. Finished, quiet threads move to weekly archives beside the database after `state.archive_after_days` (default 7). A new message in an archived thread restores its history.
+
+A parent rate limit pauses model calls across the daemon’s threads until the provider’s reset time, or for ten minutes when the backend supplies none. Slack intake continues and pending work survives restart. A single call probes the quota when the deadline passes. Daemons with separate databases that share a backend login can set `state.parent_quota_dir` to the same private directory on a filesystem that supports file locking. Each backend has its own cooldown there. By default the cooldown is stored beside the state database.
 
 ## Development
 

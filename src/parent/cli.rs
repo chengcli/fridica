@@ -75,11 +75,16 @@ pub fn command(
 /// Whether Claude's result envelope reports a usage limit (HTTP 429); the
 /// CLI then exits non-zero with the reason only in this envelope.
 pub fn rate_limited(backend: &str, output: &[u8]) -> bool {
-    backend == "claude"
-        && serde_json::from_slice::<Value>(output).is_ok_and(|envelope| {
-            envelope["is_error"] == true
-                && (envelope["api_error_status"] == 429 || envelope["error"] == "rate_limit")
-        })
+    rate_limit_envelope(backend, output).is_some()
+}
+pub(super) fn rate_limit_envelope(backend: &str, output: &[u8]) -> Option<Value> {
+    if backend != "claude" {
+        return None;
+    }
+    let envelope: Value = serde_json::from_slice(output).ok()?;
+    (envelope["is_error"] == true
+        && (envelope["api_error_status"] == 429 || envelope["error"] == "rate_limit"))
+        .then_some(envelope)
 }
 /// Whether Claude failed because another process was refreshing the same
 /// expired OAuth login; the backend calls this transient.

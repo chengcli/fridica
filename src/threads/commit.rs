@@ -386,7 +386,14 @@ pub(super) async fn commit(
             let files = super::results::Files::load(u, request, &session)?;
             if let Some(reply) = outcome.decision.reply.as_mut().filter(|r| r.send) {
                 files.describe(reply);
-                super::replies::render(u, request, &rules.owner, reply, rules.reply_limit)?;
+                super::replies::render(
+                    u,
+                    request,
+                    &rules.owner,
+                    reply,
+                    rules.reply_limit,
+                    outcome.project.is_some(),
+                )?;
             }
             let decision = &outcome.decision;
             let mut posted = None;

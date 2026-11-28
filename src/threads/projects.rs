@@ -1,14 +1,17 @@
 //! Durable project state in the owning thread's context. A private timed ask uses
 //! the store's indexed due queue and commits in the same transaction as dispatch.
+mod graph;
+mod handoffs;
 use crate::core::{parent::ParentRequest, worker::Job};
 use anyhow::{ensure, Context, Result};
 use fridica_core::store::{NewAsk, ObligationChange, Unit};
+use graph::Graph;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, time::Duration};
 
 const TIMER: &str = "project-review:";
-pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Close with evidence, or cancel when instructed. Use null for manage_project on unrelated turns.";
+pub const INSTRUCTIONS: &str = "Use manage_project to follow through on owner-delegated outcomes requiring ongoing coordination. When writing as project manager, refer to yourself as I or me and mention only the people you are addressing. Start with a goal and verifiable completion criteria. Read session.projects for status. On a project review, assess evidence, intervene within the original instruction, and delegate as needed. Assignment IDs are stable within the project. Model every prerequisite as an assignment and use its ID in dependencies. Add related assignments in the same operation. Keep prerequisite links after completion. Use dependency_graph.status for effective assignment status and blocked_by for outstanding prerequisites. For a Slack assignee, use their member ID as owner and put the requested work and expected response in next_action. The host mentions the owner in the project thread when the assignment is ready. Report ready when assigning work that can start once prerequisites clear, working for ongoing work, waiting for an expected response, and blocked when intervention is needed. For legacy graph errors, correct the listed links before continuing. Assignment updates replace only the named entries. Jobs delegated with a project operation or during its review are linked automatically. Record material interventions, blockers and closure in the thread. Routine reviews can have a null reply. Track the whole delegated outcome, including follow-through on handoffs. Keep outstanding reviews, checks, blockers and verification as assignments until resolved. Requesting work is a milestone. Report complete only when the assignment has a verified outcome, evidence and verified prerequisites. Close only when every assignment and the overall outcome are verified, or cancel when instructed. The host posts a project notice for each tool action and scheduled review. Use null for manage_project on unrelated turns.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +22,8 @@ struct Assignment {
     dependencies: Vec<String>,
     evidence: String,
     next_action: String,
+    #[serde(default)]
+    finished: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -47,6 +52,8 @@ pub struct Command {
     evidence: String,
     #[serde(default)]
     assignments: Vec<Assignment>,
+    #[serde(skip)]
+    closure_blocker: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -57,7 +64,7 @@ struct Project {
     criteria: String,
     status: String,
     evidence: String,
-    assignments: BTreeMap<String, Value>,
+    assignments: serde_json::Map<String, Value>,
     // Job IDs stay separate from reported assignments. Worker state is read
     // from the supervisor's records when the parent inspects the project.
     jobs: Vec<String>,
@@ -78,7 +85,7 @@ pub fn extend_schema(schema: &mut Value) {
         json!({"type":"object","properties":props,"required":keys,"additionalProperties":false})
     };
     let assignment = object(
-        json!({"id":string,"owner":string,"status":string,"dependencies":strings,"evidence":string,"next_action":string}),
+        json!({"id":string,"owner":string,"status":{"type":"string","enum":graph::statuses()},"dependencies":strings,"evidence":string,"next_action":string}),
     );
     let command = object(
         json!({"op":{"type":"string","enum":["start","update","inspect","pause","resume","close","cancel"]},"project_id":string,"goal":string,"criteria":string,"evidence":string,"assignments":{"type":"array","items":assignment}}),
@@ -103,14 +110,40 @@ fn owner_instruction<'a>(r: &'a ParentRequest, owner: &str) -> Option<&'a str> {
     }
 }
 
+/// Retain the project and its timer when a repair still attempts premature closure.
+#[derive(Debug)]
+pub struct Incomplete(pub String);
+impl std::fmt::Display for Incomplete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "project {} is unfinished", self.0)
+    }
+}
+impl Incomplete {
+    pub fn keep_active(&self, reason: String) -> Command {
+        Command {
+            op: Operation::Update,
+            project_id: self.0.clone(),
+            evidence: String::new(),
+            goal: String::new(),
+            criteria: String::new(),
+            assignments: vec![],
+            closure_blocker: Some(reason),
+        }
+    }
+}
+
 pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Command>> {
     let Some(value) = raw.get("manage_project").filter(|v| !v.is_null()) else {
         return Ok(None);
     };
-    let c: Command = serde_json::from_value(value.clone())?;
+    let mut c: Command = serde_json::from_value(value.clone())?;
     ensure!(
         r.session["driver"] != "external",
         "project belongs to an external driver"
+    );
+    ensure!(
+        r.session["project_manager"] == owner,
+        "only the Slack thread starter can use manage_project"
     );
     ensure!(value.to_string().len() <= 16000, "project update too large");
     let review = r.trigger["project_id"].as_str();
@@ -146,10 +179,6 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
                         && matches!(c.op, Operation::Resume | Operation::Cancel)),
                 "project is inactive"
             );
-            ensure!(
-                c.op != Operation::Close || !c.evidence.trim().is_empty(),
-                "successful closure requires evidence"
-            );
         }
     }
     ensure!(
@@ -163,7 +192,7 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
         );
     }
     let mut ids = std::collections::HashSet::new();
-    for a in &c.assignments {
+    for a in &mut c.assignments {
         ensure!(
             !a.id.trim().is_empty()
                 && !a.owner.trim().is_empty()
@@ -171,16 +200,104 @@ pub fn command(raw: &Value, r: &ParentRequest, owner: &str) -> Result<Option<Com
                 && ids.insert(&a.id),
             "assignments need unique IDs, owners and status"
         );
+        // Old callers may send descriptive status text and a completion flag.
+        let state = graph::reported(&a.status, a.finished);
+        if state == "blocked" && a.status.trim().eq_ignore_ascii_case("complete") {
+            a.status = state.to_owned();
+        }
+        a.finished = Some(state == "complete");
+    }
+    let p = &r.session["projects"][&c.project_id];
+    if c.op == Operation::Close {
+        validate_graph(&c, p)
+            .and_then(|()| verify_completion(&c, p, raw))
+            .context(Incomplete(c.project_id.clone()))?;
+    } else if !c.assignments.is_empty() {
+        validate_graph(&c, p)?;
     }
     Ok(Some(c))
 }
 
+fn validate_graph(c: &Command, p: &Value) -> Result<()> {
+    let mut assignments = p["assignments"].as_object().cloned().unwrap_or_default();
+    for a in &c.assignments {
+        assignments.insert(a.id.clone(), json!(a));
+    }
+    let graph = Graph::build(&assignments)?;
+    for a in &c.assignments {
+        ensure!(
+            a.finished != Some(true) || graph.verified.contains(a.id.as_str()),
+            "assignment {} needs evidence and verified prerequisites before it can finish",
+            a.id
+        );
+    }
+    if c.op == Operation::Close {
+        ensure!(
+            graph.verified.len() == assignments.len(),
+            "assignments remain open or blocked: {:?}",
+            graph
+                .status
+                .iter()
+                .filter(|(_, s)| **s != "complete")
+                .collect::<BTreeMap<_, _>>()
+        );
+    }
+    Ok(())
+}
+
+fn verify_completion(c: &Command, p: &Value, raw: &Value) -> Result<()> {
+    ensure!(
+        !c.evidence.trim().is_empty(),
+        "successful closure requires evidence of the overall outcome"
+    );
+    ensure!(
+        !p["workers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, v)| v.as_array().into_iter().flatten())
+            .any(|j| matches!(j["status"].as_str(), Some("queued" | "running"))),
+        "project jobs are outstanding"
+    );
+    ensure!(
+        raw.get("delegations")
+            .or_else(|| raw.get("delegate"))
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
+        "cannot close while delegating more work"
+    );
+    Ok(())
+}
+
 /// Remove private timer obligations from the model's answerable obligations.
 /// The project trigger carries the same inbox identity as the claimed timer.
-pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest) -> Result<()> {
+pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest, owner: &str) -> Result<()> {
     let projects = r.session["context"]
         .as_object_mut()
         .and_then(|v| v.remove("projects"));
+    // All accounts consult the same immutable Slack root. An owner instruction,
+    // worker report or message claiming a role cannot establish its author.
+    let root = r.session["root_ts"]
+        .as_str()
+        .context("missing project thread root")?;
+    let mut starter = r
+        .history
+        .iter()
+        .find(|m| m["ts"] == root)
+        .and_then(|m| m["sender"].as_str())
+        .map(str::to_owned);
+    if starter.is_none() && (projects.is_some() || owner_instruction(r, owner).is_some()) {
+        let session = r.session["id"].as_str().context("missing project thread")?;
+        starter = u
+            .thread_messages(session, -1)?
+            .into_iter()
+            .find(|m| m.ts == root)
+            .map(|m| m.sender);
+    }
+    let manages = starter.as_deref() == Some(owner);
+    if manages || projects.is_some() {
+        r.session["project_manager"] = json!(starter);
+    }
     let reference = r.trigger["ref"].as_str().unwrap_or("").to_owned();
     let timed = r.trigger["kind"] == "obligation_due" && reference.starts_with(TIMER);
     let timer_live = timed
@@ -205,7 +322,11 @@ pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest) -> Result<()> {
         .as_object_mut()
         .context("invalid stored projects")?
     {
-        if p["status"] == "active"
+        if timer_live && p["timer"] == reference && p["status"] == "active" && starter.is_none() {
+            r.trigger["awaiting_thread_starter"] = json!(true);
+        }
+        if manages
+            && p["status"] == "active"
             && ((timer_live && p["timer"] == reference)
                 || (matches!(
                     r.trigger["kind"].as_str(),
@@ -247,6 +368,14 @@ pub fn attach(u: &mut dyn Unit, r: &mut ParentRequest) -> Result<()> {
             }
         }
         p["assignments_by_owner"] = json!(by_owner);
+        if let Some(assignments) = p["assignments"].as_object() {
+            // Older records may contain prose blockers. Keep them visible for
+            // repair without interrupting inspection or scheduled reviews.
+            p["dependency_graph"] = match Graph::build(assignments) {
+                Ok(graph) => json!(graph),
+                Err(error) => json!({"error":error.to_string()}),
+            };
+        }
     }
     r.session["projects"] = projects;
     Ok(())
@@ -262,6 +391,42 @@ pub fn commit(
     interval: u32,
 ) -> Result<()> {
     let review = r.trigger["project_id"].as_str();
+    if command.is_some() || review.is_some() {
+        ensure!(
+            r.session["project_manager"] == owner,
+            "project manager mismatch"
+        );
+    }
+    if let Some(c) = command.filter(|c| c.op == Operation::Inspect) {
+        let p: Project = serde_json::from_value(r.session["projects"][&c.project_id].clone())?;
+        let detail = match Graph::build(&p.assignments) {
+            Ok(graph) => {
+                let mut lines = Vec::new();
+                if !graph.ready.is_empty() {
+                    lines.push(format!(
+                        "Ready: {}",
+                        graph.ready.into_iter().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                for (id, state) in &graph.status {
+                    if !matches!(*state, "ready" | "complete") && !graph.blocked_by.contains_key(id)
+                    {
+                        lines.push(format!("{id}: {state}"));
+                    }
+                }
+                for (id, blockers) in graph.blocked_by {
+                    lines.push(format!("{id} waits for {}", blockers.join(", ")));
+                }
+                lines.join("\n")
+            }
+            Err(error) => format!("Dependency graph needs repair: {error}"),
+        };
+        notice(u, r, &p, "inspected", &detail, owner, now)?;
+        if review.is_none() {
+            return Ok(());
+        }
+    }
+    let inspected = command.is_some_and(|c| c.op == Operation::Inspect);
     let command = command.filter(|c| c.op != Operation::Inspect);
     let op = command.map(|c| &c.op);
     let session = r.session["id"].as_str().context("missing session")?;
@@ -283,7 +448,7 @@ pub fn commit(
             criteria: c.criteria.clone(),
             status: "active".into(),
             evidence: String::new(),
-            assignments: BTreeMap::new(),
+            assignments: serde_json::Map::new(),
             jobs: vec![],
             timer: None,
             next_review_at: None,
@@ -292,16 +457,59 @@ pub fn commit(
     } else {
         serde_json::from_value(r.session["projects"][&id].clone())?
     };
+    let previous_status = &r.session["projects"][&id]["dependency_graph"]["status"];
+    let mut newly_ready = Vec::new();
     let mut material_change = false;
     if let Some(c) = command {
         for a in &c.assignments {
             if let Some(previous) = p.assignments.get(&a.id) {
                 material_change |= previous["dependencies"] != json!(a.dependencies)
-                    || previous["status"] != a.status;
+                    || previous["status"] != a.status
+                    || previous["finished"].as_bool().unwrap_or(false)
+                        != (a.finished == Some(true));
             }
             let mut record = json!(a);
+            record["handoff_to"] = p
+                .assignments
+                .get(&a.id)
+                .and_then(|v| v.get("handoff_to"))
+                .cloned()
+                .unwrap_or(Value::Null);
             record["reported_at"] = json!(now);
             p.assignments.insert(a.id.clone(), record);
+        }
+        if !c.assignments.is_empty() {
+            let graph = Graph::build(&p.assignments)?;
+            newly_ready = graph
+                .ready
+                .iter()
+                .filter(|id| {
+                    previous_status
+                        .get(**id)
+                        .is_some_and(|status| status != "ready")
+                })
+                .map(|id| id.to_string())
+                .collect();
+            // Reopening a prerequisite invalidates former completions down the
+            // whole chain. Each dependent must supply fresh confirmation.
+            let reopened: Vec<String> = graph
+                .blocked_by
+                .keys()
+                .filter(|id| {
+                    let a = &p.assignments[**id];
+                    graph::reported(
+                        a["status"].as_str().unwrap_or_default(),
+                        a["finished"].as_bool(),
+                    ) == "complete"
+                })
+                .map(|id| id.to_string())
+                .collect();
+            for id in reopened {
+                p.assignments[&id]["finished"] = json!(false);
+                p.assignments[&id]["status"] = json!("ready");
+                p.assignments[&id]["reported_at"] = json!(now);
+            }
+            material_change |= !newly_ready.is_empty() && c.op == Operation::Update;
         }
         if !c.evidence.is_empty() {
             p.evidence.clone_from(&c.evidence);
@@ -346,7 +554,8 @@ pub fn commit(
         }
         p.next_review_at = None;
         if p.status == "active" {
-            let due = if material_change && review.is_none() {
+            let follow_up = !newly_ready.is_empty() && jobs.is_empty();
+            let due = if (material_change && review.is_none()) || follow_up {
                 now
             } else {
                 now + estimate_review_interval(&p, interval).as_secs_f64()
@@ -366,7 +575,98 @@ pub fn commit(
             p.timer = Some(timer);
         }
     }
+    if !inspected {
+        let action = match op {
+            Some(Operation::Start) => "started",
+            Some(Operation::Update) => "updated",
+            Some(Operation::Pause) => "paused",
+            Some(Operation::Resume) => "resumed",
+            Some(Operation::Cancel) => "cancelled",
+            Some(Operation::Close) => "completed",
+            _ => "reviewed",
+        };
+        let detail = command
+            .map(|c| {
+                if let Some(reason) = &c.closure_blocker {
+                    return format!("Closure deferred. {reason}");
+                }
+                let graph = Graph::build(&p.assignments).ok();
+                let mut details = c
+                    .assignments
+                    .iter()
+                    .map(|a| {
+                        let state = graph
+                            .as_ref()
+                            .and_then(|g| g.status.get(a.id.as_str()))
+                            .copied()
+                            .unwrap_or(&a.status);
+                        format!("{} ({}) — {}", a.id, a.owner, state)
+                    })
+                    .collect::<Vec<_>>();
+                if !newly_ready.is_empty() {
+                    details.push(format!("Ready to proceed: {}", newly_ready.join(", ")));
+                }
+                if !c.evidence.trim().is_empty() {
+                    details.push(c.evidence.clone());
+                }
+                details.join("\n")
+            })
+            .unwrap_or_default();
+        notice(u, r, &p, action, &detail, owner, now)?;
+    }
+    if p.status == "active" {
+        handoffs::queue(u, r, &mut p, owner, now)?;
+    }
     u.patch_context(session, &json!({"projects":{id:p}}).to_string())
+}
+
+fn notice(
+    u: &mut dyn Unit,
+    r: &ParentRequest,
+    p: &Project,
+    action: &str,
+    detail: &str,
+    owner: &str,
+    now: f64,
+) -> Result<()> {
+    let session = r.session["id"].as_str().context("missing session")?;
+    let mut post = super::posts::post(
+        format!("{}:project-notice", r.inbox_id),
+        session,
+        "notice",
+        r.session["channel"]
+            .as_str()
+            .context("missing project channel")?,
+        Some(
+            r.session["root_ts"]
+                .as_str()
+                .context("missing project root")?
+                .to_owned(),
+        ),
+    );
+    let pending =
+        p.assignments.len() - Graph::build(&p.assignments).map_or(0, |g| g.verified.len());
+    post.text = format!(
+        "Project {} {} · {}. {} open assignments. {}",
+        p.id,
+        action,
+        p.status,
+        pending,
+        p.goal.chars().take(250).collect::<String>()
+    );
+    if !detail.is_empty() {
+        post.text.push('\n');
+        post.text.extend(detail.chars().take(750));
+    }
+    post.text = post
+        .text
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    post.meta =
+        Some(json!({"kind":"project_notice","owner":owner,"session":session,"project":p.id,"v":2}));
+    u.queue_post(&post, now)?;
+    Ok(())
 }
 
 /// A member of a joined job group finished. Keep the normal joined report and

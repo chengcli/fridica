@@ -87,6 +87,9 @@ impl Egress {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
+    /// Existing shared directory for daemons using the same parent login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_quota_dir: Option<PathBuf>,
     pub path: PathBuf,
     pub control_socket: PathBuf,
     #[serde(
