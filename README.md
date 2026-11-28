@@ -312,6 +312,8 @@ Fridica stores messages, thread state, jobs and outgoing posts in SQLite. It rec
 
 If delivery to Slack is uncertain, the post becomes `ambiguous`. Check the Slack thread before using `fridica outbox ID` to retry. Finished, quiet threads move to weekly archives beside the database after `state.archive_after_days` (default 7). A new message in an archived thread restores its history.
 
+A parent rate limit pauses model calls across the daemon’s threads until the provider’s reset time, or for ten minutes when the backend supplies none. Slack intake continues and pending work survives restart. A single call probes the quota when the deadline passes. Daemons with separate databases that share a backend login can set `state.parent_quota_dir` to the same private directory on a filesystem that supports file locking. Each backend has its own cooldown there. By default the cooldown is stored beside the state database.
+
 ## Development
 
 The daemon is written in Rust. Its Python distribution packages the executables with Maturin. From a source checkout, run:

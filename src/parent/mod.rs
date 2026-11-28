@@ -78,6 +78,19 @@ impl LoginGate {
 /// The longest a parent call waits for the one ahead to get through.
 const LOGIN_WAIT: Duration = Duration::from_secs(30);
 
+// The transport failure contract carries only a code. Keep an optional provider
+// deadline scoped to its own parent call, including through adapter wrappers.
+tokio::task_local! { static RATE_LIMIT_RESET: std::cell::Cell<Option<f64>>; }
+pub(crate) async fn with_rate_limit_reset<F: std::future::Future>(
+    f: F,
+) -> (F::Output, Option<f64>) {
+    RATE_LIMIT_RESET
+        .scope(std::cell::Cell::new(None), async {
+            (f.await, RATE_LIMIT_RESET.with(|v| v.get()))
+        })
+        .await
+}
+
 pub struct CliParent {
     config: Arc<Config>,
     store: Shared,
@@ -198,15 +211,18 @@ impl CliParent {
         drop(probe);
         let (result, output, complete) = match completed {
             Ok(output) => {
-                let result = if cli::rate_limited(backend, &output.stdout) {
-                    Err(failure(crate::core::failure::RATE_LIMITED))
-                } else if contended {
-                    Err(failure(AUTH_CONTENDED))
-                } else if output.returncode != 0 {
-                    Err(failure(&format!("parent_exit_{}", output.returncode)))
-                } else {
-                    cli::parse(backend, &output.stdout)
-                };
+                let result =
+                    if let Some(envelope) = cli::rate_limit_envelope(backend, &output.stdout) {
+                        let reset = envelope["rate_limit_info"]["resetsAt"].as_f64();
+                        let _ = RATE_LIMIT_RESET.try_with(|slot| slot.set(reset));
+                        Err(failure(crate::core::failure::RATE_LIMITED))
+                    } else if contended {
+                        Err(failure(AUTH_CONTENDED))
+                    } else if output.returncode != 0 {
+                        Err(failure(&format!("parent_exit_{}", output.returncode)))
+                    } else {
+                        cli::parse(backend, &output.stdout)
+                    };
                 (
                     result,
                     json!({"returncode":output.returncode,"stdout":output.stdout,"stderr":output.stderr}),

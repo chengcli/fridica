@@ -6545,3 +6545,80 @@ async fn project_graph_legacy_text_stays_visible_until_reconciled() {
     );
     assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE text LIKE '%build waits for approval%'").await,"1");
 }
+
+#[tokio::test]
+async fn parent_quota_gates_queued_messages_and_retries_once_after_restart() {
+    let limited = json!({"failure":"parent_rate_limited"});
+    let h = Harness::new(
+        vec![
+            limited.clone(),
+            limited,
+            json!({"reply":{"text":"Quota recovered","status":"complete"}}),
+        ],
+        false,
+    )
+    .await;
+    h.intake(false).await;
+    h.runtime.pass().await.unwrap();
+    for i in 0..32 {
+        h.runtime
+            .intake(Message {
+                event_id: format!("quota-{i}"),
+                workspace: "TTEAM".into(),
+                channel: "CROOM".into(),
+                ts: format!("{}.1", 200 + i),
+                thread_ts: None,
+                sender: "UALICE".into(),
+                text: "<@UOWNER> check".into(),
+                source: "socket".into(),
+                files: vec![],
+                meta: None,
+                attachments: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    let h = h.restart().await;
+    for _ in 0..32 {
+        h.runtime.pass().await.unwrap();
+    }
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_call'")
+            .await,
+        "1"
+    );
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM thread_inbox WHERE state='pending' AND not_before=620").await, "33");
+    h.clock.set(620.);
+    for _ in 0..32 {
+        h.runtime.pass().await.unwrap();
+    }
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 2);
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM parent_turns WHERE error='parent_rate_limited'"
+        )
+        .await,
+        "2"
+    );
+    h.clock.set(1220.);
+    let actor = control_actor(&h);
+    let gate = Arc::new(Semaphore::new(0));
+    *h.parent.gate.lock().unwrap() = Some(gate.clone());
+    let first = tokio::spawn(async move { actor.step(SESSION.into()).await });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h.parent.calls.lock().unwrap().len() < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let other = control_actor(&h);
+    assert_eq!(
+        other.step("TTEAM:CROOM:200.1".into()).await.unwrap(),
+        fridica::threads::actor::Step::Deferred
+    );
+    gate.add_permits(1);
+    first.await.unwrap().unwrap();
+    assert_eq!(h.parent.calls.lock().unwrap().len(), 3);
+}

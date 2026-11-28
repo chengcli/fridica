@@ -1604,3 +1604,32 @@ async fn native_recipient_never_includes_parent_backend() {
     );
     h.clean();
 }
+
+#[tokio::test]
+async fn shared_parent_quota_honors_provider_reset_across_databases() {
+    let shared = tempfile::tempdir().unwrap();
+    let limited = r#"#!/bin/sh
+echo '{"is_error":true,"api_error_status":429,"rate_limit_info":{"resetsAt":1500}}'
+exit 1
+"#;
+    let first = Harness::new("claude", limited, "", 5.).await;
+    let second = Harness::new("claude", limited, "", 5.).await;
+    for (index, h) in [&first, &second].into_iter().enumerate() {
+        let session = h.intake(1, "A general question").await;
+        let mut actor = h.actor();
+        Arc::make_mut(actor.config.as_mut().unwrap())
+            .state
+            .parent_quota_dir = Some(shared.path().to_owned());
+        assert_eq!(actor.step(session).await.unwrap(), Step::Deferred);
+        assert_eq!(
+            h.scalar("SELECT CAST(not_before AS TEXT) FROM thread_inbox WHERE kind='message'")
+                .await,
+            "1500.0"
+        );
+        assert_eq!(
+            h.scalar("SELECT CAST(count(*) AS TEXT) FROM replay_events WHERE kind='parent_call'")
+                .await,
+            if index == 0 { "1" } else { "0" }
+        );
+    }
+}

@@ -116,6 +116,7 @@ pub(super) struct Call {
     /// The parent's own failure code (e.g. `parent_rate_limited`), never its
     /// output.
     pub(super) failure: Option<String>,
+    retry_at: Option<f64>,
     pub(super) created: f64,
     /// Why the response was not a usable decision.
     pub(super) validation_error: Option<String>,
@@ -145,6 +146,18 @@ impl Call {
         }
     }
 }
+
+#[derive(Debug)]
+enum QuotaDeferred {
+    Waiting(f64),
+    Storage,
+}
+impl std::fmt::Display for QuotaDeferred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("parent quota unavailable")
+    }
+}
+impl std::error::Error for QuotaDeferred {}
 
 pub struct Actor<P: Parent> {
     /// None supports reply-only operation; delegation requires a validated config.
@@ -240,7 +253,32 @@ impl<P: Parent> Actor<P> {
         };
         match self.handle(id, &kind, session.clone()).await {
             Ok(step) => Ok(step),
-            Err(_error) => {
+            Err(error) => {
+                if let Some(deferred) = error.downcast_ref::<QuotaDeferred>() {
+                    let now = self.clock.now();
+                    let (until, problem) = match deferred {
+                        QuotaDeferred::Waiting(until) => (*until, None),
+                        QuotaDeferred::Storage => (now + 60., Some(error.root_cause().to_string())),
+                    };
+                    return self
+                        .store
+                        .transact(move |u| {
+                            if u.inbox_attempts(id)?.1 != "processing" {
+                                return Ok(Step::Stale);
+                            }
+                            if let Some(problem) = problem {
+                                u.note_unless_since(
+                                    "parent_quota_storage_failed",
+                                    &json!({"error":problem}).to_string(),
+                                    now,
+                                    now - 600.,
+                                )?;
+                            }
+                            u.defer_turn(id, until)?;
+                            Ok(Step::Deferred)
+                        })
+                        .await;
+                }
                 let now = self.clock.now();
                 let recorded = self
                     .store
@@ -270,6 +308,15 @@ impl<P: Parent> Actor<P> {
     }
 
     async fn handle(&self, id: i64, kind: &str, session: String) -> Result<Step> {
+        if !self.observe_only && matches!(kind, "message" | "owner_instruction") {
+            if let Some(config) = &self.config {
+                if let Some(until) = super::quota::waiting(config, self.clock.now())
+                    .context(QuotaDeferred::Storage)?
+                {
+                    return Err(QuotaDeferred::Waiting(until).into());
+                }
+            }
+        }
         let origin = self
             .config
             .as_ref()
@@ -724,7 +771,7 @@ impl<P: Parent> Actor<P> {
         session: String,
         request: ParentRequest,
         calls: Vec<Call>,
-        (code, delay): (&'static str, f64),
+        (code, retry_at): (&'static str, f64),
     ) -> Result<Step> {
         let now = self.clock.now();
         // The whole turn is redone later, so only the refused call and any
@@ -747,8 +794,8 @@ impl<P: Parent> Actor<P> {
             session,
             version: request.session["version"].as_i64(),
             calls,
-            retry_at: now + delay,
-            details: json!({"inbox_id":id,"retry_at":now+delay}).to_string(),
+            retry_at,
+            details: json!({"inbox_id":id,"retry_at":retry_at}).to_string(),
             now,
         };
         let current = self.store.transact(move |u| u.retry_turn(&retry)).await?;
@@ -756,26 +803,59 @@ impl<P: Parent> Actor<P> {
     }
     pub(super) async fn call(&self, request: &ParentRequest) -> Result<(Option<Value>, Call)> {
         let started = self.clock.now();
-        let encoded = serde_json::to_string(request)?;
-        let call_id = self
-            .store
-            .transact(move |u| u.record("parent_call", started, &encoded, false))
-            .await?;
         let timeout = self.parent_timeout.saturating_add(
             self.parent
                 .preparation_timeout(request)
                 .min(Duration::from_secs(30)),
         );
-        let response = tokio::time::timeout(timeout, self.parent.decide(request.clone())).await;
+        let permit = if let Some(config) = &self.config {
+            match super::quota::enter(config, started, timeout.as_secs_f64() + 5.)
+                .context(QuotaDeferred::Storage)?
+            {
+                Ok(permit) => Some(permit),
+                Err(until) => return Err(QuotaDeferred::Waiting(until).into()),
+            }
+        } else {
+            None
+        };
+        let encoded = serde_json::to_string(request)?;
+        let call_id = self
+            .store
+            .transact(move |u| u.record("parent_call", started, &encoded, false))
+            .await?;
+        let (response, reset_at) = crate::parent::with_rate_limit_reset(tokio::time::timeout(
+            timeout,
+            self.parent.decide(request.clone()),
+        ))
+        .await;
         let (raw, error, failure) = match response {
             Ok(Ok(value)) => (Some(value), None, None),
             Ok(Err(failure)) => (None, Some("parent_unavailable"), Some(failure)),
             Err(_) => (None, Some("parent_timeout"), None),
         };
         let now = self.clock.now();
+        let retry_at = failure
+            .as_ref()
+            .filter(|f| super::failure::rate_limited(f))
+            .map(|_| {
+                reset_at
+                    .filter(|reset| reset.is_finite() && *reset > now)
+                    .unwrap_or(now + super::failure::RATE_LIMIT_RETRY)
+            });
+        // Even if the shared checkpoint cannot be written, retain the actual
+        // result and the refused item's ordinary durable retry deadline.
+        let quota_error = permit.and_then(|p| p.finish(retry_at, raw.is_some()).err());
         let outcome = json!({"call_id":call_id,"response":raw,"error":error,"failure":failure});
         self.store
             .transact(move |u| {
+                if let Some(error) = quota_error {
+                    u.note_unless_since(
+                        "parent_quota_storage_failed",
+                        &json!({"error":error.to_string()}).to_string(),
+                        now,
+                        now - 600.,
+                    )?;
+                }
                 u.complete(call_id, true)?;
                 u.record("parent_result", now, &outcome.to_string(), true)?;
                 Ok(())
@@ -792,6 +872,7 @@ impl<P: Parent> Actor<P> {
             response: raw.clone(),
             failure: failure.map(|f| f.code),
             created: now,
+            retry_at,
             validation_error: None,
             settlement_error: None,
         };
@@ -810,18 +891,17 @@ pub(super) fn handoff_hop(request: &ParentRequest) -> u64 {
         0
     }
 }
-/// A temporary failure of the last call, with its code and how long until the
+/// A temporary failure of the last call, with its code and the time the
 /// turn is retried: the backend's usage limit (#107), or a lost refresh of
 /// its login. Neither blocks the thread or asks for owner review.
 fn temporary(calls: &[Call]) -> Option<(&'static str, f64)> {
-    match calls.last()?.failure.as_deref()? {
-        super::failure::RATE_LIMITED => Some((
-            super::failure::RATE_LIMITED,
-            super::failure::RATE_LIMIT_RETRY,
+    let call = calls.last()?;
+    match call.failure.as_deref()? {
+        super::failure::RATE_LIMITED => Some((super::failure::RATE_LIMITED, call.retry_at?)),
+        crate::parent::AUTH_CONTENDED => Some((
+            crate::parent::AUTH_CONTENDED,
+            call.created + crate::parent::AUTH_RETRY,
         )),
-        crate::parent::AUTH_CONTENDED => {
-            Some((crate::parent::AUTH_CONTENDED, crate::parent::AUTH_RETRY))
-        }
         _ => None,
     }
 }

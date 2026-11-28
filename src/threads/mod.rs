@@ -12,6 +12,7 @@ mod linked;
 mod overleaf;
 mod posts;
 mod progress;
+mod quota;
 pub mod refusal;
 use fridica_core::failure;
 mod replies;
