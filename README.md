@@ -252,6 +252,8 @@ Customize the owner's voice and delegation rules in `contract.md` beside the con
 
 When you delegate an outcome that needs follow-through, the parent can start a project in the thread. It records the original instruction, completion criteria, assignments, dependencies, and evidence. Ask in the thread for status or to pause, resume, or cancel a project. The Slack account that started the thread holds the project manager role across participating daemons. Fridica posts each committed manager action and scheduled review to that thread. The manager keeps follow-up assignments open until each has a verified outcome and its dependencies are resolved. Closure also requires evidence for the overall outcome and all linked jobs to have stopped.
 
+Assignments form a directed acyclic graph. Each dependency is the ID of a prerequisite assignment in the same project. Fridica derives which assignments are ready, blocked, or verified. Verifying a prerequisite unlocks its dependents and preserves the links. Reopening one invalidates downstream completions until they are verified again. Older free-text blockers remain visible for the manager to reconcile.
+
 The daemon reviews a project when a linked job finishes, a reported assignment changes status or dependencies, or the next review is due. Routine updates keep the existing deadline. Set `project_review_interval_seconds` in `[state]` to change the default interval of 900 seconds. Review deadlines survive a daemon restart.
 
 ## GitHub links

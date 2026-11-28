@@ -6437,3 +6437,111 @@ async fn project_failed_closure_keeps_timer_and_posts_in_the_owning_thread() {
         "1"
     );
 }
+
+#[tokio::test]
+async fn project_graph_preserves_edges_and_invalidates_downstream_completion() {
+    fn node(id: &str, dependencies: &[&str], finished: bool) -> Value {
+        json!({"id":id,"owner":"reviewer","status":"tracked","dependencies":dependencies,
+            "finished":finished,"evidence":if finished {"verified receipt"} else {""},"next_action":""})
+    }
+    // Deliberately submit the nodes in reverse dependency order.
+    let nodes = [
+        node("publish", &["build"], false),
+        node("build", &["format"], true),
+        node("format", &[], true),
+    ];
+    let start = json!({"manage_project":{"op":"start","goal":"Deliver","criteria":"Verified","assignments":nodes}});
+    let h = Harness::new(vec![start], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Track delivery").await;
+    let projects = h.projects().await;
+    let id = projects.as_object().unwrap().keys().next().unwrap();
+    let update = |assignments: Vec<Value>| json!({"manage_project":{"op":"update","project_id":id,"assignments":assignments}});
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(update(vec![node("format", &[], false)]));
+    h.clock.set(50.);
+    h.project_instruction("Recheck the prerequisite").await;
+    let p = &h.projects().await[id];
+    assert_eq!(p["assignments"]["build"]["finished"], false);
+    assert_eq!(p["next_review_at"], 50.);
+    let h = h.restart().await;
+    // An attempted completion before its prerequisite is repaired must reject
+    // the whole batch, then accept the corrected update in the repair turn.
+    h.parent.responses.lock().unwrap().extend([
+        update(vec![node("publish", &["build"], true)]),
+        update(vec![node("format", &[], true)]),
+    ]);
+    h.runtime.pass().await.unwrap();
+    let req = h.parent.calls.lock().unwrap().last().unwrap().clone();
+    assert_eq!(req.call, "repair");
+    let graph = &req.session["projects"][id]["dependency_graph"];
+    assert_eq!(graph["ready"], json!(["format"]));
+    assert_eq!(graph["blocked_by"]["publish"], json!(["build"]));
+    assert_eq!(graph["blocked_by"]["build"], json!(["format"]));
+    assert_eq!(
+        h.scalar(
+            "SELECT CAST(count(*) AS TEXT) FROM outbox WHERE text LIKE '%Ready to proceed: build%'"
+        )
+        .await,
+        "1"
+    );
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(json!({"manage_project":{
+        "op":"close","project_id":id,"evidence":"Delivery verified",
+        "assignments":[node("publish",&["build"],true),node("build",&["format"],true)]}}));
+    h.project_instruction("Verify delivery and close").await;
+    let p = &h.projects().await[id];
+    assert_eq!(p["status"], "completed");
+    assert_eq!(
+        p["assignments"]["publish"]["dependencies"],
+        json!(["build"])
+    );
+}
+
+#[tokio::test]
+async fn project_graph_legacy_text_stays_visible_until_reconciled() {
+    let mut work = json!({"id":"build","owner":"builder","status":"waiting","dependencies":[],
+        "evidence":"","next_action":"Run build"});
+    let start = json!({"manage_project":{"op":"start","goal":"Build","criteria":"Green","assignments":[work]}});
+    let h = Harness::new(vec![start], false).await;
+    h.open_project_thread().await;
+    h.project_instruction("Track build").await;
+    let projects = h.projects().await;
+    let id = projects.as_object().unwrap().keys().next().unwrap().clone();
+    let path = format!("$.projects.\"{id}\".assignments.build.dependencies");
+    h.store.call(move |db|{
+        db.execute("UPDATE threads SET context_json=json_set(context_json,?,json_array('approval from reviewer')) WHERE id=?",rusqlite::params![path,SESSION])?;
+        Ok(())
+    }).await.unwrap();
+    let h = h.restart().await;
+    work["dependencies"] = json!(["approval"]);
+    let approval = json!({"id":"approval","owner":"reviewer","status":"waiting","dependencies":[],"evidence":"","next_action":"Review"});
+    h.parent.responses.lock().unwrap().push_back(
+        json!({"manage_project":{"op":"update","project_id":id,"assignments":[work,approval]}}),
+    );
+    h.clock.set(921.);
+    h.runtime.pass().await.unwrap();
+    let before = h.parent.calls.lock().unwrap().last().unwrap().session["projects"][&id].clone();
+    assert!(before["dependency_graph"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("approval from reviewer"));
+    h.parent
+        .responses
+        .lock()
+        .unwrap()
+        .push_back(json!({"manage_project":{"op":"inspect","project_id":id}}));
+    h.project_instruction("Check prerequisites").await;
+    let after = h.parent.calls.lock().unwrap().last().unwrap().session["projects"][&id].clone();
+    assert_eq!(
+        after["dependency_graph"]["blocked_by"]["build"],
+        json!(["approval"])
+    );
+    assert_eq!(h.scalar("SELECT CAST(count(*) AS TEXT) FROM outbox WHERE text LIKE '%build waits for approval%'").await,"1");
+}
